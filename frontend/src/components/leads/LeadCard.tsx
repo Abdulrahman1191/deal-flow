@@ -8,7 +8,6 @@ import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { overrideBucket, reassess, type OverrideReason } from "../../api/assessments";
 import { archiveNoReply, findLinkedin, updateLead } from "../../api/leads";
-import client from "../../api/client";
 import ReasonModal from "./ReasonModal";
 
 interface Props {
@@ -335,25 +334,38 @@ export default function LeadCard({ lead }: Props) {
               Pitch deck
             </span>
             {lead.pitch_deck_filename ? (
-              <span className="text-gray-300 flex items-center gap-2">
-                <button
-                  className="text-blue-400 hover:text-blue-300 hover:underline text-xs"
-                  title={lead.pitch_deck_filename}
-                  onClick={async () => {
-                    const res = await client.get(`/leads/${lead.id}/pitch-deck`, { responseType: "blob" });
-                    const url = URL.createObjectURL(res.data);
-                    window.open(url, "_blank");
-                    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-                  }}
+              lead.pitch_deck_drive_id ? (
+                // Drive ID is mapped — clicking opens Drive's native viewer in a
+                // new tab. The browser follows the 307 from our backend, lands
+                // on drive.google.com/file/d/<id>/view, Drive verifies the
+                // user's @raed.vc session via its own cookies.
+                <span className="text-gray-300 flex items-center gap-2">
+                  <a
+                    href={`/api/v1/leads/${lead.id}/pitch-deck`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={lead.pitch_deck_filename}
+                    className="text-blue-400 hover:text-blue-300 hover:underline text-xs"
+                  >
+                    View PDF ↗
+                  </a>
+                  {lead.pitch_deck_ingested_at && (
+                    <span className="text-gray-600">
+                      · {new Date(lead.pitch_deck_ingested_at).toLocaleDateString("en-GB")}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                // Filename is on file but the Drive sync hasn't run yet — this
+                // is the post-migration state until scripts/sync_drive_to_db.py
+                // runs (gated on platform DB access).
+                <span
+                  className="text-gray-500 text-xs"
+                  title={`${lead.pitch_deck_filename} — Drive sync hasn't run yet; ping Abdulrahman.`}
                 >
-                  View PDF ↗
-                </button>
-                {lead.pitch_deck_ingested_at && (
-                  <span className="text-gray-600">
-                    · {new Date(lead.pitch_deck_ingested_at).toLocaleDateString("en-GB")}
-                  </span>
-                )}
-              </span>
+                  on file, sync pending
+                </span>
+              )
             ) : (
               <span className="text-gray-600">not yet ingested</span>
             )}
