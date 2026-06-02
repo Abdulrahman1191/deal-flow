@@ -41,7 +41,12 @@ def _enqueue(copper_id: str, endpoint: str, body: dict, method: str = "PUT") -> 
     from app.models.copper_outbox import CopperOutbox
 
     # Derive a sync URL from the async one (replace asyncpg driver with psycopg2).
-    sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+    # asyncpg takes ?ssl=require; libpq/psycopg2 wants ?sslmode=require (Neon).
+    sync_url = (
+        settings.database_url
+        .replace("postgresql+asyncpg://", "postgresql://")
+        .replace("ssl=require", "sslmode=require")
+    )
     engine = create_engine(sync_url, pool_pre_ping=True)
     with Session(engine) as session:
         row = CopperOutbox(

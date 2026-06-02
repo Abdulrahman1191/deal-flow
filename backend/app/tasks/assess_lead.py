@@ -21,7 +21,8 @@ def _mark_failed(lead_id: str, error: str) -> None:
     from sqlalchemy import create_engine
     from app.config import settings
 
-    url = settings.database_url.replace("+asyncpg", "+psycopg2")
+    # asyncpg takes ?ssl=require; psycopg2 wants ?sslmode=require (Neon).
+    url = settings.database_url.replace("+asyncpg", "+psycopg2").replace("ssl=require", "sslmode=require")
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(

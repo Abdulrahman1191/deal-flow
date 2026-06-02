@@ -16,7 +16,7 @@
 services:
   app:
     build: .
-    container_name: ${APP_NAME:?APP_NAME must be set — the platform sets this at deploy time. Locally: APP_NAME=deal-flow docker compose up}-app
+    container_name: "${APP_NAME:?APP_NAME must be set — the platform sets this at deploy time. Locally: APP_NAME=deal-flow docker compose up}-app"
     restart: unless-stopped
     env_file:
       - .env
@@ -27,7 +27,8 @@ services:
       - raed_platform
       - internal
     depends_on:
-      - redis
+      redis:
+        condition: service_started
 
   worker:
     build: .
@@ -45,7 +46,8 @@ services:
     networks:
       - internal
     depends_on:
-      - redis
+      redis:
+        condition: service_started
 
   redis:
     image: redis:7-alpine
@@ -56,6 +58,11 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     networks:
       - internal
+
+# Database is now hosted on Neon (see DATABASE_URL in .env / the deal-flow-env
+# secret). The previously-bundled `db` Postgres service + `dbdata` volume were
+# removed on 2026-06-02. The old volume `deal-flow_dbdata` is retained (unused)
+# for rollback until the Neon migration is confirmed good.
 
 networks:
   raed_platform:
