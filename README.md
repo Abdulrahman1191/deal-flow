@@ -87,9 +87,12 @@ localStorage.setItem("fake_email", "you@raed.vc");
 - **Auth is header-trust, not JWT** — `app/services/auth.py::get_current_user`
   reads `X-Auth-Email` set by the platform proxy. The legacy `/auth/login`
   returns 410 Gone with a pointer to the platform login URL.
-- **Pitch deck PDFs live in S3** — `/leads/{id}/pitch-deck` returns a 307
-  redirect to a 5-min presigned URL. The 818 MB of decks no longer lives on
-  any container's local disk.
+- **Pitch deck PDFs live in a shared Google Drive folder** — `/leads/{id}/pitch-deck`
+  returns a 307 redirect to `https://drive.google.com/file/d/<id>/view`. The
+  Drive folder is shared with `@raed.vc` so platform-authenticated users can
+  view the PDF directly in Drive's native viewer. No file bytes flow through
+  our backend. To map Drive files to leads, run
+  `python scripts/sync_drive_to_db.py` locally (one-shot OAuth flow).
 - **Migrations auto-run on boot** — the entrypoint does
   `alembic upgrade head && uvicorn ...`. Safe + idempotent.
 
@@ -111,5 +114,5 @@ import.
 - DB errors on boot: `alembic upgrade head` failed; check `DATABASE_URL`
 - "Not signed in" panel: in production, the platform proxy didn't gate the
   request (check with Khalid). In dev, set `localStorage.fake_email` and reload.
-- Pitch deck shows 503: `S3_PITCH_DECK_BUCKET` not set
+- Pitch deck shows 503: the lead has a `pitch_deck_filename` but no `pitch_deck_drive_id` yet — run `scripts/sync_drive_to_db.py`
 - Owner-only tabs missing: `OWNER_EMAIL` env var doesn't match your Slack email

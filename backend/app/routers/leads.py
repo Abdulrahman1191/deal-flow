@@ -459,28 +459,35 @@ async def get_pitch_deck(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Returns a 5-minute presigned S3 URL for the lead's pitch deck PDF.
+    """Redirects to the lead's pitch deck in the shared Google Drive folder.
 
-    The browser follows the 307 redirect and downloads the bytes directly
-    from S3 — our backend doesn't proxy the file. This is mandatory on the
-    platform deployment (no persistent local volume) and is also better
-    for performance.
+    The Drive folder is shared with @raed.vc, so any platform-authenticated
+    user can view the PDF directly in Drive's native viewer. Our backend
+    never touches the file bytes.
+
+    Drive file IDs get into the DB via scripts/sync_drive_to_db.py — run that
+    once after uploading the PDFs to Drive, and on a cadence afterward if you
+    keep adding new decks.
     """
     from fastapi.responses import RedirectResponse
-    from app.services import s3_pitch_decks
 
     result = await db.execute(select(Lead).where(Lead.id == lead_id))
     lead = result.scalar_one_or_none()
-    if not lead or not lead.pitch_deck_filename:
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if not lead.pitch_deck_drive_id:
+        # Two paths to this: (a) lead has no deck on file at all, or (b) it
+        # has one but the backfill script hasn't run yet. Distinguish in the
+        # error message so we know which one.
+        if lead.pitch_deck_filename:
+            raise HTTPException(
+                status_code=503,
+                detail="Deck is on file but Drive file ID not yet synced — run scripts/sync_drive_to_db.py",
+            )
         raise HTTPException(status_code=404, detail="No pitch deck on file")
 
-    if not s3_pitch_decks.is_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Pitch deck storage not configured (S3_PITCH_DECK_BUCKET unset)",
-        )
-
-    url = s3_pitch_decks.presigned_get_url(lead.pitch_deck_filename)
-    if not url:
-        raise HTTPException(status_code=500, detail="Failed to sign download URL")
-    return RedirectResponse(url=url, status_code=307)
+    return RedirectResponse(
+        url=f"https://drive.google.com/file/d/{lead.pitch_deck_drive_id}/view",
+        status_code=307,
+    )

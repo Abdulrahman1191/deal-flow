@@ -38,11 +38,14 @@ class Settings(BaseSettings):
     database_url: str                    # injected by platform/Khalid
     redis_url: str = "redis://redis:6379/0"
 
-    # --- AWS S3 (pitch decks) ---
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
-    aws_region: str = "ap-south-1"
-    s3_pitch_deck_bucket: str = ""       # if empty, pitch deck endpoint 503s
+    # --- Google Drive (pitch decks) ---
+    # The Drive folder containing the lead pitch decks. We don't need Google
+    # credentials at runtime — the view endpoint redirects to
+    # https://drive.google.com/file/d/<id>/view and Drive enforces access via
+    # the signed-in user's Google session. The folder ID is only used by the
+    # scripts/sync_drive_to_db.py backfill (which DOES need OAuth, but only
+    # runs locally when an admin wants to refresh the Drive→DB mapping).
+    drive_pitch_deck_folder_id: str = ""
 
     # --- Daily briefing schedule ---
     briefing_cron_hour: int = 4

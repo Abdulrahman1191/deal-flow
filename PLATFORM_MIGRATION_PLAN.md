@@ -12,7 +12,7 @@
 | App name (kebab-case) | `deal-flow` |
 | Owner email (replaces `associate@raedventures.com`) | `abdulrahman@raed.vc` |
 | Database | Handled by Khalid via the deploy form — we provide a `pg_dump` artifact |
-| Pitch deck storage | S3 (separate prod bucket), served via signed URLs |
+| Pitch deck storage | Google Drive (shared folder), `/leads/{id}/pitch-deck` redirects to drive.google.com |
 | Auth | Platform-provided Slack OTP; backend trusts `X-Auth-Email` request header |
 | Local-dev auth fallback | `?fake_email=<addr>` querystring (matches starter convention) |
 
@@ -45,7 +45,7 @@
 | DB | Postgres in compose | Khalid-provisioned, connection string in env |
 | Redis | In compose | Stays in compose (additional service allowed) |
 | Celery worker + beat | One container, solo pool | Same, separate service alongside `app` |
-| Pitch decks | 818 MB on `/opt/raed/pitch-decks/` volume | S3 bucket, signed URLs |
+| Pitch decks | 818 MB on `/opt/raed/pitch-decks/` volume | Shared Drive folder; app stores Drive file IDs |
 | User identity | Email/password row in `users` table | Auto-create on first request from any `@raed.vc` email |
 | Owner check | `OWNER_EMAIL = "associate@raedventures.com"` | `OWNER_EMAIL = "abdulrahman@raed.vc"` |
 | Webhook ingestion | Cowork POSTs to `/api/v1/leads/ingest` with HMAC | Same code; needs platform-proxy path-bypass (ask Khalid) OR move to polling reconciler |
@@ -84,7 +84,7 @@ deal-flow/                          # new repo created from KhalidAlMuhammed/app
 - `TAVILY_API_KEY` — web research
 - `COPPER_USER_EMAIL`, `COPPER_USER_ID`, `COPPER_OPEN_STATUS_ID`, `COPPER_UNQUALIFIED_STATUS_ID`, `COPPER_PIPELINE_ID`, `COPPER_PIPELINE_STAGE_ID` — Copper IDs already in the existing `.env`
 - `COPPER_WEBHOOK_SECRET` — for HMAC verification on inbound webhooks
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_PITCH_DECK_BUCKET` — for the pitch deck signed URLs
+- `DRIVE_PITCH_DECK_FOLDER_ID` — Drive folder ID (no Google creds in app env; access is enforced by Drive sharing)
 - `OWNER_EMAIL=abdulrahman@raed.vc`
 - `ENV=prod`
 - `DISABLE_COPPER_SYNC=true` (or remove once we figure out webhooks)
@@ -122,7 +122,7 @@ deal-flow/                          # new repo created from KhalidAlMuhammed/app
 | 4 | Rewrite `get_current_user` for `X-Auth-Email` | ☐ |
 | 5 | Mount React `dist/` from FastAPI + SPA fallback | ☐ |
 | 6 | Add `/api/v1/me` endpoint | ☐ |
-| 7 | S3-backed pitch deck endpoint + bulk upload script | ☐ |
+| 7 | Drive-redirect pitch deck endpoint + Drive→DB backfill script | ✅ |
 | 8 | pg_dump of current DB → store at `/tmp/raed-deal-flow.dump` ready for handoff | ☐ |
 | 9 | Local docker compose smoke test with `?fake_email=` | ☐ |
 | 10 | Push to the new repo + send user the deploy-form payload | ☐ |

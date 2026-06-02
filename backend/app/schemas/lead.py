@@ -37,6 +37,7 @@ class LeadOut(BaseModel):
     company_linkedin_url: Optional[str]
     pitch_deck_filename: Optional[str] = None
     pitch_deck_ingested_at: Optional[datetime] = None
+    pitch_deck_drive_id: Optional[str] = None
     status: str
     created_at: datetime
     updated_at: datetime

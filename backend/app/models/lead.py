@@ -30,6 +30,11 @@ class Lead(Base):
     pitch_deck_text: Mapped[Optional[str]] = mapped_column(Text)
     pitch_deck_ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     pitch_deck_s3: Mapped[Optional[str]] = mapped_column(String(512))
+    # Google Drive file ID for the lead's pitch deck PDF.
+    # Populated by scripts/sync_drive_to_db.py after the user uploads PDFs
+    # to the shared Drive folder. View endpoint redirects to
+    # https://drive.google.com/file/d/<id>/view.
+    pitch_deck_drive_id: Mapped[Optional[str]] = mapped_column(String(64))
     raw_copper_data: Mapped[Optional[dict]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
