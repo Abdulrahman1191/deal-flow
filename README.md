@@ -66,6 +66,22 @@ header during local dev. Frontend remembers it via `localStorage.setItem`:
 localStorage.setItem("fake_email", "you@raed.vc");
 ```
 
+## Drive sync (one-time setup for the 427 pitch decks)
+
+The 427 PDFs live in a shared Google Drive folder (ID `1XN96GRGwxJCk23GiY6o9PY27u30lbpEk`).
+Running `backend/scripts/sync_drive_to_db.py` matches each PDF to a lead row
+and stores the Drive file ID. The "View PDF" button then redirects to
+`drive.google.com/file/d/<id>/view`.
+
+See **[DRIVE_OAUTH_SETUP.md](DRIVE_OAUTH_SETUP.md)** for the one-time Google
+Cloud OAuth client setup, then run:
+
+```bash
+export DRIVE_PITCH_DECK_FOLDER_ID=1XN96GRGwxJCk23GiY6o9PY27u30lbpEk
+export DATABASE_URL=<platform DB URL>
+python backend/scripts/sync_drive_to_db.py
+```
+
 ## Production deploy
 
 1. Click **Use this template** on https://github.com/KhalidAlMuhammed/app-starter
