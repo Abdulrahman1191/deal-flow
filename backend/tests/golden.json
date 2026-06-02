@@ -1,0 +1,58 @@
+[
+  {
+    "lead_id": "0354c5bc-ef44-46d5-af73-381f4fefe9c2",
+    "company_name": "LORA real estate",
+    "human_bucket": "REJECT",
+    "proposed_by": "claude",
+    "rationale": "Traditional Saudi real estate development. No proprietary tech, no IP moat, no software-or-deep-tech layer. Clear thesis miss. AI currently says MAYBE @ confidence 90 — over-charitable."
+  },
+  {
+    "lead_id": "9317e898-a25c-40e3-ae65-58f0b7d6bc39",
+    "company_name": "Ailoo",
+    "human_bucket": "REJECT",
+    "proposed_by": "claude",
+    "rationale": "Saudi ride-hailing with 0% commission gimmick. Pure marketplace model — explicitly named in the hard-reject criteria. AI currently MAYBE @ 55."
+  },
+  {
+    "lead_id": "c1af0fce-fd57-4740-bb62-87268489706f",
+    "company_name": "The Spot Arabia",
+    "human_bucket": "REJECT",
+    "proposed_by": "claude",
+    "rationale": "Founder titled 'CEO & owner of THE SPOT food empire' — F&B business, not deep tech. No tech differentiation visible."
+  },
+  {
+    "lead_id": "a6f79715-3248-42b9-bb3f-9311d0b8d046",
+    "company_name": "بيناتنا",
+    "human_bucket": "REJECT",
+    "proposed_by": "claude",
+    "rationale": "Podcast / media brand 'Between Us' — content business, not tech. Founder is a chemical engineer with no tech-startup link. AI bumped to MAYBE via safety override but the actual model is not a fit."
+  },
+  {
+    "lead_id": "f2f00ee2-ada0-4b71-894e-b82d87e4da8c",
+    "company_name": "KMPlus Consulting Group",
+    "human_bucket": "REJECT",
+    "proposed_by": "claude",
+    "rationale": "Indonesian consulting firm — not MENA, services model (consulting, not product), 20-year-old business. Multiple hard-reject criteria triggered. AI currently MAYBE."
+  },
+  {
+    "lead_id": "20b860c7-ece0-4dd4-9e06-04b029b0d7ef",
+    "company_name": "LAHINT",
+    "human_bucket": "MAYBE",
+    "proposed_by": "claude",
+    "rationale": "Saudi GovTech with AI automation claim. Real MENA play, real B2G angle, but limited public info on tech depth or traction. Legitimate MAYBE."
+  },
+  {
+    "lead_id": "5357b916-b18c-49c9-90b0-d01741d35119",
+    "company_name": "Movematic",
+    "human_bucket": "MAYBE",
+    "proposed_by": "claude",
+    "rationale": "Electric motor developer (hardware → deep tech criterion met) but MENA exposure unclear and founder background sparse. Worth a deeper look, not auto-reject."
+  },
+  {
+    "lead_id": "cb14b7bb-f94f-4e8d-9b59-f98a22cd1d39",
+    "company_name": "SkyTech",
+    "human_bucket": "MAYBE",
+    "proposed_by": "claude",
+    "rationale": "Serial entrepreneur (Bushra Atassi), MENA-focused, AI document automation. Business model leans 'AI-wrapper SaaS' but could be defensible if proprietary training data. Genuinely ambiguous."
+  }
+]

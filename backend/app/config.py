@@ -1,0 +1,72 @@
+"""
+App configuration — platform-targeted edition.
+
+All values come from environment variables (the platform injects shared keys;
+the deploy form lets us add app-specific ones). Local dev reads from .env.
+"""
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    # --- LLM providers ---
+    deep_seek_api: str = ""              # primary assessment model
+    deepseek_model: str = "deepseek-chat"
+    # Platform also injects ANTHROPIC_API_KEY and GEMINI_API_KEY — we don't
+    # currently use them but they're available if we want to swap models.
+
+    # --- Web research ---
+    tavily_api_key: str = ""
+
+    # --- Copper CRM ---
+    copper_webhook_secret: str = ""
+    copper_api_key: str = ""             # provided by the platform
+    copper_user_email: str = ""
+    copper_user_id: int = 0
+    copper_open_status_id: int = 0
+    copper_unqualified_status_id: int = 0
+    copper_pipeline_id: int = 0
+    copper_pipeline_stage_id: int = 0
+
+    # Copper custom-field IDs (one-time setup per COPPER_BIDIRECTIONAL_SYNC.md §3)
+    copper_cf_draft_subject_id: int = 0
+    copper_cf_draft_body_id: int = 0
+    copper_cf_draft_type_id: int = 0
+    copper_cf_summary_id: int = 0
+    copper_cf_app_status_id: int = 0
+
+    # --- Storage ---
+    database_url: str                    # injected by platform/Khalid
+    redis_url: str = "redis://redis:6379/0"
+
+    # --- AWS S3 (pitch decks) ---
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_region: str = "ap-south-1"
+    s3_pitch_deck_bucket: str = ""       # if empty, pitch deck endpoint 503s
+
+    # --- Daily briefing schedule ---
+    briefing_cron_hour: int = 4
+    briefing_cron_minute: int = 0
+
+    # --- Owner / identity ---
+    # Email that gets owner-level access to Portfolio + Feedback tabs.
+    # On the platform, this is the @raed.vc identity. Falls back to legacy
+    # value for backwards-compat with the Lightsail deployment during cutover.
+    owner_email: str = "abdulrahman@raed.vc"
+    associate_name: str = "Abdulrahman"
+
+    # --- Misc behavioural flags ---
+    # Skip the periodic Copper sync task. Useful when bulk-pruning leads or
+    # during DB migrations to avoid re-importing rows.
+    disable_copper_sync: bool = False
+
+    # --- UptimeRobot (optional; vestigial, kept to avoid pydantic strict mode) ---
+    uptimerobot_main_api_key: str = ""
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
+        env_ignore_empty = True
+
+
+settings = Settings()

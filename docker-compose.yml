@@ -1,0 +1,66 @@
+# Platform-compliant compose file.
+#
+# Required by the proxy (do NOT change):
+#   - service name `app`
+#   - container_name exactly `${APP_NAME}-app`
+#   - joined to the external `raed_platform` network
+#   - must NOT publish host ports (the proxy reaches us across the network)
+#
+# Extras (allowed by the platform per the starter README):
+#   - `worker`  — Celery worker + beat scheduler in a single solo-pool process
+#   - `redis`   — Celery broker / result backend
+#
+# All env vars come from the platform-injected env at deploy time. See
+# PLATFORM_MIGRATION_PLAN.md for the full list of expected variables.
+
+services:
+  app:
+    build: .
+    container_name: ${APP_NAME:?APP_NAME must be set — the platform sets this at deploy time. Locally: APP_NAME=deal-flow docker compose up}-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: 3000
+      REDIS_URL: redis://redis:6379/0
+    networks:
+      - raed_platform
+      - internal
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    container_name: ${APP_NAME}-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DISABLE_COPPER_SYNC: "true"
+    # Solo pool + embedded beat scheduler — matches the existing prod behaviour
+    # on Lightsail. Single worker process handles both background tasks and
+    # periodic schedules.
+    command: celery -A app.tasks.celery_app.celery worker --beat --loglevel=info --pool=solo -n platform@%h
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${APP_NAME}-redis
+    restart: unless-stopped
+    # No persistence — Celery queue state is OK to lose on restart, tasks
+    # get retried via the @celery.task max_retries pattern.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - internal
+
+networks:
+  raed_platform:
+    external: true
+  # Private network for app <-> worker <-> redis traffic. Not exposed to
+  # the platform proxy — only the app container is reachable from outside.
+  internal:
+    driver: bridge
