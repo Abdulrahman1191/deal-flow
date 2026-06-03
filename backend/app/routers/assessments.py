@@ -280,24 +280,20 @@ async def override_bucket(
         except Exception as exc:
             print(f"[override_bucket] Copper write failed (local commit succeeded): {exc!r}")
 
-    # Capture for training. Note we capture the AI's view at the moment of
-    # override — for re-overrides this is the previous human bucket, which the
-    # downstream eval scripts filter out using `trigger='override' AND
-    # was_first_override` (see LLM_TUNING_PLAN.md).
+    # Capture for training. We record the AI's view at the moment of override —
+    # for re-overrides this is the previous human bucket, which the downstream
+    # eval scripts filter out using `trigger='override' AND was_first_override`
+    # (see LLM_TUNING_PLAN.md). We pass `ai_bucket` explicitly rather than
+    # mutating the live card: capture_override commits internally, so mutating
+    # card.bucket here would persist the snapshot value over the real bucket.
     if lead:
-        # Reset ai_bucket on the in-memory card so the helper sees the original AI call
-        original_bucket = card.bucket
-        card.bucket = ai_bucket_snapshot
-        try:
-            await capture_override(
-                db, lead=lead, card=card, human_bucket=body.bucket,
-                trigger="override" if was_first_override else "re-override",
-                reason_tags=body.reason_tags,
-                reason=body.reason,
-            )
-        finally:
-            # restore for the response
-            card.bucket = original_bucket
+        await capture_override(
+            db, lead=lead, card=card, human_bucket=body.bucket,
+            trigger="override" if was_first_override else "re-override",
+            reason_tags=body.reason_tags,
+            reason=body.reason,
+            ai_bucket=ai_bucket_snapshot,
+        )
 
     return card
 

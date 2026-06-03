@@ -41,6 +41,7 @@ async def capture_override(
     trigger: Trigger,
     reason_tags: list[str] | None = None,
     reason: str | None = None,
+    ai_bucket: str | None = None,
 ) -> None:
     """Snapshot the current (AI call, human decision) pair.
 
@@ -51,12 +52,18 @@ async def capture_override(
     `reason_tags` and `reason` are optional and may be None when the human
     didn't supply them (e.g. they hit Skip on the reason modal, or this is an
     auto-capture from approve/skip with no UI prompt).
+
+    `ai_bucket` lets the caller record the AI's *original* call explicitly. This
+    matters for the override flow, where `card.bucket` has already been updated
+    to the human's choice — passing the pre-override bucket here keeps the
+    training row honest without the caller having to mutate the live ORM object.
+    Defaults to `card.bucket` when not provided (correct for approve/skip/rate).
     """
     try:
         row = AssessmentOverride(
             lead_id=lead.id,
             assessment_id=card.id,
-            ai_bucket=card.bucket,
+            ai_bucket=ai_bucket if ai_bucket is not None else card.bucket,
             ai_confidence=card.confidence_score,
             ai_summary=card.summary,
             ai_breakdown=card.scoring_breakdown,
