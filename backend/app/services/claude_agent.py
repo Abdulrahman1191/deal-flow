@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from typing import Any
 
@@ -119,6 +121,12 @@ Pitch deck excerpt (founder-provided, prefer this over web research when they co
 
 Historical precedents from Raed's portfolio (most similar to this lead):
 {precedents_block}
+
+Recent team calibration — how Raed's investment team has actually judged SIMILAR
+leads lately (👍/👎 and bucket overrides). This is the most current signal of our
+taste. **Where it conflicts with the historical portfolio precedents above, trust
+THIS** — and if one of these closely matches the lead, weight it heavily:
+{team_calibration_block}
 
 Considerations checklist — score each criterion below as supporting evidence that
 DOCUMENTS your reasoning on the assessment card. These scores do NOT mechanically
@@ -295,7 +303,18 @@ top_themes must have exactly 5 items ranked by relevance to the Raed Ventures th
 deep_dives must have exactly 2 items for the 2 most compelling themes."""
 
 
-def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
+def assess_lead(
+    lead_data: dict,
+    research_data: dict,
+    team_calibration: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Assess a lead.
+
+    `team_calibration` is an optional list of recent team-labeled exemplars
+    (from app.services.feedback_patterns.retrieve_labeled_exemplars) — the
+    feedback→pattern loop. Callers without a DB session (eval scripts) can omit
+    it; the prompt then shows "(no recent team calibration yet)".
+    """
     pitch_deck_text = lead_data.get("pitch_deck_text") or ""
     pitch_deck_excerpt = pitch_deck_text[:12_000] if pitch_deck_text else "(none provided)"
 
@@ -329,6 +348,11 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
     )
     precedents_block = _pr.format_for_prompt(precedents)
 
+    # Feedback→pattern loop: render the team's recent labeled judgments on
+    # similar leads (retrieved by the caller, which has the DB session).
+    from app.services import feedback_patterns as _fp
+    team_calibration_block = _fp.format_for_prompt(team_calibration or [])
+
     prompt = ASSESS_USER_TEMPLATE.format(
         associate_name=settings.associate_name,
         company_name=lead_data.get("company_name", ""),
@@ -342,6 +366,7 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
         research_data=json.dumps(research_data, indent=2),
         pitch_deck_excerpt=pitch_deck_excerpt,
         precedents_block=precedents_block,
+        team_calibration_block=team_calibration_block,
     )
 
     response = _get_client().chat.completions.create(

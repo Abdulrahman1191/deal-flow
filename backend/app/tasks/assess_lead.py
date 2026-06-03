@@ -91,7 +91,25 @@ async def _run(lead_id: str) -> dict:
         }
 
         research_data = research.research_company(lead_data)
-        assessment_result = claude_agent.assess_lead(lead_data, research_data)
+
+        # Feedback→pattern loop: pull the team's recent labeled judgments on
+        # similar leads and feed them to the assessor as calibration. Best-effort
+        # — never let the loop break the assessment.
+        try:
+            from app.services import feedback_patterns
+            _match_text = " ".join(
+                filter(None, [lead.description or "", (lead.pitch_deck_text or "")[:3000]])
+            )
+            team_calibration = await feedback_patterns.retrieve_labeled_exemplars(
+                db, _match_text, k=4, exclude_lead_id=lead.id
+            )
+        except Exception as exc:
+            print(f"[assess_lead] exemplar retrieval failed (continuing): {exc!r}")
+            team_calibration = []
+
+        assessment_result = claude_agent.assess_lead(
+            lead_data, research_data, team_calibration=team_calibration
+        )
 
         # Upsert: update existing card if present, otherwise create one.
         existing = await db.execute(
