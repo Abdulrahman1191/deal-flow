@@ -16,7 +16,8 @@
 services:
   app:
     build: .
-    container_name: ${APP_NAME:?APP_NAME must be set — the platform sets this at deploy time. Locally: APP_NAME=deal-flow docker compose up}-app
+    # Platform sets APP_NAME at deploy time. Local dev: APP_NAME=dealflow docker compose up
+    container_name: ${APP_NAME}-app
     restart: unless-stopped
     env_file:
       - .env
