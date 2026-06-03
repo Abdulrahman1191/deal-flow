@@ -112,6 +112,7 @@ async def _run(lead_id: str) -> dict:
             draft_type=assessment_result.get("draft_type"),
             research_sources=assessment_result.get("research_sources"),
             research_data=research_data,  # preserve full Tavily input for training
+            precedents_cited=assessment_result.get("precedents_cited"),
             user_override=None,
             user_override_at=None,
             approved_at=None,

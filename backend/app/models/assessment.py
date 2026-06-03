@@ -29,6 +29,9 @@ class AssessmentCard(Base):
     # Raw Tavily research dict — captured so we can reconstruct what the AI saw
     # at assessment time when later promoting overrides into training data.
     research_data: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Snapshot of which Raed-portfolio precedents were retrieved + cited
+    # in this assessment. Foundation for measuring retrieval-quality vs accuracy.
+    precedents_cited: Mapped[Optional[list]] = mapped_column(JSONB)
     user_override: Mapped[Optional[str]] = mapped_column(String(16))
     user_override_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

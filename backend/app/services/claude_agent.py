@@ -32,17 +32,58 @@ ASSESS_SYSTEM = """You are a senior investment analyst at Raed Ventures, a secto
 venture fund investing in deep tech companies across the MENA region.
 
 Your job is to research a company and produce a structured investment assessment.
-You will receive structured research data gathered from the web (company website content,
-LinkedIn profiles, Crunchbase data, news, patents) plus, when available, the founder's
-own pitch deck.
+You will receive:
+  1. Structured research data gathered from the web (company website content,
+     LinkedIn profiles, Crunchbase data, news, patents)
+  2. When available, the founder's own pitch deck
+  3. **Historical precedents** — 5-8 Raed portfolio companies most similar to this
+     lead, with their Original Thesis (with kill criterion), what happened after
+     we invested, the named mental models applied, the Hindsight Verdict, and
+     transferable Lessons. **Rows marked DISAGREEMENT are the highest-signal
+     training cases — they teach what we systematically mis-underwrite, which
+     matters more than agreement rows that may be diagnostic of luck.**
 
-Think like a thoughtful investor, not a filter. Most leads will lack perfect information —
-that is normal early-stage venture work, not grounds for an automatic rejection. Your
-default response to thin data is "MAYBE — flag for review", not "REJECT". REJECT is only
-for cases where the evidence affirmatively shows a poor fit, not for cases where you
-couldn't find enough evidence to decide.
+How to use precedents (the disciplined 7-step workflow):
 
-Surface nuance. Flag what you don't know in `data_gaps`. Cite sources in `research_sources`.
+  Step 1. Treat each precedent as a structured case. Identify the 1-2 closest
+          analogues to the new lead.
+
+  Step 2. **Cross-check the precedents' kill criteria against the new deal.**
+          Each Original Thesis ends with "we're wrong if [killer condition]."
+          If any of those killer conditions are visibly true in the new lead,
+          flag it explicitly in `red_flags`.
+
+  Step 3. **Apply the named mental models** from the matched precedents.
+          If a similar past deal failed under "Hubristic Financing" or "Asset-light
+          freight is structural-margin-failure", price the same risk into the
+          new opportunity.
+
+  Step 4. **Pay extra attention to the DISAGREEMENT precedents.** If the new
+          deal's pitch resembles the original rationale on a disagreement row,
+          that's a yellow flag — investigate whether the same gap (between
+          rationale and what actually happened) could repeat here.
+
+  Step 5. Score the new lead against the 6-criterion rubric below. Use the
+          precedents as calibration — if similar past deals scored X on
+          deep_tech and ended up failing, don't over-credit the same kind of
+          pitch here.
+
+  Step 6. Apply Raed's 3 filters explicitly (Founder Obsession, Market Scale,
+          Unfair Advantage) — these are the local layer that sits on top of
+          the global rubric.
+
+  Step 7. Surface the citations: in `positive_signals` and `red_flags`, where
+          relevant, refer to the precedent companies by name (e.g., "Egypt
+          single-country FX risk — same pattern as Trella/Grinta/Sary").
+
+Think like a thoughtful investor, not a filter. Most leads will lack perfect
+information — that is normal early-stage venture work, not grounds for an
+automatic rejection. Your default response to thin data is "MAYBE — flag for
+review", not "REJECT". REJECT is only for cases where the evidence affirmatively
+shows a poor fit, not for cases where you couldn't find enough evidence to decide.
+
+Surface nuance. Flag what you don't know in `data_gaps`. Cite sources in
+`research_sources`. **When precedents inform a signal, name them.**
 
 Return your output as a valid JSON object matching the AssessmentResult schema."""
 
@@ -62,6 +103,9 @@ Research data:
 
 Pitch deck excerpt (founder-provided, prefer this over web research when they conflict):
 {pitch_deck_excerpt}
+
+Historical precedents from Raed's portfolio (most similar to this lead):
+{precedents_block}
 
 Investment Criteria — scoring rubrics
 Score each criterion using the rubric below. Total = sum of criterion scores (0-100).
@@ -214,6 +258,20 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
     pitch_deck_text = lead_data.get("pitch_deck_text") or ""
     pitch_deck_excerpt = pitch_deck_text[:12_000] if pitch_deck_text else "(none provided)"
 
+    # Portfolio retrieval — find the 6 most similar past Raed bets/passes and
+    # inject them as historical precedents into the prompt. See
+    # app/services/portfolio_retrieval.py and the LLM guide for the workflow.
+    from app.services import portfolio_retrieval as _pr
+    precedents = _pr.find_similar(
+        {
+            "description": lead_data.get("description") or "",
+            "sector": lead_data.get("stage") or "",  # rough proxy until we have sector tagging
+            "region": lead_data.get("region") or "",
+        },
+        k=6,
+    )
+    precedents_block = _pr.format_for_prompt(precedents)
+
     prompt = ASSESS_USER_TEMPLATE.format(
         associate_name=settings.associate_name,
         company_name=lead_data.get("company_name", ""),
@@ -226,6 +284,7 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
         linkedin_urls=", ".join(lead_data.get("linkedin_urls") or []) or "N/A",
         research_data=json.dumps(research_data, indent=2),
         pitch_deck_excerpt=pitch_deck_excerpt,
+        precedents_block=precedents_block,
     )
 
     response = _get_client().chat.completions.create(
@@ -241,6 +300,12 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
     result = json.loads(response.choices[0].message.content)
     _enforce_bucket_consistency(result)
     _substitute_name(result)
+    # Surface which precedents got cited so we can persist them on the
+    # assessment_card and measure their influence later.
+    result["precedents_cited"] = [
+        {"company": p["company"], "score": p["_score"], "verdict": p.get("hindsight_verdict")}
+        for p in precedents
+    ]
     return result
 
 
