@@ -1,14 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import useAppStore from "../../store/useAppStore";
-import { fetchSendQueue } from "../../api/assessments";
 import { fetchFeedback } from "../../api/feedback";
 import { useMe } from "../../lib/auth";
 
 const baseTabs = [
   { id: "leads", label: "Deal Flow" },
-  { id: "briefing", label: "Daily Briefing" },
   { id: "framework", label: "Framework" },
-  { id: "sendqueue", label: "Send Queue" },
   { id: "archive", label: "Archive" },
 ] as const;
 
@@ -16,13 +13,6 @@ export default function Navbar() {
   const { activeTab, setActiveTab } = useAppStore();
   const me = useMe();
   const owner = !!me.data?.is_owner;
-
-  const { data: queue = [] } = useQuery({
-    queryKey: ["send-queue"],
-    queryFn: fetchSendQueue,
-    refetchInterval: 30_000,
-    staleTime: 20_000,
-  });
 
   const { data: feedback = [] } = useQuery({
     queryKey: ["feedback"],
@@ -34,11 +24,7 @@ export default function Navbar() {
   const unresolved = feedback.filter((f) => !f.resolved_at).length;
 
   const tabs = owner
-    ? [
-        ...baseTabs,
-        { id: "portfolio" as const, label: "Portfolio" },
-        { id: "feedback" as const, label: "Feedback" },
-      ]
+    ? [...baseTabs, { id: "feedback" as const, label: "Feedback" }]
     : baseTabs;
 
   return (
@@ -59,11 +45,6 @@ export default function Navbar() {
             }`}
           >
             {tab.label}
-            {tab.id === "sendqueue" && queue.length > 0 && (
-              <span className="absolute top-3 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
-                {queue.length}
-              </span>
-            )}
             {tab.id === "feedback" && unresolved > 0 && (
               <span className="absolute top-3 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">
                 {unresolved}

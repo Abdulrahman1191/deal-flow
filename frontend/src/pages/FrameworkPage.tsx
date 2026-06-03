@@ -1,23 +1,52 @@
-const criteria = [
-  { name: "MENA Focus", weight: "20%", desc: "Operating in or targeting the MENA region." },
-  { name: "Deep Technology", weight: "25%", desc: "Proprietary, defensible tech at the core of the business." },
-  { name: "Strong IP", weight: "20%", desc: "Patents, proprietary data, or hardware moats." },
-  { name: "Experienced Team", weight: "20%", desc: "Domain expertise and relevant prior background." },
-  { name: "Stage Alignment", weight: "10%", desc: "Pre-seed to Series A only." },
-  { name: "Model Fit", weight: "5%", desc: "Not a marketplace or basic SaaS without deep tech." },
+// The assessment is pattern-based, not a weighted score. The AI reasons by
+// analogy to Raed's labeled portfolio retrospective (42 past bets, each with a
+// thesis, kill criterion, outcome, and hindsight verdict) and decides where a
+// new lead fits. This page documents that framework for the team.
+
+const buckets = [
+  {
+    label: "YES",
+    head: "Worth a meeting",
+    color: "text-green-400",
+    border: "border-green-900/40",
+    desc: "Resembles the patterns of bets that worked for the reasons we underwrote. Credible signal on the thesis and Raed's filters — enough to want a conversation, even if not every detail is confirmed yet.",
+  },
+  {
+    label: "MAYBE",
+    head: "Flag for review",
+    color: "text-yellow-400",
+    border: "border-yellow-900/40",
+    desc: "Genuinely mixed, or interesting but unresolved from the evidence available. Routed to you to make the call — this is where thin-but-promising leads land.",
+  },
+  {
+    label: "REJECT",
+    head: "Clear poor fit",
+    color: "text-red-400",
+    border: "border-red-900/40",
+    desc: "Affirmative poor fit on the evidence we DO have — repeats a known failure pattern, or plainly fails a Raed filter. Not used for 'we couldn't find enough data' — that's a MAYBE.",
+  },
 ];
 
-const hardRejects = [
-  "Traditional marketplace model without a deep tech layer",
-  "Basic SaaS with no IP or tech differentiation",
-  "No MENA presence, operations, or target market",
-  "Series B or later stage",
+const filters = [
+  { name: "Founder Obsession", desc: "Concrete evidence of grit, recruiting power, and customer obsession — not just background credentials." },
+  { name: "Market Scale", desc: "GCC TAM consistent with a meaningful exit on the Raed check size. If the market isn't there, flag it." },
+  { name: "Unfair Advantage", desc: "The one thing that compounds. If it takes a paragraph to describe, it isn't real." },
 ];
 
-const thresholds = [
-  { range: "80–100", label: "YES", desc: "Schedule a meeting", color: "text-green-400" },
-  { range: "50–79", label: "MAYBE", desc: "Flag for review", color: "text-yellow-400" },
-  { range: "0–49", label: "REJECT", desc: "Draft rejection email", color: "text-red-400" },
+const lookFor = [
+  { name: "MENA focus", desc: "Operating in or targeting the region (a MENA name / domain counts even when ops aren't verifiable online)." },
+  { name: "Deep technology", desc: "Proprietary, defensible tech at the core — not a thin layer over commodity APIs." },
+  { name: "Strong IP / moat", desc: "Patents, proprietary data flywheel, hardware, or hard-won regulatory position." },
+  { name: "Team", desc: "Domain depth and a track record that matches the company's claimed technical ambition." },
+  { name: "Stage", desc: "Pre-seed to Series A." },
+  { name: "Model fit", desc: "Sells a technical product / API / hardware / regulated service — not a pure marketplace or basic SaaS." },
+];
+
+const rejects = [
+  "Pure marketplace, agency, services, commodity SaaS, or real estate with no deep-tech layer",
+  "Repeats the failure mechanism of a past MIXED / NO / write-off bet",
+  "Credibility red flags — unverifiable or mismatched founder identity, no verifiable existence",
+  "Outside the pre-seed → Series A window, or no MENA connection at all",
 ];
 
 export default function FrameworkPage() {
@@ -25,48 +54,91 @@ export default function FrameworkPage() {
     <div className="p-6 max-w-3xl space-y-8">
       <div>
         <h1 className="text-lg font-semibold text-white mb-1">Investment Framework</h1>
-        <p className="text-xs text-gray-500">Raed Ventures · Sector-agnostic early-stage deep tech, MENA focus</p>
+        <p className="text-xs text-gray-500">
+          Raed Ventures · Sector-agnostic early-stage deep tech, MENA focus
+        </p>
       </div>
 
       <section>
-        <h2 className="text-sm font-semibold text-gray-300 mb-3">Scoring Criteria</h2>
+        <h2 className="text-sm font-semibold text-gray-300 mb-2">How the AI decides</h2>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-xs text-gray-400 leading-relaxed space-y-2">
+          <p>
+            The recommendation is a <span className="text-gray-200 font-medium">pattern-based judgment</span>, not a
+            weighted score. For each new lead the AI retrieves the most similar companies from{" "}
+            <span className="text-gray-200">Raed's portfolio retrospective</span> (42 past bets, each labeled with its
+            original thesis, kill criterion, what actually happened, and a hindsight verdict), then reasons by analogy.
+          </p>
+          <p>
+            It tests the new deal against those precedents' <span className="text-gray-200">kill criteria</span>, applies
+            the named mental models, and weights the <span className="text-gray-200">disagreement cases</span> most
+            heavily — the bets where our original rationale and reality diverged are where we've learned what we
+            systematically mis-underwrite.
+          </p>
+          <p className="text-gray-500">
+            Core discipline: <span className="text-gray-300">decision quality is separate from outcome.</span> The AI
+            judges whether the signals knowable now fit the patterns of theses that held up — not whether a company
+            happened to succeed.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-semibold text-gray-300 mb-3">The three buckets</h2>
         <div className="space-y-2">
-          {criteria.map((c) => (
-            <div key={c.name} className="flex gap-4 bg-gray-900 border border-gray-800 rounded-xl p-4">
-              <div className="w-16 shrink-0">
-                <span className="text-lg font-bold text-brand">{c.weight}</span>
+          {buckets.map((b) => (
+            <div key={b.label} className={`bg-gray-900 border ${b.border} rounded-xl p-4`}>
+              <div className="flex items-baseline gap-3">
+                <span className={`text-sm font-bold ${b.color}`}>{b.label}</span>
+                <span className="text-sm font-medium text-white">{b.head}</span>
               </div>
-              <div>
-                <p className="text-sm font-medium text-white">{c.name}</p>
-                <p className="text-xs text-gray-500 mt-0.5">{c.desc}</p>
-              </div>
+              <p className="text-xs text-gray-500 mt-1 leading-relaxed">{b.desc}</p>
             </div>
           ))}
         </div>
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold text-gray-300 mb-3">Score Thresholds</h2>
-        <div className="flex gap-4">
-          {thresholds.map((t) => (
-            <div key={t.label} className="flex-1 bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
-              <p className={`text-xl font-bold ${t.color}`}>{t.range}</p>
-              <p className={`text-sm font-semibold mt-1 ${t.color}`}>{t.label}</p>
-              <p className="text-xs text-gray-500 mt-1">{t.desc}</p>
+        <h2 className="text-sm font-semibold text-gray-300 mb-3">Raed's three filters</h2>
+        <div className="space-y-2">
+          {filters.map((f) => (
+            <div key={f.name} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-sm font-medium text-brand">{f.name}</p>
+              <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{f.desc}</p>
             </div>
           ))}
         </div>
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold text-gray-300 mb-3">Hard Reject Criteria</h2>
+        <h2 className="text-sm font-semibold text-gray-300 mb-3">What we look for</h2>
+        <div className="grid grid-cols-2 gap-2">
+          {lookFor.map((c) => (
+            <div key={c.name} className="bg-gray-900 border border-gray-800 rounded-xl p-3">
+              <p className="text-xs font-medium text-white">{c.name}</p>
+              <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed">{c.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-semibold text-gray-300 mb-3">Clear rejects</h2>
         <div className="bg-gray-900 border border-red-900/40 rounded-xl p-4 space-y-2">
-          {hardRejects.map((r) => (
+          {rejects.map((r) => (
             <div key={r} className="flex gap-2 text-xs text-red-400">
               <span className="shrink-0 mt-0.5">✗</span>
-              <span>{r}</span>
+              <span className="leading-relaxed">{r}</span>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-semibold text-gray-300 mb-2">It learns from you</h2>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-xs text-gray-400 leading-relaxed">
+          Every <span className="text-green-400">👍</span> / <span className="text-orange-400">👎</span> and every
+          bucket you override is recorded with your reason. Those become the labeled patterns we feed back in to keep
+          the model calibrated to Raed's judgement over time.
         </div>
       </section>
     </div>

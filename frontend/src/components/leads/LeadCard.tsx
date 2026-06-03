@@ -33,8 +33,8 @@ export default function LeadCard({ lead }: Props) {
   // When set, a ReasonModal is open for this bucket. The user can save with
   // reason data, skip (no reason), or cancel (no override at all).
   const [pendingBucket, setPendingBucket] = useState<"YES" | "MAYBE" | "REJECT" | null>(null);
-  // When true, the thumbs-down FeedbackModal is open.
-  const [showFeedback, setShowFeedback] = useState(false);
+  // Which rating's FeedbackModal is open ("up" | "down"), or null when closed.
+  const [showFeedback, setShowFeedback] = useState<"up" | "down" | null>(null);
   const qc = useQueryClient();
 
   const { assessment } = lead;
@@ -254,9 +254,9 @@ export default function LeadCard({ lead }: Props) {
           {/* Thumbs up/down — rate the AI recommendation (training signal). */}
           <div className="flex items-center gap-1 ml-auto" data-testid="rating-controls">
             <button
-              onClick={() => rateMutation.mutate({ rating: "up" })}
+              onClick={() => setShowFeedback("up")}
               disabled={rateMutation.isPending}
-              title="The AI got this right"
+              title="The AI got this right — add optional feedback"
               data-testid="rate-up"
               className={`text-sm px-1.5 py-0.5 rounded transition-colors ${
                 rating === "up"
@@ -267,7 +267,7 @@ export default function LeadCard({ lead }: Props) {
               👍
             </button>
             <button
-              onClick={() => setShowFeedback(true)}
+              onClick={() => setShowFeedback("down")}
               disabled={rateMutation.isPending}
               title="The AI got this wrong — give feedback"
               data-testid="rate-down"
@@ -360,15 +360,16 @@ export default function LeadCard({ lead }: Props) {
         <FeedbackModal
           companyName={lead.company_name}
           aiBucket={bucket ?? ""}
+          rating={showFeedback}
           onSubmit={(reasonData) => {
-            rateMutation.mutate({ rating: "down", reasonData });
-            setShowFeedback(false);
+            rateMutation.mutate({ rating: showFeedback, reasonData });
+            setShowFeedback(null);
           }}
           onSkip={() => {
-            rateMutation.mutate({ rating: "down" });
-            setShowFeedback(false);
+            rateMutation.mutate({ rating: showFeedback });
+            setShowFeedback(null);
           }}
-          onCancel={() => setShowFeedback(false)}
+          onCancel={() => setShowFeedback(null)}
         />
       )}
 

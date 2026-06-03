@@ -1,12 +1,9 @@
 import { useMe } from "./lib/auth";
 import Navbar from "./components/layout/Navbar";
 import LeadsPage from "./pages/LeadsPage";
-import BriefingPage from "./pages/BriefingPage";
 import FrameworkPage from "./pages/FrameworkPage";
-import SendQueuePage from "./pages/SendQueuePage";
 import ArchivePage from "./pages/ArchivePage";
 import FeedbackInboxPage from "./pages/FeedbackInboxPage";
-import PortfolioPage from "./pages/PortfolioPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
 import ErrorBoundary from "./components/shared/ErrorBoundary";
 import useAppStore from "./store/useAppStore";
@@ -27,19 +24,9 @@ function Dashboard() {
               <LeadsPage />
             </div>
           )}
-          {activeTab === "briefing" && (
-            <div className="h-full flex">
-              <BriefingPage />
-            </div>
-          )}
           {activeTab === "framework" && (
             <div className="h-full overflow-y-auto">
               <FrameworkPage />
-            </div>
-          )}
-          {activeTab === "sendqueue" && (
-            <div className="h-full overflow-y-auto">
-              <SendQueuePage />
             </div>
           )}
           {activeTab === "archive" && (
@@ -50,11 +37,6 @@ function Dashboard() {
           {activeTab === "feedback" && (
             <div className="h-full overflow-y-auto">
               <FeedbackInboxPage />
-            </div>
-          )}
-          {activeTab === "portfolio" && (
-            <div className="h-full overflow-y-auto">
-              <PortfolioPage />
             </div>
           )}
         </ErrorBoundary>
