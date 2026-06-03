@@ -76,11 +76,24 @@ How to use precedents (the disciplined 7-step workflow):
           relevant, refer to the precedent companies by name (e.g., "Egypt
           single-country FX risk — same pattern as Trella/Grinta/Sary").
 
-Think like a thoughtful investor, not a filter. Most leads will lack perfect
-information — that is normal early-stage venture work, not grounds for an
-automatic rejection. Your default response to thin data is "MAYBE — flag for
-review", not "REJECT". REJECT is only for cases where the evidence affirmatively
-shows a poor fit, not for cases where you couldn't find enough evidence to decide.
+Think like a thoughtful investor reasoning BY ANALOGY, not a scoring machine. Your
+decision is NOT the output of a fixed formula. It is a judgment about which of the
+labelled historical precedents above this new lead most resembles, and what those
+bets taught us.
+
+Anchor every decision in the portfolio's core discipline: **decision quality is
+separate from outcome.** Judge whether the signals knowable now fit the pattern of
+bets whose theses held up (Hindsight Verdict STRONG YES / YES, Performance
+OUTPERFORMING / ON-TRACK) versus bets where our rationale turned out wrong
+(Hindsight Verdict MIXED / NO, WRITE-OFF, or a DISAGREEMENT row). A lead that
+repeats the failure mechanism of a MIXED / NO / disagreement precedent — the same
+gap between pitch and reality — is a deal we have learned to be cautious about,
+even when it looks exciting on the surface.
+
+Most early leads lack complete information — that is normal venture work, not
+grounds for rejection. Distinguish sharply between "the evidence we DO have shows a
+poor fit" (→ REJECT) and "we could not find enough evidence to decide" (→ MAYBE).
+Never reject a lead for missing data alone.
 
 Surface nuance. Flag what you don't know in `data_gaps`. Cite sources in
 `research_sources`. **When precedents inform a signal, name them.**
@@ -107,8 +120,12 @@ Pitch deck excerpt (founder-provided, prefer this over web research when they co
 Historical precedents from Raed's portfolio (most similar to this lead):
 {precedents_block}
 
-Investment Criteria — scoring rubrics
-Score each criterion using the rubric below. Total = sum of criterion scores (0-100).
+Considerations checklist — score each criterion below as supporting evidence that
+DOCUMENTS your reasoning on the assessment card. These scores do NOT mechanically
+decide the bucket; the decision is the holistic, pattern-based judgment described in
+"How to decide the bucket" further down. A lead can score moderately yet be a clear
+REJECT (it repeats a known failure pattern) or a clear YES (it matches our strongest
+bets on the dimension that actually mattered).
 
 1. **MENA focus** (0-20): operating in or targeting the MENA region
    - 20: HQ or core operations in MENA (KSA, UAE, Egypt, Jordan, Lebanon, Morocco, Tunisia, Bahrain, Kuwait, Oman, Qatar) AND MENA-targeted customers/market
@@ -151,35 +168,48 @@ Score each criterion using the rubric below. Total = sum of criterion scores (0-
    - 1: Marketplace with a technology layer that materially changes the unit economics
    - 0: Pure marketplace, dropshipping, agency, or basic SaaS
 
-Bucket assignment based on total score:
-- **80-100 → YES** (schedule a meeting — strong fit)
-- **50-79 → MAYBE** (flag for human review — interesting but unclear)
-- **0-49 → REJECT** (poor fit on multiple dimensions)
+How to decide the bucket — by analogy to the labelled precedents above, NOT by summing scores:
 
-Important guardrails — read these CAREFULLY before scoring:
+- **YES** — The lead matches the pattern of our bets that worked *for the reasons we
+  underwrote*: precedents with Hindsight Verdict STRONG YES / YES and Performance
+  OUTPERFORMING / ON-TRACK. All three Raed filters pass on concrete evidence
+  (Founder Obsession, Market Scale, Unfair Advantage), the thesis fits one falsifiable
+  sentence, and no matched precedent's kill criterion is visibly triggered. We want a meeting.
 
-1. **A score of 0 means "I have AFFIRMATIVE EVIDENCE that this criterion fails."** It does NOT
-   mean "I couldn't find data." If your reasoning would read "no information / not found /
-   cannot confirm / cannot rule out", the correct score is in the **5-8 range** with the
-   uncertainty surfaced as a `data_gaps` entry. Reserve 0 for cases where the evidence is
-   clear and negative (e.g., "the founder's LinkedIn shows 15 years in e-commerce, not biotech,
-   contradicting the deep-tech-bio claim").
+- **REJECT** — Affirmative poor fit, established on evidence we DO have. EITHER (a) the lead
+  repeats the failure mechanism of a MIXED / NO / WRITE-OFF / DISAGREEMENT precedent — the
+  same gap between pitch and reality — OR (b) it plainly fails a Raed filter: no unfair
+  advantage that compounds, no genuine deep tech (pure marketplace / agency / services /
+  commodity SaaS / real estate), a market too small for GCC exit math, or outside our
+  pre-seed→Series A window. REJECT is about poor FIT, never about missing data.
 
-2. **DEFAULT TO MAYBE WHEN THE PICTURE IS THIN.** If 3+ of the 6 criteria have data_gaps,
-   you almost certainly should output `MAYBE`, not `REJECT`. REJECT is for cases where the
-   evidence we DO have shows poor fit, not for cases where evidence is sparse.
+- **MAYBE** — Genuinely mixed signal, OR a plausibly interesting deal whose fit cannot be
+  resolved from the evidence available. This is where thin-but-promising leads go for human
+  review. When you are torn between YES and REJECT *because the picture is incomplete*, choose
+  MAYBE — but do NOT choose MAYBE merely to avoid a hard call when the evidence is actually clear.
 
-3. **The total-score → bucket mapping has a safety override:** if `len(data_gaps) >= 3` and
-   the raw total would land in REJECT (< 50), bump the bucket to MAYBE. A human reviewer is
-   better placed than you to make a final call when so much is unknown.
+Decision discipline — read before deciding:
 
-4. **Arabic / non-English company names with sparse English-language web data should not be
-   penalised on MENA focus.** Score MENA focus 15+ if the name, language, or domain (.sa, .ae,
-   .eg, .jo, .ma, .tn, .bh, .om, .kw, .qa, .lb) indicates MENA, even if specific operations
-   couldn't be verified.
+1. **Decision quality ≠ outcome.** Weight DISAGREEMENT precedents heaviest — they are where
+   Raed has learned what it systematically mis-underwrites. If this lead's pitch echoes the
+   original rationale of a disagreement row, treat it as a red flag and say so in `red_flags`,
+   naming the precedent.
 
-5. **Distinguish "founder from MENA" from "no MENA presence found":** founder-from-MENA → 15;
-   no-MENA-anywhere → 0. Don't conflate them.
+2. **A criterion score of 0 means AFFIRMATIVE negative evidence**, not "couldn't find data."
+   If your reasoning reads "not found / cannot confirm", score 5-8 and log a `data_gaps`
+   entry — never let absence of data, by itself, push a lead toward REJECT.
+
+3. **Credibility red flags OVERRIDE the thin-data default → REJECT.** Missing data alone never
+   justifies REJECT — but *affirmative* credibility red flags do, even when the overall picture
+   is thin. If the founder's identity cannot be verified or appears mismatched/fabricated (e.g.
+   the named founder's LinkedIn points to a different person), AND the company has no verifiable
+   existence (no website, news, registry, or product), AND the materials are garbled or
+   uninformative — that combination is negative evidence about the deal, not a neutral "unknown".
+   Output REJECT and name the specific red flags in `red_flags`. Do not hide behind MAYBE.
+
+4. **Arabic / non-English names with sparse English-language web data are NOT penalised on
+   MENA focus.** A MENA name, language, or domain (.sa .ae .eg .jo .ma .tn .bh .om .kw .qa .lb)
+   satisfies MENA focus even if specific operations couldn't be verified online.
 
 Return a JSON object with this exact structure:
 {{
@@ -261,10 +291,26 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
     # Portfolio retrieval — find the 6 most similar past Raed bets/passes and
     # inject them as historical precedents into the prompt. See
     # app/services/portfolio_retrieval.py and the LLM guide for the workflow.
+    #
+    # IMPORTANT: lead.description is frequently empty in our data, so matching on
+    # it alone makes retrieval return the same generic top-6 for every lead. Build
+    # a richer matching text from the deck + research so each lead pulls the
+    # precedents that actually resemble it (e.g. a freight marketplace should pull
+    # Trella/Grinta/Sary, not fintech rows).
     from app.services import portfolio_retrieval as _pr
+    _match_text = " ".join(
+        filter(
+            None,
+            [
+                lead_data.get("description") or "",
+                pitch_deck_text[:3000],
+                str(research_data.get("summary") or "") if isinstance(research_data, dict) else "",
+            ],
+        )
+    )
     precedents = _pr.find_similar(
         {
-            "description": lead_data.get("description") or "",
+            "description": _match_text,
             "sector": lead_data.get("stage") or "",  # rough proxy until we have sector tagging
             "region": lead_data.get("region") or "",
         },
@@ -290,6 +336,12 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
     response = _get_client().chat.completions.create(
         model=settings.deepseek_model,
         max_tokens=4096,
+        # Greedy decoding (temperature 0): the assessment is a screening judgment we
+        # want reproducible — the same lead should yield the same bucket run-to-run.
+        # At higher temperatures borderline leads flip between MAYBE and REJECT,
+        # which both confuses users and makes eval deltas unmeasurable. Draft email
+        # wording is reviewed/edited before sending, so we don't need sampling variety.
+        temperature=0.0,
         messages=[
             {"role": "system", "content": ASSESS_SYSTEM},
             {"role": "user", "content": prompt},
@@ -310,44 +362,24 @@ def assess_lead(lead_data: dict, research_data: dict) -> dict[str, Any]:
 
 
 def _enforce_bucket_consistency(result: dict) -> None:
-    """Defensive guardrails that the LLM doesn't always honour from the prompt.
+    """Light guardrails on the model's pattern-based decision.
 
-    1. If the breakdown sums to YES territory (80+) but the LLM picked something
-       lower, bump bucket to YES. Conversely if it sums to REJECT but model said YES.
-    2. If `data_gaps` has 3+ entries AND the model said REJECT, bump to MAYBE —
-       a human reviewer should weigh in when the picture is this thin.
-    3. Sync the draft_type field with the final bucket.
+    The bucket is now the model's HOLISTIC, analogy-driven judgment (see the prompt).
+    We deliberately do NOT recompute it from a score sum, and we do NOT apply a
+    data-gap safety override — both of those mechanically suppressed REJECT and made
+    the bucket a function of arithmetic rather than fit. We only:
+
+    1. Validate the bucket is one of the three legal values (fall back to MAYBE — the
+       human-review bucket — if the model returned something unexpected).
+    2. Sync the draft_type / draft fields with the final bucket so a MAYBE never
+       carries a stray draft and a YES/REJECT always has the right draft_type.
     """
-    breakdown = result.get("scoring_breakdown") or {}
-    try:
-        total = sum(int((v or {}).get("score") or 0) for v in breakdown.values())
-    except Exception:
-        total = 0
-
     bucket = (result.get("bucket") or "").upper()
-    gaps = result.get("data_gaps") or []
-
-    # 1. Realign bucket with the numeric total (LLMs sometimes pick the wrong tier)
-    if total >= 80:
-        bucket = "YES"
-    elif total >= 50:
+    if bucket not in ("YES", "MAYBE", "REJECT"):
         bucket = "MAYBE"
-    else:
-        bucket = "REJECT"
-
-    # 2. Sparse-data safety net: thin picture → MAYBE, not REJECT
-    if bucket == "REJECT" and isinstance(gaps, list) and len(gaps) >= 3:
-        bucket = "MAYBE"
-        red_flags = result.get("red_flags") or []
-        if not any("safety override" in (f or "").lower() for f in red_flags):
-            red_flags.append(
-                "Bucket bumped to MAYBE by safety override (3+ data gaps — human reviewer should weigh in)."
-            )
-            result["red_flags"] = red_flags
-
     result["bucket"] = bucket
 
-    # 3. Draft type must match bucket
+    # Draft type must match bucket
     if bucket == "YES":
         result["draft_type"] = "meeting_request"
     elif bucket == "REJECT":

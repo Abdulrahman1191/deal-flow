@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
 from app.models.user import User
-from app.schemas.assessment import AssessmentOut, BucketOverride, DraftUpdate
+from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverride, DraftUpdate
 from app.services import claude_agent, copper_writer
 from app.services.auth import get_current_user
 from app.services.override_capture import capture_override
@@ -298,6 +298,48 @@ async def override_bucket(
         finally:
             # restore for the response
             card.bucket = original_bucket
+
+    return card
+
+
+@router.post("/{lead_id}/rate", response_model=AssessmentOut)
+async def rate_assessment(
+    lead_id: str,
+    body: AssessmentRating,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Thumbs up/down on the AI recommendation — enforced-learning signal.
+
+    Unlike /override this does NOT change the bucket or regenerate the draft.
+    "up" registers agreement with the current effective bucket; "down" registers
+    disagreement. Both snapshot a training row into assessment_overrides so the
+    model can later be tuned against the human's judgement — including the cases
+    where the AI was *right*, which an override-only flow never captures.
+    """
+    if body.rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
+
+    card = await _get_card(lead_id, db)
+    effective_bucket = card.user_override or card.bucket
+
+    card.user_rating = body.rating
+    card.user_rating_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(card)
+
+    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = lead_result.scalar_one_or_none()
+    if lead:
+        await capture_override(
+            db,
+            lead=lead,
+            card=card,
+            human_bucket=effective_bucket,
+            trigger="confirm" if body.rating == "up" else "rate_down",
+            reason_tags=body.reason_tags,
+            reason=body.reason,
+        )
 
     return card
 

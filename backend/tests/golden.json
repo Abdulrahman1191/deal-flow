@@ -24,8 +24,8 @@
     "lead_id": "a6f79715-3248-42b9-bb3f-9311d0b8d046",
     "company_name": "بيناتنا",
     "human_bucket": "REJECT",
-    "proposed_by": "claude",
-    "rationale": "Podcast / media brand 'Between Us' — content business, not tech. Founder is a chemical engineer with no tech-startup link. AI bumped to MAYBE via safety override but the actual model is not a fit."
+    "proposed_by": "human",
+    "rationale": "Credibility red flags: founder identity unverifiable (search surfaces a different person), no verifiable company presence (no site/news/Crunchbase), and the pitch deck text is garbled/uninformative. Per GP guidance, identity + credibility red flags are affirmative negative evidence and override the 'thin data -> MAYBE' default. REJECT. (Prior rationale describing a 'podcast/media brand' was stale.)"
   },
   {
     "lead_id": "f2f00ee2-ada0-4b71-894e-b82d87e4da8c",
@@ -44,9 +44,9 @@
   {
     "lead_id": "5357b916-b18c-49c9-90b0-d01741d35119",
     "company_name": "Movematic",
-    "human_bucket": "MAYBE",
-    "proposed_by": "claude",
-    "rationale": "Electric motor developer (hardware → deep tech criterion met) but MENA exposure unclear and founder background sparse. Worth a deeper look, not auto-reject."
+    "human_bucket": "REJECT",
+    "proposed_by": "human",
+    "rationale": "Road-freight marketplace connecting shippers with carriers (10-20% commission). Pure marketplace, no proprietary tech or IP moat, non-technical founder, pre-revenue — same low-margin trap as Grinta. Clear model-fit reject even though early-stage. (Prior rationale describing an 'electric motor developer' was stale/incorrect — the deck is a logistics platform.)"
   },
   {
     "lead_id": "cb14b7bb-f94f-4e8d-9b59-f98a22cd1d39",

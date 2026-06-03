@@ -6,9 +6,10 @@ import ConfidenceBar from "../shared/ConfidenceBar";
 import ReasoningBox from "./ReasoningBox";
 import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
-import { overrideBucket, reassess, type OverrideReason } from "../../api/assessments";
+import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
 import { archiveNoReply, findLinkedin, updateLead } from "../../api/leads";
 import ReasonModal from "./ReasonModal";
+import FeedbackModal from "./FeedbackModal";
 
 interface Props {
   lead: Lead;
@@ -32,6 +33,8 @@ export default function LeadCard({ lead }: Props) {
   // When set, a ReasonModal is open for this bucket. The user can save with
   // reason data, skip (no reason), or cancel (no override at all).
   const [pendingBucket, setPendingBucket] = useState<"YES" | "MAYBE" | "REJECT" | null>(null);
+  // When true, the thumbs-down FeedbackModal is open.
+  const [showFeedback, setShowFeedback] = useState(false);
   const qc = useQueryClient();
 
   const { assessment } = lead;
@@ -111,6 +114,42 @@ export default function LeadCard({ lead }: Props) {
     },
   });
 
+  const rateMutation = useMutation({
+    mutationFn: ({ rating, reasonData }: { rating: "up" | "down"; reasonData?: OverrideReason }) =>
+      rateAssessment(lead.id, rating, reasonData),
+    // Optimistic: light up the chosen thumb immediately.
+    onMutate: async ({ rating }) => {
+      await qc.cancelQueries({ queryKey: ["leads"] });
+      const snapshot = qc.getQueryData(["leads"]);
+      qc.setQueryData(["leads"], (prev: { items?: Lead[] } | undefined) =>
+        prev?.items
+          ? {
+              ...prev,
+              items: prev.items.map((l) =>
+                l.id === lead.id && l.assessment
+                  ? {
+                      ...l,
+                      assessment: {
+                        ...l.assessment,
+                        user_rating: rating,
+                        user_rating_at: new Date().toISOString(),
+                      },
+                    }
+                  : l,
+              ),
+            }
+          : prev,
+      );
+      return { snapshot };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.snapshot) qc.setQueryData(["leads"], ctx.snapshot);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
+
   const skipMutation = useMutation({
     mutationFn: () => archiveNoReply(lead.id),
     onSuccess: () => {
@@ -136,6 +175,7 @@ export default function LeadCard({ lead }: Props) {
 
   const bucket = assessment?.user_override ?? assessment?.bucket;
   const isOverridden = !!assessment?.user_override_at;
+  const rating = assessment?.user_rating ?? null;
 
   return (
     <div
@@ -210,6 +250,36 @@ export default function LeadCard({ lead }: Props) {
           {overrideMutation.isPending && (
             <span className="text-[10px] text-gray-500 ml-1 animate-pulse">re-drafting…</span>
           )}
+
+          {/* Thumbs up/down — rate the AI recommendation (training signal). */}
+          <div className="flex items-center gap-1 ml-auto" data-testid="rating-controls">
+            <button
+              onClick={() => rateMutation.mutate({ rating: "up" })}
+              disabled={rateMutation.isPending}
+              title="The AI got this right"
+              data-testid="rate-up"
+              className={`text-sm px-1.5 py-0.5 rounded transition-colors ${
+                rating === "up"
+                  ? "bg-green-500/20 text-green-300 ring-1 ring-green-500/40"
+                  : "text-gray-500 hover:text-green-400 hover:bg-green-500/10"
+              }`}
+            >
+              👍
+            </button>
+            <button
+              onClick={() => setShowFeedback(true)}
+              disabled={rateMutation.isPending}
+              title="The AI got this wrong — give feedback"
+              data-testid="rate-down"
+              className={`text-sm px-1.5 py-0.5 rounded transition-colors ${
+                rating === "down"
+                  ? "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/40"
+                  : "text-gray-500 hover:text-orange-400 hover:bg-orange-500/10"
+              }`}
+            >
+              👎
+            </button>
+          </div>
         </div>
       )}
 
@@ -283,6 +353,22 @@ export default function LeadCard({ lead }: Props) {
             setPendingBucket(null);
           }}
           onCancel={() => setPendingBucket(null)}
+        />
+      )}
+
+      {showFeedback && assessment && (
+        <FeedbackModal
+          companyName={lead.company_name}
+          aiBucket={bucket ?? ""}
+          onSubmit={(reasonData) => {
+            rateMutation.mutate({ rating: "down", reasonData });
+            setShowFeedback(false);
+          }}
+          onSkip={() => {
+            rateMutation.mutate({ rating: "down" });
+            setShowFeedback(false);
+          }}
+          onCancel={() => setShowFeedback(false)}
         />
       )}
 

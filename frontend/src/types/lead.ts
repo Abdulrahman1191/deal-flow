@@ -33,6 +33,8 @@ export interface Assessment {
   research_sources: string[] | null;
   user_override: string | null;
   user_override_at: string | null;
+  user_rating: "up" | "down" | null;
+  user_rating_at: string | null;
   approved_at: string | null;
   sent_at: string | null;
   created_at: string;

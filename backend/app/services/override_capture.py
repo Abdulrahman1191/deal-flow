@@ -21,7 +21,11 @@ from app.models.lead import Lead
 from app.models.override import AssessmentOverride
 
 
-Trigger = Literal["override", "approve", "skip", "send"]
+Trigger = Literal[
+    "override", "re-override", "approve", "skip", "send",
+    "confirm",    # thumbs-up: human agrees with the AI bucket
+    "rate_down",  # thumbs-down: human disagrees with the AI bucket
+]
 
 # Cap pitch deck text at the same length the LLM sees — keeps row size bounded
 # and matches what was actually presented to the model at assessment time.

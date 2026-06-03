@@ -41,6 +41,15 @@ export const overrideBucket = (
     .post<Assessment>(`/assessments/${leadId}/override`, { bucket, ...reasonData })
     .then((r) => r.data);
 
+export const rateAssessment = (
+  leadId: string,
+  rating: "up" | "down",
+  reasonData?: OverrideReason,
+) =>
+  client
+    .post<Assessment>(`/assessments/${leadId}/rate`, { rating, ...reasonData })
+    .then((r) => r.data);
+
 export const reassess = (leadId: string) =>
   client.post(`/assessments/${leadId}/reassess`).then((r) => r.data);
 

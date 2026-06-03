@@ -34,6 +34,10 @@ class AssessmentCard(Base):
     precedents_cited: Mapped[Optional[list]] = mapped_column(JSONB)
     user_override: Mapped[Optional[str]] = mapped_column(String(16))
     user_override_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Lightweight thumbs up/down on the AI recommendation ("up" | "down"),
+    # distinct from a bucket override. Persisted so the UI shows the active thumb.
+    user_rating: Mapped[Optional[str]] = mapped_column(String(8))
+    user_rating_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
