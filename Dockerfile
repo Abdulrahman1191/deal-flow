@@ -28,9 +28,13 @@ RUN npx vite build
 FROM python:3.11-slim AS runtime
 WORKDIR /app
 
-# System deps (psycopg2 needs libpq, curl is for the platform's healthcheck)
+# System deps:
+#   libpq-dev/gcc — psycopg2 build
+#   curl          — platform healthcheck
+#   tesseract-ocr (+ -ara) — OCR fallback for scanned / broken-CMap Arabic decks
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libpq-dev gcc curl \
+      tesseract-ocr tesseract-ocr-ara \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps — install before code so cache survives code changes

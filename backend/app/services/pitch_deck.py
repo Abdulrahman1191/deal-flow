@@ -6,16 +6,24 @@ Workflow:
   1. User exports PDFs from Copper UI into settings.pitch_deck_inbox.
   2. Bulk script (or watcher daemon) walks the folder.
   3. For each PDF, match filename to a Lead by company_name (fuzzy).
-  4. Extract text via pypdf, store on the lead row, queue re-assessment.
+  4. Extract text, store on the lead row, queue re-assessment.
+
+Text extraction is layered (see extract_text_from_pdf):
+  - PyMuPDF reads the embedded text layer. It handles Arabic font CMaps far
+    better than pypdf, which mangles Arabic decks built on non-Unicode fonts
+    into Latin-1 mojibake (e.g. "GþþÿN þþþþÿ" instead of real Arabic).
+  - A garble guard rejects extractions dominated by junk characters.
+  - When the text layer is absent (scanned decks) or garbled, we OCR the
+    rendered pages with Tesseract (ara+eng). Arabic-first decks were the
+    motivating case: a broken text layer meant the AI assessment scored them
+    on noise.
 """
 import difflib
 import re
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from pypdf import PdfReader
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.lead import Lead
@@ -23,6 +31,146 @@ from app.models.lead import Lead
 # Cap how much extracted text we persist in the DB. Pitch decks rarely run past
 # 50K chars; we keep up to 30K to leave headroom for prompt + research data.
 MAX_STORED_CHARS = 30_000
+
+# --- Garble detection tunables ---------------------------------------------
+# A clean text layer is dominated by printable ASCII (Latin letters, digits,
+# punctuation) and/or Arabic. Broken-CMap extractions instead emit Latin-1 and
+# symbol soup. We treat any char outside {printable-ASCII, Arabic, whitespace}
+# as junk and reject the extraction once junk dominates.
+_GARBLE_RATIO_THRESHOLD = 0.30   # >30% junk chars among non-whitespace => garbled
+_MIN_USABLE_CHARS = 40           # below this the text layer is effectively absent
+
+# --- OCR fallback tunables --------------------------------------------------
+_OCR_LANGS = "ara+eng"
+_OCR_DPI = 300                   # render resolution; 300 is the Tesseract sweet spot
+_OCR_MAX_PAGES = 40              # cap work on very long decks
+
+# Arabic Unicode blocks: base (0600-06FF), Supplement (0750-077F), Extended-A
+# (08A0-08FF), Presentation Forms-A (FB50-FDFF) and -B (FE70-FEFF).
+_ARABIC_RANGES = (
+    (0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF),
+    (0xFB50, 0xFDFF), (0xFE70, 0xFEFF),
+)
+
+
+def _is_arabic_char(ch: str) -> bool:
+    o = ord(ch)
+    return any(lo <= o <= hi for lo, hi in _ARABIC_RANGES)
+
+
+def _is_clean_text_char(ch: str) -> bool:
+    """True for chars expected in a legit Arabic/English deck.
+
+    Printable ASCII (0x20-0x7E) covers Latin letters, digits and punctuation;
+    Arabic blocks cover Arabic script. Everything else — Latin-1 supplement
+    (þ ÿ ð …), box-drawing, replacement chars, private-use glyphs — is the
+    hallmark of a broken font/CMap extraction.
+    """
+    o = ord(ch)
+    if 0x20 <= o <= 0x7E:
+        return True
+    return _is_arabic_char(ch)
+
+
+def _garble_ratio(text: str) -> float:
+    """Fraction of non-whitespace chars that are junk (not clean ASCII/Arabic)."""
+    meaningful = [c for c in text if not c.isspace()]
+    if not meaningful:
+        return 1.0
+    junk = sum(1 for c in meaningful if not _is_clean_text_char(c))
+    return junk / len(meaningful)
+
+
+def _looks_garbled(text: str) -> bool:
+    """True if the extraction is too short to be useful or junk-dominated."""
+    if len(text.strip()) < _MIN_USABLE_CHARS:
+        return True
+    return _garble_ratio(text) > _GARBLE_RATIO_THRESHOLD
+
+
+def _clean(text: str) -> str:
+    """Strip bytes Postgres' UTF-8 text columns can't store.
+
+    Chiefly U+0000 nulls, which pypdf/PyMuPDF occasionally emit from corrupt or
+    oddly-encoded PDFs. Without this, the INSERT fails with
+    `CharacterNotInRepertoireError: invalid byte sequence for encoding "UTF8": 0x00`.
+    Other C0 control bytes (except tab/newline/cr) are collapsed to spaces.
+    """
+    if not text:
+        return ""
+    text = text.replace("\x00", "")
+    text = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f]", " ", text)
+    return text
+
+
+def _extract_pymupdf(path: Path) -> str:
+    """Embedded text layer via PyMuPDF (fitz). Best Arabic CMap handling."""
+    try:
+        import fitz  # PyMuPDF; lazy so a missing wheel can't break module import
+    except ImportError:
+        return ""
+    try:
+        with fitz.open(str(path)) as doc:
+            parts = [page.get_text() for page in doc]
+        return "\n\n".join(p for p in parts if p.strip())
+    except Exception as exc:
+        print(f"[pitch_deck] PyMuPDF failed on {path.name}: {exc!r}")
+        return ""
+
+
+def _extract_pypdf(path: Path) -> str:
+    """Embedded text layer via pypdf. Legacy fallback path."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return ""
+    try:
+        reader = PdfReader(str(path))
+        parts = []
+        for page in reader.pages:
+            try:
+                parts.append(page.extract_text() or "")
+            except Exception:
+                continue
+        return "\n\n".join(p for p in parts if p.strip())
+    except Exception as exc:
+        print(f"[pitch_deck] pypdf failed on {path.name}: {exc!r}")
+        return ""
+
+
+def _extract_ocr(path: Path) -> str:
+    """OCR the rendered pages with Tesseract (ara+eng).
+
+    Used when no usable text layer exists (scanned decks) or the layer is
+    garbled. Renders each page to a bitmap via PyMuPDF, then runs Tesseract.
+    Degrades gracefully (returns "") if PyMuPDF/pytesseract/the tesseract binary
+    or Arabic traineddata are unavailable, so a deployment without OCR support
+    simply skips the deck rather than crashing.
+    """
+    try:
+        import fitz
+        import pytesseract
+        from PIL import Image
+    except ImportError as exc:
+        print(f"[pitch_deck] OCR deps unavailable ({exc}); skipping OCR for {path.name}")
+        return ""
+
+    import io
+
+    try:
+        parts: list[str] = []
+        with fitz.open(str(path)) as doc:
+            for page in doc[:_OCR_MAX_PAGES]:
+                pix = page.get_pixmap(dpi=_OCR_DPI)
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                parts.append(pytesseract.image_to_string(img, lang=_OCR_LANGS))
+        return "\n\n".join(p for p in parts if p.strip())
+    except pytesseract.TesseractNotFoundError:
+        print(f"[pitch_deck] tesseract binary not found; skipping OCR for {path.name}")
+        return ""
+    except Exception as exc:
+        print(f"[pitch_deck] OCR failed on {path.name}: {exc!r}")
+        return ""
 
 
 def _normalize_for_match(s: str) -> str:
@@ -45,32 +193,44 @@ def _normalize_for_match(s: str) -> str:
 
 
 def extract_text_from_pdf(path: Path) -> str:
-    """Best-effort text extraction. Returns empty string on parse errors.
+    """Best-effort text extraction, resilient to broken Arabic font CMaps.
 
-    Strips characters Postgres' UTF-8 column can't store — chiefly U+0000 nulls
-    which pypdf occasionally emits from corrupt or oddly-encoded PDFs.
-    Without this strip, the INSERT fails with `CharacterNotInRepertoireError:
-    invalid byte sequence for encoding "UTF8": 0x00`.
+    Strategy:
+      1. Read the text layer with PyMuPDF (handles Arabic CMaps well). Use it if
+         it's clean and substantial.
+      2. Otherwise try pypdf, in case PyMuPDF choked on a quirk pypdf survives.
+      3. If both text layers are absent or garbled, OCR the rendered pages.
+
+    A garbled extraction (high ratio of junk chars — the Arabic mojibake bug) is
+    never stored as-is: we re-extract via OCR, and if every method still yields
+    garbage we return "" so the caller flags the deck rather than poisoning the
+    AI assessment with noise.
     """
-    try:
-        reader = PdfReader(str(path))
-        parts = []
-        for page in reader.pages:
-            try:
-                parts.append(page.extract_text() or "")
-            except Exception:
-                continue
-        text = "\n\n".join(p for p in parts if p.strip())
-        # PG can't store \x00 in text columns. Also strip other ASCII control
-        # bytes except whitespace (\t \n \r) — they're either useless or breakage.
-        text = text.replace("\x00", "")
-        # Other C0 controls (0x01-0x08, 0x0B-0x0C, 0x0E-0x1F) → space.
-        import re as _re
-        text = _re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f]", " ", text)
-        return text[:MAX_STORED_CHARS]
-    except Exception as exc:
-        print(f"[pitch_deck] failed to parse {path.name}: {exc!r}")
-        return ""
+    layers = (
+        ("pymupdf", _extract_pymupdf),
+        ("pypdf", _extract_pypdf),
+        ("ocr", _extract_ocr),
+    )
+    best_text = ""
+    best_garble = 1.0
+    for label, extractor in layers:
+        text = _clean(extractor(path))
+        if not _looks_garbled(text):
+            if label == "ocr":
+                print(f"[pitch_deck] {path.name}: text layer unusable, used OCR ({label})")
+            return text[:MAX_STORED_CHARS]
+        # Track the least-bad candidate purely for diagnostics.
+        ratio = _garble_ratio(text)
+        if text.strip() and ratio < best_garble:
+            best_text, best_garble = text, ratio
+
+    # Nothing produced clean text. Refuse to store garbage — flag instead.
+    preview = (best_text.strip()[:80] or "<empty>")
+    print(
+        f"[pitch_deck] GARBLED/EMPTY extraction for {path.name} "
+        f"(best junk ratio {best_garble:.2f}); not storing. preview: {preview!r}"
+    )
+    return ""
 
 
 def match_filename_to_lead(filename: str, leads: list[Lead]) -> Optional[Lead]:
