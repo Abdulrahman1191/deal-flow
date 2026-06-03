@@ -170,11 +170,16 @@ bets on the dimension that actually mattered).
 
 How to decide the bucket — by analogy to the labelled precedents above, NOT by summing scores:
 
-- **YES** — The lead matches the pattern of our bets that worked *for the reasons we
-  underwrote*: precedents with Hindsight Verdict STRONG YES / YES and Performance
-  OUTPERFORMING / ON-TRACK. All three Raed filters pass on concrete evidence
-  (Founder Obsession, Market Scale, Unfair Advantage), the thesis fits one falsifiable
-  sentence, and no matched precedent's kill criterion is visibly triggered. We want a meeting.
+- **YES — Worth a meeting (this is NOT a funding decision).** The lead shows a *credible*
+  thesis-fit signal that earns Raed's time to learn more: at least one real moat marker is
+  plausibly present — genuine applied or novel AI in a hard domain (e.g. medical imaging,
+  multi-agent systems, legal/clinical reasoning), proprietary data, hardware, or a regulatory
+  licence / unfair advantage — together with a MENA angle and roughly the right stage. You do
+  NOT need concrete proof on all three Raed filters; early inbound rarely has that, and a meeting
+  is exactly how we'd find out. You need enough genuine signal that meeting the founder would
+  teach us something. Calibrate to the winning precedents (Hindsight Verdict STRONG YES / YES,
+  Performance OUTPERFORMING / ON-TRACK): a lead that shares their *kind* of moat belongs here.
+  "I want to see this" → YES.
 
 - **REJECT** — Affirmative poor fit, established on evidence we DO have. EITHER (a) the lead
   repeats the failure mechanism of a MIXED / NO / WRITE-OFF / DISAGREEMENT precedent — the
@@ -183,12 +188,18 @@ How to decide the bucket — by analogy to the labelled precedents above, NOT by
   commodity SaaS / real estate), a market too small for GCC exit math, or outside our
   pre-seed→Series A window. REJECT is about poor FIT, never about missing data.
 
-- **MAYBE** — Genuinely mixed signal, OR a plausibly interesting deal whose fit cannot be
-  resolved from the evidence available. This is where thin-but-promising leads go for human
-  review. When you are torn between YES and REJECT *because the picture is incomplete*, choose
-  MAYBE — but do NOT choose MAYBE merely to avoid a hard call when the evidence is actually clear.
+- **MAYBE — Genuinely ambiguous; not clearly worth a meeting yet.** The thesis-fit signal is
+  weak or unresolved — e.g. an integration / RPA wrapper, a commodity-AI feature with no
+  defensible angle, or a fit that hinges on facts we simply cannot establish. Route to human
+  review. Do NOT use MAYBE as a safe hedge: a lead with a credible moat signal is a YES, and a
+  lead with clear poor fit is a REJECT. Reserve MAYBE for the genuinely in-between.
 
 Decision discipline — read before deciding:
+
+**Be decisive — do not park promising leads at MAYBE.** YES is a meeting, not a cheque, so a
+credible deep-tech / hardware / regulatory-moat angle with thesis fit should be YES even on thin
+data. Before landing on MAYBE, ask: is there a real moat signal (→ YES) or a clear anti-pattern
+(→ REJECT)? Only choose MAYBE when genuinely neither is true. A bucket of all-MAYBE is a failure.
 
 1. **Decision quality ≠ outcome.** Weight DISAGREEMENT precedents heaviest — they are where
    Raed has learned what it systematically mis-underwrites. If this lead's pitch echoes the
