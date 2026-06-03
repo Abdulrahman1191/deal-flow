@@ -72,6 +72,9 @@ async def retrieve_labeled_exemplars(
                 overlap,
                 {
                     "company": company,
+                    # short descriptor so the model knows WHAT the company does,
+                    # not just its name — essential for generalising the pattern.
+                    "summary": (ov.ai_summary or "").strip()[:160] or None,
                     "ai_bucket": ov.ai_bucket,
                     "human_bucket": ov.human_bucket,
                     "trigger": ov.trigger,
@@ -107,5 +110,6 @@ def format_for_prompt(exemplars: list[dict]) -> str:
         reason = e.get("reason")
         tags = ", ".join(e.get("reason_tags") or []) if e.get("reason_tags") else ""
         why = f" — \"{reason}\"" if reason else (f" — {tags}" if tags else "")
-        lines.append(f"- **{e.get('company')}**: AI said {e.get('ai_bucket')}; {verdict}{why}")
+        desc = f" ({e['summary']})" if e.get("summary") else ""
+        lines.append(f"- **{e.get('company')}**{desc}: AI said {e.get('ai_bucket')}; {verdict}{why}")
     return "\n".join(lines)
