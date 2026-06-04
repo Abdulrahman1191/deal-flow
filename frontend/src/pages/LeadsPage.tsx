@@ -16,7 +16,7 @@ export default function LeadsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["leads"],
-    queryFn: () => fetchLeads({ page_size: 100 }),
+    queryFn: () => fetchLeads({ page_size: 1000 }),
     refetchInterval: 15_000,
   });
 

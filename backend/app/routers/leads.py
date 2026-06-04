@@ -203,7 +203,9 @@ async def list_leads(
     status: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    # Cap raised to 1000 so the dashboard can load the full pipeline in one page
+    # (it groups all leads into YES/MAYBE/REJECT columns; there's no "load more").
+    page_size: int = Query(default=20, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
