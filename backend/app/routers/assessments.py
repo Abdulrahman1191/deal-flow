@@ -12,7 +12,7 @@ from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
 from app.models.user import User
 from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverride, DraftUpdate
-from app.services import claude_agent, copper_writer
+from app.services import claude_agent, copper_writer, email_sender
 from app.services.auth import get_current_user
 from app.services.override_capture import capture_override
 from app.services.events import (
@@ -126,34 +126,20 @@ async def approve_assessment(
     return {"status": "approved", "draft_type": card.draft_type}
 
 
-@router.post("/{lead_id}/mark-sent")
-async def mark_sent(
-    lead_id: str,
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    """
-    Called by Cowork after it sends the email via Gmail. This is the trigger that
-    moves the lead to its terminal state:
+async def _finalize_sent(db: AsyncSession, card: AssessmentCard, lead: Optional[Lead]) -> dict:
+    """Terminal transition once an email has actually been sent:
       - rejection draft  → app archived + Copper Lead → Unqualified
       - meeting_request  → app archived + Copper Lead converted to Opportunity
-    """
-    card = await _get_card(lead_id, db)
+    Shared by /mark-sent (external sender) and /send (in-app sender)."""
     card.sent_at = datetime.now(timezone.utc)
-
-    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
-    lead = lead_result.scalar_one_or_none()
     if not lead:
         await db.commit()
         return {"status": "sent", "sent_at": card.sent_at.isoformat()}
 
     await log_event(db, lead.id, EVENT_EMAIL_SENT, {"draft_type": card.draft_type})
 
-    # Compute outcome based on draft_type
     converted_payload: Optional[dict] = None
     existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-
-    # Use the effective bucket (override wins over original) to guard conversion.
     effective_bucket = card.user_override or card.bucket
 
     try:
@@ -173,12 +159,10 @@ async def mark_sent(
         elif lead.copper_id:
             copper_writer.mark_sent_in_copper(lead.copper_id, existing_tags)
     except Exception as exc:
-        print(f"[mark_sent] Copper write failed (local commit succeeded): {exc!r}")
+        print(f"[finalize_sent] Copper write failed (local commit succeeded): {exc!r}")
 
-    # Local terminal state
     lead.status = "archived"
     await log_event(db, lead.id, EVENT_ARCHIVED, {"reason": card.draft_type or "sent"})
-
     await db.commit()
     return {
         "status": "sent",
@@ -186,6 +170,74 @@ async def mark_sent(
         "outcome": card.draft_type,
         "converted": bool(converted_payload),
     }
+
+
+@router.post("/{lead_id}/mark-sent")
+async def mark_sent(
+    lead_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Called by an EXTERNAL sender (e.g. Cowork) after it sends the email.
+    Just records 'sent' + runs the terminal Copper transition — does NOT send."""
+    card = await _get_card(lead_id, db)
+    lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
+    return await _finalize_sent(db, card, lead)
+
+
+@router.post("/{lead_id}/send")
+async def send_assessment(
+    lead_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Actually SEND the drafted email (via SMTP — SES/SendGrid), then finalize.
+
+    Refuses to proceed unless email is configured and a recipient + draft exist —
+    so a lead is never marked sent / converted in Copper without a real email
+    going out. On a send failure we abort (no state change) so it can be retried.
+    """
+    card = await _get_card(lead_id, db)
+    lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if not email_sender.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Email isn't configured yet. Set SMTP_HOST + MAIL_FROM (SES or SendGrid) in the app env.",
+        )
+    recipient = (lead.raw_copper_data or {}).get("recipient_email") if lead.raw_copper_data else None
+    if not recipient:
+        raise HTTPException(status_code=400, detail="This lead has no recipient email address.")
+    if not card.draft_body:
+        raise HTTPException(status_code=400, detail="There's no draft to send for this lead.")
+
+    # Send first — if it fails, nothing changes and the user can retry.
+    try:
+        email_sender.send_email(recipient, card.draft_subject or "", card.draft_body)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Email send failed: {exc}")
+
+    # Mark approved (idempotent) + Copper approve tag + training capture.
+    if not card.approved_at:
+        card.approved_at = datetime.now(timezone.utc)
+        lead.status = "approved"
+        await log_event(db, lead.id, EVENT_DRAFT_APPROVED, {"draft_type": card.draft_type})
+        await db.commit()
+        if lead.copper_id:
+            try:
+                existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
+                copper_writer.mark_approved_in_copper(lead.copper_id, existing_tags)
+            except Exception as exc:
+                print(f"[send] Copper approve write failed: {exc!r}")
+        await capture_override(
+            db, lead=lead, card=card, human_bucket=(card.user_override or card.bucket), trigger="approve",
+        )
+
+    result = await _finalize_sent(db, card, lead)
+    result["recipient"] = recipient
+    return result
 
 
 @router.patch("/{lead_id}/draft", response_model=AssessmentOut)

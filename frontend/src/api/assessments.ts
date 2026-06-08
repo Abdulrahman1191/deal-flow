@@ -24,6 +24,11 @@ export const approveAssessment = (leadId: string) =>
 export const markSent = (leadId: string) =>
   client.post(`/assessments/${leadId}/mark-sent`).then((r) => r.data);
 
+// Actually sends the drafted email (SMTP via SES/SendGrid) and finalizes the
+// lead (Copper convert/archive). Returns 503 if email isn't configured yet.
+export const sendEmail = (leadId: string) =>
+  client.post(`/assessments/${leadId}/send`).then((r) => r.data);
+
 export const updateDraft = (leadId: string, data: { draft_subject?: string; draft_body?: string }) =>
   client.patch<Assessment>(`/assessments/${leadId}/draft`, data).then((r) => r.data);
 

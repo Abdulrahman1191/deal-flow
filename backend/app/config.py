@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     database_url: str                    # injected by platform/Khalid
     redis_url: str = "redis://redis:6379/0"
 
+    # --- Outbound email (SES or SendGrid via SMTP) ---
+    # Both providers expose SMTP, so one generic config works for either.
+    # SendGrid: smtp_host=smtp.sendgrid.net, smtp_username="apikey", smtp_password=<API key>.
+    # SES:      smtp_host=email-smtp.<region>.amazonaws.com, smtp_username/password = SES SMTP creds.
+    # mail_from MUST be a verified sender/domain (e.g. deals@raed.vc). Sending is
+    # disabled (the /send endpoint returns 503) until smtp_host + mail_from are set.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_from: str = ""
+    mail_from_name: str = "Raed Ventures"
+
     # --- Google Drive (pitch decks) ---
     # The Drive folder containing the lead pitch decks. We don't need Google
     # credentials at runtime — the view endpoint redirects to

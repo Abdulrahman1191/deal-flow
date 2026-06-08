@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { approveAssessment, markSent, regenerateDraft, updateDraft } from "../../api/assessments";
+import { regenerateDraft, sendEmail, updateDraft } from "../../api/assessments";
 import type { Lead } from "../../types/lead";
 
 interface Props {
@@ -49,8 +49,7 @@ export default function EmailModal({ lead, onClose }: Props) {
           ...(bodyChanged ? { draft_body: body } : {}),
         });
       }
-      await approveAssessment(lead.id);
-      await markSent(lead.id);
+      await sendEmail(lead.id);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
