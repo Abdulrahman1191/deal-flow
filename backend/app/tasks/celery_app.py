@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads"],
 )
 
 celery.conf.update(
@@ -31,6 +31,13 @@ celery.conf.update(
         "drain-copper-outbox": {
             "task": "app.tasks.drain_outbox.drain_copper_outbox_task",
             "schedule": 30.0,  # every 30 seconds
+        },
+        # Collapse duplicate-name leads automatically (archives extras, reversible).
+        # Runs daily at 02:00 UTC; also safe to run the CLI (scripts/dedupe_leads.py)
+        # ad-hoc. Idempotent, so the daily run is a no-op when there's nothing to do.
+        "dedupe-leads": {
+            "task": "app.tasks.dedupe_leads.dedupe_leads_task",
+            "schedule": crontab(hour=2, minute=0),
         },
     },
 )
