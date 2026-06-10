@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     # Skip the periodic Copper sync task. Useful when bulk-pruning leads or
     # during DB migrations to avoid re-importing rows.
     disable_copper_sync: bool = False
+    # Cap how many Copper leads the sync imports (0 = no cap). Referenced by
+    # sync_copper; was previously undefined, which crashed the task on every run.
+    test_lead_limit: int = 0
 
     # --- UptimeRobot (optional; vestigial, kept to avoid pydantic strict mode) ---
     uptimerobot_main_api_key: str = ""

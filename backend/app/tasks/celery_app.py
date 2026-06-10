@@ -22,12 +22,13 @@ celery.conf.update(
             "task": "app.tasks.generate_briefing.generate_briefing_task",
             "schedule": crontab(hour=settings.briefing_cron_hour, minute=settings.briefing_cron_minute),
         },
-        # Disabled in test env to avoid re-importing manually pruned leads.
-        # Re-enable for prod by uncommenting.
-        # "sync-copper-leads": {
-        #     "task": "app.tasks.sync_copper.sync_copper_leads_task",
-        #     "schedule": 300.0,  # every 5 minutes
-        # },
+        # Reconcile the board with Copper every 5 minutes: import leads newly
+        # assigned to the user, archive ones reassigned away/closed. Gated at
+        # runtime by the DISABLE_COPPER_SYNC env var (set it true to pause).
+        "sync-copper-leads": {
+            "task": "app.tasks.sync_copper.sync_copper_leads_task",
+            "schedule": 300.0,  # every 5 minutes
+        },
         "drain-copper-outbox": {
             "task": "app.tasks.drain_outbox.drain_copper_outbox_task",
             "schedule": 30.0,  # every 30 seconds
