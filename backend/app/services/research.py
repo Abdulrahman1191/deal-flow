@@ -146,9 +146,12 @@ def research_company(lead: dict) -> dict:
     queries = [
         # 1. Funding + stage + round history
         f"{company} startup funding seed Series A round investors valuation",
-        # 2. Founder background — credentials, prior companies, education
-        (f"{founders} founder background LinkedIn prior startup education {company}"
-         if founders else f"{company} founders team background"),
+        # 2. Founder DISCOVERY — who actually founded the company. Deliberately
+        #    does NOT assert the CRM contact is a founder: the contact on an
+        #    inbound lead is often an employee or advisor, and seeding their
+        #    name into a "founder background" query used to make Tavily return
+        #    a founder-shaped profile around the wrong person.
+        f"{company} founder co-founder CEO \"founded by\" LinkedIn",
         # 3. Tech / IP / patents / engineering depth
         f"{company} technology patents IP proprietary algorithm research",
         # 4. MENA market presence — operations, offices, target customers
@@ -159,6 +162,12 @@ def research_company(lead: dict) -> dict:
         # 6. Recent news + press — traction, partnerships, announcements
         f"{company} news announcement partnership launch 2025 2026",
     ]
+
+    # Contact-identity probe — neutral phrasing, no "founder" assertion. Surfaces
+    # who the CRM contact actually is (their real title/role at the company) so
+    # the assessor can verify or refute the founder assumption.
+    if founders:
+        queries.append(f"{founders} {company} LinkedIn role title position")
 
     # Pitch-deck-driven query: distinguishing technical terms from the deck
     # combined with the company name, so Tavily returns matches for the

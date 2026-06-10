@@ -110,8 +110,11 @@ Company LinkedIn: {company_linkedin_url}
 Description: {description}
 Stage: {stage}
 Region: {region}
-Founders: {founder_names}
-Founder LinkedIn(s): {linkedin_urls}
+CRM contact: {founder_names}
+  (⚠ This is whoever the inbound lead record names — often an employee, advisor, or
+  whoever submitted the form. It is NOT verified to be a founder. Verify actual
+  founders from the pitch deck team slide and research before crediting anyone.)
+Contact LinkedIn(s): {linkedin_urls}
 
 Research data:
 {research_data}
@@ -218,6 +221,19 @@ data. Before landing on MAYBE, ask: is there a real moat signal (→ YES) or a c
    If your reasoning reads "not found / cannot confirm", score 5-8 and log a `data_gaps`
    entry — never let absence of data, by itself, push a lead toward REJECT.
 
+2b. **VERIFY FOUNDER IDENTITY — never assume the CRM contact is the founder.** The contact
+   on the lead is frequently an employee, a fundraising advisor, or a form-submitter.
+   Establish who actually founded the company from the pitch deck's team slide and the
+   research data (LinkedIn, news). Rules:
+   - Score `team_experience` ONLY on people verified as founders/co-founders. If the only
+     person you know is the unverified CRM contact, score 5-8 and log a `data_gaps` entry
+     ("founder identity unverified") — do not invent a founder profile around the contact.
+   - If research shows the contact holds a NON-founder title (e.g. sales manager, analyst),
+     say so explicitly in the summary and do NOT describe them as founder/CEO anywhere.
+   - If the deck and research name different founders than the contact, use the deck/research
+     names and note the discrepancy.
+   - In the `summary`, attribute roles only as evidenced ("contact: X; founders per deck: Y").
+
 3. **Credibility red flags OVERRIDE the thin-data default → REJECT.** Missing data alone never
    justifies REJECT — but *affirmative* credibility red flags do, even when the overall picture
    is thin. If the founder's identity cannot be verified or appears mismatched/fabricated (e.g.
@@ -253,7 +269,7 @@ Return a JSON object with this exact structure:
 }}
 
 For the draft_body:
-- If YES: Write a short, genuine email (under 80 words) expressing interest in the company and inviting the founder to book a call. Include this Calendly link: https://calendly.com/abdulrahman-raed/30min. Mention 1 specific thing that caught our attention. Sign off as {associate_name}, Raed Ventures.
+- If YES: Write a short, genuine email (under 80 words) expressing interest in the company and inviting the recipient to book a call. The recipient is the CRM contact — greet them by name but do NOT call them "founder" or assign any title unless verified. Include this Calendly link: https://calendly.com/abdulrahman-raed/30min. Mention 1 specific thing that caught our attention. Sign off as {associate_name}, Raed Ventures.
 - If REJECT: Write a brief, honest email (under 120 words) explaining that the business model doesn't fit what we look for at Raed Ventures right now. Keep the door open — wish them well and encourage them to reach out if things evolve. No bullet points. IMPORTANT: Never cite lack of information or insufficient data as a reason — if data is thin, fall back to a fit-based reason (e.g. stage, sector focus, model type). Sign off as {associate_name}, Raed Ventures.
 - If MAYBE: set draft_type, draft_subject, draft_body all to null."""
 
@@ -427,19 +443,22 @@ def _enforce_bucket_consistency(result: dict) -> None:
 
 
 DRAFT_REGEN_SYSTEM = """You are a senior investment associate at Raed Ventures.
-Write a single outbound email to the founder based on the target decision (YES, MAYBE, REJECT)."""
+Write a single outbound email based on the target decision (YES, MAYBE, REJECT).
+The recipient is the lead's CRM contact — they may be a founder, an employee, or a
+representative, so greet them by name but do NOT address them as "founder" or assign
+them any title."""
 
 DRAFT_REGEN_USER_TEMPLATE = """The investment team has manually decided this lead is **{bucket}**.
 This decision is FINAL — your only job is to write the email that matches this decision.
 Do NOT re-evaluate the company. Do NOT switch the decision based on the context below.
 
 Company: {company_name}
-Founder: {founder_names}
+Contact (email recipient — not necessarily the founder; greet by name, no assumed title): {founder_names}
 Background context (for tone only, not for re-deciding): {summary}
 
 Rules per bucket — you MUST follow these exactly:
 - YES: draft_type MUST be "meeting_request". Short, genuine email (under 80 words) expressing
-  interest and inviting the founder to book a call via https://calendly.com/abdulrahman-raed/30min.
+  interest and inviting the recipient to book a call via https://calendly.com/abdulrahman-raed/30min.
   Mention 1 specific thing about the company that caught our attention (extrapolate positively
   from the context if needed). Sign off as {associate_name}, Raed Ventures.
 - MAYBE: draft_type, draft_subject, draft_body MUST all be null. Do not write an email.
@@ -462,7 +481,7 @@ official LinkedIn page from a candidate list. Be conservative: if no candidate
 clearly matches the company described, return null. Do not guess."""
 
 PICK_LINKEDIN_USER_TEMPLATE = """Company: {company_name}
-Founder(s): {founder_names}
+Known contact(s) at the company: {founder_names}
 Description: {description}
 Region: {region}
 
