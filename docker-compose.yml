@@ -38,11 +38,17 @@ services:
       - .env
     environment:
       REDIS_URL: redis://redis:6379/0
-      DISABLE_COPPER_SYNC: "true"
+      # Copper sync is controlled by DISABLE_COPPER_SYNC in .env. It was
+      # hardcoded "true" here as a cutover guard while the old Lightsail
+      # worker still owned prod sync; removed 2026-06-10 at cutover.
     # Solo pool + embedded beat scheduler — matches the existing prod behaviour
     # on Lightsail. Single worker process handles both background tasks and
     # periodic schedules.
     command: celery -A app.tasks.celery_app.celery worker --beat --loglevel=info --pool=solo -n platform@%h
+    # The image's HTTP healthcheck is meant for the web app; a Celery worker
+    # never passes it and shows as permanently "unhealthy". Disable it.
+    healthcheck:
+      disable: true
     networks:
       - internal
     depends_on:
