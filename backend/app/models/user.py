@@ -21,4 +21,6 @@ class User(Base):
     # so per-user sync doesn't re-hit the Copper users API every cycle.
     copper_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set when the user finishes the first-run onboarding/welcome flow.
+    onboarded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

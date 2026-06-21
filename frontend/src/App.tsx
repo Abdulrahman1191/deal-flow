@@ -1,4 +1,6 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useMe } from "./lib/auth";
+import Onboarding from "./components/onboarding/Onboarding";
 import Navbar from "./components/layout/Navbar";
 import LeadsPage from "./pages/LeadsPage";
 import FrameworkPage from "./pages/FrameworkPage";
@@ -77,6 +79,7 @@ function NotAuthenticated() {
 
 export default function App() {
   const me = useMe();
+  const qc = useQueryClient();
   if (me.isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -85,5 +88,13 @@ export default function App() {
     );
   }
   if (me.isError || !me.data) return <NotAuthenticated />;
+  if (!me.data.onboarded) {
+    return (
+      <Onboarding
+        user={me.data}
+        onDone={() => qc.invalidateQueries({ queryKey: ["me"] })}
+      />
+    );
+  }
   return <Dashboard />;
 }
