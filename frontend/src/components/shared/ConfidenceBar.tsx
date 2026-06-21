@@ -12,7 +12,7 @@ const colorClass: Record<string, string> = {
 export default function ConfidenceBar({ score, bucket }: Props) {
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+      <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${colorClass[bucket] ?? "bg-muted-foreground"}`}
           style={{ width: `${score}%` }}

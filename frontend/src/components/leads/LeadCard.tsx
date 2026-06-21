@@ -179,7 +179,7 @@ export default function LeadCard({ lead }: Props) {
 
   return (
     <div
-      className={`bg-card border border-border border-l-4 ${borderColor[bucket ?? ""] ?? "border-l-border"} rounded-xl p-4 space-y-3`}
+      className={`bg-card border border-border border-l-4 ${borderColor[bucket ?? ""] ?? "border-l-border"} rounded-2xl p-5 space-y-3.5 shadow-sm hover:shadow-md transition-shadow`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -240,7 +240,7 @@ export default function LeadCard({ lead }: Props) {
                 key={b}
                 disabled={active || overrideMutation.isPending}
                 onClick={() => setPendingBucket(b)}
-                className={`text-[10px] uppercase font-semibold tracking-wider px-2 py-1 rounded transition-colors ${color} ${active ? "cursor-default" : "cursor-pointer"} disabled:opacity-100`}
+                className={`text-[10px] uppercase font-semibold tracking-wider px-2.5 py-1 rounded-full transition-colors ${color} ${active ? "cursor-default" : "cursor-pointer"} disabled:opacity-100`}
                 data-testid={`override-${b.toLowerCase()}`}
               >
                 {b}
@@ -400,7 +400,7 @@ export default function LeadCard({ lead }: Props) {
                 }
               }}
               placeholder="https://linkedin.com/company/..."
-              className="w-full bg-background border border-border rounded px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-border"
+              className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-border"
               data-testid="linkedin-input"
             />
             {findLinkedinMutation.data?.source && (
