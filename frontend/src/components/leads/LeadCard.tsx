@@ -16,9 +16,9 @@ interface Props {
 }
 
 const borderColor: Record<string, string> = {
-  YES: "border-l-green-500",
-  MAYBE: "border-l-yellow-500",
-  REJECT: "border-l-red-500",
+  YES: "border-l-success",
+  MAYBE: "border-l-warning",
+  REJECT: "border-l-error",
 };
 
 const bucketVariant: Record<string, "yes" | "maybe" | "reject"> = {
@@ -179,12 +179,12 @@ export default function LeadCard({ lead }: Props) {
 
   return (
     <div
-      className={`bg-gray-900 border border-gray-800 border-l-4 ${borderColor[bucket ?? ""] ?? "border-l-gray-700"} rounded-xl p-4 space-y-3`}
+      className={`bg-card border border-border border-l-4 ${borderColor[bucket ?? ""] ?? "border-l-border"} rounded-xl p-4 space-y-3`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="font-semibold text-white text-sm">{lead.company_name}</p>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
             {lead.stage ?? "—"} · {lead.region ?? "—"}
           </p>
           {(lead.company_linkedin_url || lead.website) && (
@@ -194,7 +194,7 @@ export default function LeadCard({ lead }: Props) {
                   href={lead.company_linkedin_url}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-blue-400 hover:text-blue-300 hover:underline"
+                  className="text-info hover:text-info hover:underline"
                   data-testid="company-linkedin-link"
                 >
                   LinkedIn ↗
@@ -205,7 +205,7 @@ export default function LeadCard({ lead }: Props) {
                   href={lead.website.startsWith("http") ? lead.website : `https://${lead.website}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-gray-400 hover:text-gray-200 hover:underline"
+                  className="text-muted-foreground hover:text-foreground hover:underline"
                 >
                   Website ↗
                 </a>
@@ -217,7 +217,7 @@ export default function LeadCard({ lead }: Props) {
           {bucket && <Badge label={bucket} variant={bucketVariant[bucket]} />}
           {isOverridden && (
             <span
-              className="text-[10px] uppercase tracking-wider text-purple-400 font-medium"
+              className="text-[10px] uppercase tracking-wider text-primary font-medium"
               title={`Manually overridden${assessment?.user_override_at ? " at " + new Date(assessment.user_override_at).toLocaleString("en-GB") : ""}`}
             >
               Manual
@@ -231,9 +231,9 @@ export default function LeadCard({ lead }: Props) {
           {(["YES", "MAYBE", "REJECT"] as const).map((b) => {
             const active = bucket === b;
             const color = {
-              YES: active ? "bg-green-500/20 text-green-300 ring-1 ring-green-500/40" : "bg-gray-800/50 text-gray-500 hover:text-green-400 hover:bg-green-500/10",
-              MAYBE: active ? "bg-yellow-500/20 text-yellow-300 ring-1 ring-yellow-500/40" : "bg-gray-800/50 text-gray-500 hover:text-yellow-400 hover:bg-yellow-500/10",
-              REJECT: active ? "bg-red-500/20 text-red-300 ring-1 ring-red-500/40" : "bg-gray-800/50 text-gray-500 hover:text-red-400 hover:bg-red-500/10",
+              YES: active ? "bg-success/20 text-success ring-1 ring-success/40" : "bg-muted/50 text-muted-foreground hover:text-success hover:bg-success/10",
+              MAYBE: active ? "bg-warning/20 text-warning ring-1 ring-warning/40" : "bg-muted/50 text-muted-foreground hover:text-warning hover:bg-warning/10",
+              REJECT: active ? "bg-error/20 text-error ring-1 ring-error/40" : "bg-muted/50 text-muted-foreground hover:text-error hover:bg-error/10",
             }[b];
             return (
               <button
@@ -248,7 +248,7 @@ export default function LeadCard({ lead }: Props) {
             );
           })}
           {overrideMutation.isPending && (
-            <span className="text-[10px] text-gray-500 ml-1 animate-pulse">re-drafting…</span>
+            <span className="text-[10px] text-muted-foreground ml-1 animate-pulse">re-drafting…</span>
           )}
 
           {/* Thumbs up/down — rate the AI recommendation (training signal). */}
@@ -260,8 +260,8 @@ export default function LeadCard({ lead }: Props) {
               data-testid="rate-up"
               className={`text-sm px-1.5 py-0.5 rounded transition-colors ${
                 rating === "up"
-                  ? "bg-green-500/20 text-green-300 ring-1 ring-green-500/40"
-                  : "text-gray-500 hover:text-green-400 hover:bg-green-500/10"
+                  ? "bg-success/20 text-success ring-1 ring-success/40"
+                  : "text-muted-foreground hover:text-success hover:bg-success/10"
               }`}
             >
               👍
@@ -273,8 +273,8 @@ export default function LeadCard({ lead }: Props) {
               data-testid="rate-down"
               className={`text-sm px-1.5 py-0.5 rounded transition-colors ${
                 rating === "down"
-                  ? "bg-orange-500/20 text-orange-300 ring-1 ring-orange-500/40"
-                  : "text-gray-500 hover:text-orange-400 hover:bg-orange-500/10"
+                  ? "bg-warning/20 text-warning ring-1 ring-warning/40"
+                  : "text-muted-foreground hover:text-warning hover:bg-warning/10"
               }`}
             >
               👎
@@ -288,7 +288,7 @@ export default function LeadCard({ lead }: Props) {
       )}
 
       {assessment?.summary && (
-        <p className="text-xs text-gray-400 leading-relaxed">{assessment.summary}</p>
+        <p className="text-xs text-muted-foreground leading-relaxed">{assessment.summary}</p>
       )}
 
       {assessment && (
@@ -300,10 +300,10 @@ export default function LeadCard({ lead }: Props) {
       )}
 
       {!assessment && lead.status === "processing" && (
-        <p className="text-xs text-gray-500 animate-pulse">Researching & scoring…</p>
+        <p className="text-xs text-muted-foreground animate-pulse">Researching & scoring…</p>
       )}
       {!assessment && lead.status === "pending" && (
-        <p className="text-xs text-gray-500">Queued for assessment</p>
+        <p className="text-xs text-muted-foreground">Queued for assessment</p>
       )}
 
       <div className="flex items-center justify-between pt-1">
@@ -321,7 +321,7 @@ export default function LeadCard({ lead }: Props) {
               }
             }}
             disabled={skipMutation.isPending}
-            className="text-xs text-gray-600 hover:text-red-400 transition-colors disabled:opacity-50"
+            className="text-xs text-muted-foreground hover:text-error transition-colors disabled:opacity-50"
             data-testid="archive-no-reply-btn"
             title="Skip the email and archive this lead. Sets Copper status to Unqualified."
           >
@@ -329,7 +329,7 @@ export default function LeadCard({ lead }: Props) {
           </button>
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+            className="text-xs text-muted-foreground hover:text-muted-foreground transition-colors"
           >
             {expanded ? "Less ▲" : "More ▼"}
           </button>
@@ -374,17 +374,17 @@ export default function LeadCard({ lead }: Props) {
       )}
 
       {expanded && (
-        <div className="pt-2 border-t border-gray-800 space-y-3">
+        <div className="pt-2 border-t border-border space-y-3">
           {/* Editable LinkedIn URL */}
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-wider text-gray-500">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Company LinkedIn
               </span>
               <button
                 onClick={() => findLinkedinMutation.mutate()}
                 disabled={findLinkedinMutation.isPending}
-                className="text-[10px] text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                className="text-[10px] text-info hover:text-info disabled:opacity-50"
                 data-testid="find-linkedin-btn"
               >
                 {findLinkedinMutation.isPending ? "Searching…" : "Find ↻"}
@@ -400,16 +400,16 @@ export default function LeadCard({ lead }: Props) {
                 }
               }}
               placeholder="https://linkedin.com/company/..."
-              className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1 text-xs text-gray-200 placeholder:text-gray-700 focus:outline-none focus:border-gray-600"
+              className="w-full bg-background border border-border rounded px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-border"
               data-testid="linkedin-input"
             />
             {findLinkedinMutation.data?.source && (
-              <p className="text-[10px] text-gray-500">
+              <p className="text-[10px] text-muted-foreground">
                 Updated via {findLinkedinMutation.data.source.replace("_", " ")}.
               </p>
             )}
             {findLinkedinMutation.data && !findLinkedinMutation.data.company_linkedin_url && (
-              <p className="text-[10px] text-yellow-500">
+              <p className="text-[10px] text-warning">
                 Auto-discovery found nothing. Paste a URL above to set manually.
               </p>
             )}
@@ -417,7 +417,7 @@ export default function LeadCard({ lead }: Props) {
 
           {/* Pitch deck status */}
           <div className="flex items-center justify-between text-xs">
-            <span className="text-[10px] uppercase tracking-wider text-gray-500">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Pitch deck
             </span>
             {lead.pitch_deck_filename ? (
@@ -426,18 +426,18 @@ export default function LeadCard({ lead }: Props) {
                 // new tab. The browser follows the 307 from our backend, lands
                 // on drive.google.com/file/d/<id>/view, Drive verifies the
                 // user's @raed.vc session via its own cookies.
-                <span className="text-gray-300 flex items-center gap-2">
+                <span className="text-foreground flex items-center gap-2">
                   <a
                     href={`/api/v1/leads/${lead.id}/pitch-deck`}
                     target="_blank"
                     rel="noreferrer"
                     title={lead.pitch_deck_filename}
-                    className="text-blue-400 hover:text-blue-300 hover:underline text-xs"
+                    className="text-info hover:text-info hover:underline text-xs"
                   >
                     View PDF ↗
                   </a>
                   {lead.pitch_deck_ingested_at && (
-                    <span className="text-gray-600">
+                    <span className="text-muted-foreground">
                       · {new Date(lead.pitch_deck_ingested_at).toLocaleDateString("en-GB")}
                     </span>
                   )}
@@ -447,14 +447,14 @@ export default function LeadCard({ lead }: Props) {
                 // is the post-migration state until scripts/sync_drive_to_db.py
                 // runs (gated on platform DB access).
                 <span
-                  className="text-gray-500 text-xs"
+                  className="text-muted-foreground text-xs"
                   title={`${lead.pitch_deck_filename} — Drive sync hasn't run yet; ping Abdulrahman.`}
                 >
                   on file, sync pending
                 </span>
               )
             ) : (
-              <span className="text-gray-600">not yet ingested</span>
+              <span className="text-muted-foreground">not yet ingested</span>
             )}
           </div>
 
@@ -463,8 +463,8 @@ export default function LeadCard({ lead }: Props) {
             <div className="space-y-1.5">
               {Object.entries(assessment.scoring_breakdown).map(([key, val]) => (
                 <div key={key} className="flex justify-between text-xs">
-                  <span className="text-gray-500 capitalize">{key.replace(/_/g, " ")}</span>
-                  <span className="text-gray-300">{val.score}</span>
+                  <span className="text-muted-foreground capitalize">{key.replace(/_/g, " ")}</span>
+                  <span className="text-foreground">{val.score}</span>
                 </div>
               ))}
             </div>

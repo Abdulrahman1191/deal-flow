@@ -30,16 +30,13 @@ from app.models.portfolio import (
     PortfolioSignal,
 )
 from app.models.user import User
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, is_owner
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
-from app.config import settings as _settings
-OWNER_EMAIL = _settings.owner_email
-
 
 def _owner_or_403(user: User) -> None:
-    if user.email != OWNER_EMAIL:
+    if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 

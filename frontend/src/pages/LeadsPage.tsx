@@ -28,20 +28,20 @@ export default function LeadsPage() {
     leads.filter((l: Lead) => (l.assessment?.user_override ?? l.assessment?.bucket) === b);
 
   if (isLoading) {
-    return <p className="text-gray-500 text-sm p-6">Loading leads…</p>;
+    return <p className="text-muted-foreground text-sm p-6">Loading leads…</p>;
   }
 
   return (
     <div className="p-6 space-y-6">
       <StatsRow leads={leads} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <LeadBucket title="Yes — Schedule Meeting" leads={bucket("YES")} accent="bg-green-500" />
-        <LeadBucket title="Maybe — Review" leads={bucket("MAYBE")} accent="bg-yellow-500" />
-        <LeadBucket title="Reject" leads={bucket("REJECT")} accent="bg-red-500" />
+        <LeadBucket title="Yes — Schedule Meeting" leads={bucket("YES")} accent="bg-success" />
+        <LeadBucket title="Maybe — Review" leads={bucket("MAYBE")} accent="bg-warning" />
+        <LeadBucket title="Reject" leads={bucket("REJECT")} accent="bg-error" />
       </div>
       {leads.filter((l) => !l.assessment).length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-gray-500 mb-3">Pending Assessment</h3>
+          <h3 className="text-sm font-semibold text-muted-foreground mb-3">Pending Assessment</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {leads.filter((l) => !l.assessment).map((lead) => (
               <LeadCardPending key={lead.id} lead={lead} />

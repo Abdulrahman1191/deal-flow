@@ -10,12 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.feedback import Feedback
 from app.models.user import User
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, is_owner
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
-
-from app.config import settings as _settings
-OWNER_EMAIL = _settings.owner_email
 
 
 class FeedbackIn(BaseModel):
@@ -69,8 +66,8 @@ async def list_feedback(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Inbox view — only the owner can see all feedback."""
-    if user.email != OWNER_EMAIL:
+    """Inbox view — every signed-in teammate can see all feedback."""
+    if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     result = await db.execute(select(Feedback).order_by(Feedback.created_at.desc()))
     return [FeedbackOut.from_row(fb) for fb in result.scalars().all()]
@@ -82,7 +79,7 @@ async def resolve_feedback(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if user.email != OWNER_EMAIL:
+    if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     result = await db.execute(select(Feedback).where(Feedback.id == feedback_id))
     fb = result.scalar_one_or_none()

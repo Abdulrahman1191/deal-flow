@@ -91,18 +91,19 @@ async def get_current_user(
 
 
 def is_owner(user: User) -> bool:
-    """True if this user has owner-level access (Portfolio + Feedback admin).
+    """True if this user has full (admin) access — Portfolio + Feedback +
+    Overrides.
 
-    Resolution order:
-      1. settings.owner_email (preferred — env-driven)
-      2. legacy OWNER_EMAIL strings in the routers (kept as a fallback so
-         we don't have to rip them out in this migration)
+    Deal-flow is a shared team tool: every authenticated @raed.vc member gets
+    full access. The platform proxy is the gate (Slack-OTP SSO), so by the time
+    a request reaches us the user is already a trusted teammate. We therefore
+    grant admin to everyone rather than a single hardcoded owner.
+
+    Kept as a function (rather than removing the checks) so the gate can be
+    re-tightened later — e.g. by reading an allow-list from settings — without
+    touching every router. The `user` arg is intentionally unused for now.
     """
-    owner = (getattr(settings, "owner_email", "") or "").strip().lower()
-    if not owner:
-        # Fallback for backwards-compat with hardcoded router checks.
-        return False
-    return user.email.lower() == owner
+    return True
 
 
 def verify_webhook_signature(payload: bytes, signature: str) -> bool:

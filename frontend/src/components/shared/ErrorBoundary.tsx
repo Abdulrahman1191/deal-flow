@@ -42,16 +42,16 @@ export default class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="min-h-[50vh] flex items-center justify-center p-8">
-        <div className="bg-gray-900 border border-red-700 rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
+        <div className="bg-card border border-error/40 rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-xl">
           <div>
-            <h2 className="text-white font-semibold text-lg">Something went wrong</h2>
-            <p className="text-sm text-gray-400 mt-1">
+            <h2 className="text-foreground font-semibold text-lg">Something went wrong</h2>
+            <p className="text-sm text-muted-foreground mt-1">
               The page hit an unexpected error. Your data is safe — this was just a
               UI crash. Send Abdulrahman the details below via the 💬 Feedback
               button and try reloading.
             </p>
           </div>
-          <pre className="text-[11px] font-mono bg-gray-950 border border-gray-800 rounded p-3 overflow-auto max-h-48 text-red-300 whitespace-pre-wrap">
+          <pre className="text-[11px] font-mono bg-muted border border-border rounded p-3 overflow-auto max-h-48 text-error whitespace-pre-wrap">
             {error.name}: {error.message}
             {error.stack && (
               <>
@@ -63,13 +63,13 @@ export default class ErrorBoundary extends Component<Props, State> {
           <div className="flex gap-3 justify-end">
             <button
               onClick={this.reset}
-              className="px-4 py-2 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+              className="px-4 py-2 text-xs rounded-lg bg-muted hover:bg-border text-foreground transition-colors"
             >
               Try again
             </button>
             <button
               onClick={() => window.location.reload()}
-              className="px-4 py-2 text-xs rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+              className="px-4 py-2 text-xs rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
             >
               Reload page
             </button>
