@@ -158,7 +158,7 @@ async def list_companies(
     user: User = Depends(get_current_user),
 ):
     _owner_or_403(user)
-    q = select(PortfolioCompany).options(
+    q = select(PortfolioCompany).where(PortfolioCompany.owner_email == user.email).options(
         selectinload(PortfolioCompany.signals),
         selectinload(PortfolioCompany.outcomes),
     ).order_by(desc(PortfolioCompany.created_at)).limit(limit)
@@ -184,6 +184,7 @@ async def create_company(
         raise HTTPException(status_code=400, detail=f"initial_status must be one of {sorted(OUTCOME_STATES)}")
 
     company = PortfolioCompany(
+        owner_email=user.email,
         name=body.name.strip(),
         sector=body.sector,
         region=body.region,
@@ -216,7 +217,7 @@ async def get_company(
     r = await db.execute(
         select(PortfolioCompany)
         .options(selectinload(PortfolioCompany.outcomes), selectinload(PortfolioCompany.signals))
-        .where(PortfolioCompany.id == company_id)
+        .where(PortfolioCompany.id == company_id, PortfolioCompany.owner_email == user.email)
     )
     c = r.scalar_one_or_none()
     if not c:
@@ -255,7 +256,7 @@ async def update_company(
         select(PortfolioCompany).options(
             selectinload(PortfolioCompany.signals),
             selectinload(PortfolioCompany.outcomes),
-        ).where(PortfolioCompany.id == company_id)
+        ).where(PortfolioCompany.id == company_id, PortfolioCompany.owner_email == user.email)
     )
     c = r.scalar_one_or_none()
     if not c:
@@ -282,7 +283,7 @@ async def delete_company(
     user: User = Depends(get_current_user),
 ):
     _owner_or_403(user)
-    r = await db.execute(select(PortfolioCompany).where(PortfolioCompany.id == company_id))
+    r = await db.execute(select(PortfolioCompany).where(PortfolioCompany.id == company_id, PortfolioCompany.owner_email == user.email))
     c = r.scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="Not found")
@@ -300,7 +301,7 @@ async def add_outcome(
     _owner_or_403(user)
     if body.status not in OUTCOME_STATES:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(OUTCOME_STATES)}")
-    r = await db.execute(select(PortfolioCompany).where(PortfolioCompany.id == company_id))
+    r = await db.execute(select(PortfolioCompany).where(PortfolioCompany.id == company_id, PortfolioCompany.owner_email == user.email))
     c = r.scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -336,7 +337,7 @@ async def add_signal(
     if body.direction not in DIRECTION_VALUES:
         raise HTTPException(status_code=400, detail="direction must be POSITIVE or NEGATIVE")
 
-    r = await db.execute(select(PortfolioCompany).where(PortfolioCompany.id == company_id))
+    r = await db.execute(select(PortfolioCompany).where(PortfolioCompany.id == company_id, PortfolioCompany.owner_email == user.email))
     c = r.scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -364,6 +365,13 @@ async def delete_signal(
     user: User = Depends(get_current_user),
 ):
     _owner_or_403(user)
+    owns = await db.execute(
+        select(PortfolioCompany.id).where(
+            PortfolioCompany.id == company_id, PortfolioCompany.owner_email == user.email
+        )
+    )
+    if not owns.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Not found")
     r = await db.execute(
         select(PortfolioSignal).where(
             PortfolioSignal.id == signal_id, PortfolioSignal.company_id == company_id
@@ -397,13 +405,16 @@ async def portfolio_stats(
           COUNT(*) FILTER (WHERE current_status = 'failed') AS failed,
           COUNT(*) FILTER (WHERE current_status = 'too_early') AS too_early
         FROM portfolio_companies
-    """))).first()
+        WHERE owner_email = :owner
+    """), {"owner": user.email})).first()
 
     signal_pairs = (await db.execute(text("""
-        SELECT signal_type, direction, COUNT(*) AS n
-        FROM portfolio_signals
+        SELECT s.signal_type, s.direction, COUNT(*) AS n
+        FROM portfolio_signals s
+        JOIN portfolio_companies c ON c.id = s.company_id
+        WHERE c.owner_email = :owner
         GROUP BY 1, 2 ORDER BY n DESC LIMIT 20
-    """))).all()
+    """), {"owner": user.email})).all()
 
     return {
         "totals": {
