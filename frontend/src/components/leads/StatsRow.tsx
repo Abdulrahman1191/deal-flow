@@ -17,10 +17,11 @@ export default function StatsRow({ leads: all }: Props) {
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-      {stats.map((s) => (
+      {stats.map((s, i) => (
         <div
           key={s.label}
-          className="bg-card border border-border rounded-2xl p-4 sm:p-5 shadow-sm hover:shadow-md transition-shadow"
+          style={{ animationDelay: `${i * 50}ms` }}
+          className="bg-card border border-border rounded-2xl p-4 sm:p-5 shadow-sm hover:shadow-md transition-shadow animate-fade-in-up"
         >
           <div className="flex items-center gap-2 mb-2">
             <span className={`h-2 w-2 rounded-full ${s.dot}`} />

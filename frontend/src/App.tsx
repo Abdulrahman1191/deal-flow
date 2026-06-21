@@ -20,22 +20,22 @@ function Dashboard() {
       <div className="flex-1 overflow-hidden">
         <ErrorBoundary>
           {activeTab === "leads" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <LeadsPage />
             </div>
           )}
           {activeTab === "framework" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <FrameworkPage />
             </div>
           )}
           {activeTab === "archive" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <ArchivePage />
             </div>
           )}
           {activeTab === "feedback" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <FeedbackInboxPage />
             </div>
           )}

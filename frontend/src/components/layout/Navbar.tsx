@@ -106,10 +106,10 @@ export default function Navbar() {
       {menuOpen && (
         <>
           <div
-            className="fixed inset-0 top-14 z-40 bg-foreground/20 md:hidden"
+            className="fixed inset-0 top-14 z-40 bg-foreground/20 md:hidden animate-fade-in"
             onClick={() => setMenuOpen(false)}
           />
-          <div className="absolute left-0 right-0 top-14 z-50 md:hidden bg-card border-b border-border shadow-lg">
+          <div className="absolute left-0 right-0 top-14 z-50 md:hidden bg-card border-b border-border shadow-lg animate-slide-down">
             <div className="flex flex-col p-2">
               {tabs.map((tab) => (
                 <button

@@ -22,8 +22,8 @@ export default function LeadBucket({ title, leads, accent }: Props) {
           No leads
         </div>
       )}
-      {leads.map((lead) => (
-        <LeadCard key={lead.id} lead={lead} />
+      {leads.map((lead, i) => (
+        <LeadCard key={lead.id} lead={lead} index={i} />
       ))}
     </div>
   );

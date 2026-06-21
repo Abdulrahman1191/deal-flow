@@ -53,8 +53,8 @@ export default function AddCompanyModal({ vocab, onClose }: Props) {
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4">
-      <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh] animate-scale-in">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <p className="text-foreground font-semibold">Add portfolio company</p>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>

@@ -13,6 +13,8 @@ import FeedbackModal from "./FeedbackModal";
 
 interface Props {
   lead: Lead;
+  /** Position in its column — used to stagger the entrance animation. */
+  index?: number;
 }
 
 const borderColor: Record<string, string> = {
@@ -27,7 +29,7 @@ const bucketVariant: Record<string, "yes" | "maybe" | "reject"> = {
   REJECT: "reject",
 };
 
-export default function LeadCard({ lead }: Props) {
+export default function LeadCard({ lead, index = 0 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
   // When set, a ReasonModal is open for this bucket. The user can save with
@@ -179,7 +181,8 @@ export default function LeadCard({ lead }: Props) {
 
   return (
     <div
-      className={`bg-card border border-border border-l-4 ${borderColor[bucket ?? ""] ?? "border-l-border"} rounded-2xl p-5 space-y-3.5 shadow-sm hover:shadow-md transition-shadow`}
+      style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
+      className={`bg-card border border-border border-l-4 ${borderColor[bucket ?? ""] ?? "border-l-border"} rounded-2xl p-5 space-y-3.5 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 animate-fade-in-up`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">

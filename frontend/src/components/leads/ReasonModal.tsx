@@ -76,8 +76,8 @@ export default function ReasonModal({
     });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4">
-      <div className={`bg-card border ${BUCKET_TONE[bucket]} rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]`}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className={`bg-card border ${BUCKET_TONE[bucket]} rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[90vh] animate-scale-in`}>
         {/* Header */}
         <div className="px-5 py-4 border-b border-border">
           <p className="text-foreground font-semibold">{companyName}</p>
