@@ -6,6 +6,7 @@ import ConfidenceBar from "../shared/ConfidenceBar";
 import ReasoningBox from "./ReasoningBox";
 import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
+import { useToast } from "../shared/Toast";
 import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
 import { archiveNoReply, findLinkedin, updateLead } from "../../api/leads";
 import ReasonModal from "./ReasonModal";
@@ -16,12 +17,6 @@ interface Props {
   /** Position in its column — used to stagger the entrance animation. */
   index?: number;
 }
-
-const borderColor: Record<string, string> = {
-  YES: "border-l-success",
-  MAYBE: "border-l-warning",
-  REJECT: "border-l-error",
-};
 
 const bucketVariant: Record<string, "yes" | "maybe" | "reject"> = {
   YES: "yes",
@@ -38,6 +33,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
   // Which rating's FeedbackModal is open ("up" | "down"), or null when closed.
   const [showFeedback, setShowFeedback] = useState<"up" | "down" | null>(null);
   const qc = useQueryClient();
+  const toast = useToast();
 
   const { assessment } = lead;
 
@@ -76,12 +72,13 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     (!!assessment && (lead.status === "pending" || lead.status === "processing"));
 
   const overrideMutation = useMutation({
-    mutationFn: ({ bucket, reasonData }: { bucket: "YES" | "MAYBE" | "REJECT"; reasonData?: OverrideReason }) =>
+    mutationFn: ({ bucket, reasonData }: { bucket: "YES" | "MAYBE" | "REJECT"; reasonData?: OverrideReason; silent?: boolean }) =>
       overrideBucket(lead.id, bucket, reasonData),
     // Optimistic: move the card to the new bucket column immediately. The
     // backend draft regeneration takes ~10s — without this the user thinks
     // nothing happened.
     onMutate: async ({ bucket: newBucket }) => {
+      const prevBucket = assessment?.user_override ?? assessment?.bucket;
       await qc.cancelQueries({ queryKey: ["leads"] });
       const snapshot = qc.getQueryData(["leads"]);
       qc.setQueryData(["leads"], (prev: { items?: Lead[] } | undefined) =>
@@ -104,10 +101,20 @@ export default function LeadCard({ lead, index = 0 }: Props) {
             }
           : prev,
       );
-      return { snapshot };
+      return { snapshot, prevBucket };
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) qc.setQueryData(["leads"], ctx.snapshot);
+    },
+    onSuccess: (_data, vars, ctx) => {
+      if (vars.silent) return;
+      const prev = ctx?.prevBucket as "YES" | "MAYBE" | "REJECT" | undefined;
+      toast(`Moved ${lead.company_name} to ${vars.bucket}`, {
+        action:
+          prev && prev !== vars.bucket
+            ? { label: "Undo", onClick: () => overrideMutation.mutate({ bucket: prev, silent: true }) }
+            : undefined,
+      });
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
@@ -147,8 +154,17 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) qc.setQueryData(["leads"], ctx.snapshot);
     },
+    onSuccess: () => toast("Thanks — your feedback was recorded"),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
+
+  const unarchiveMutation = useMutation({
+    mutationFn: () => updateLead(lead.id, { status: "assessed" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["archive"] });
     },
   });
 
@@ -157,6 +173,9 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
       qc.invalidateQueries({ queryKey: ["archive"] });
+      toast(`Archived ${lead.company_name}`, {
+        action: { label: "Undo", onClick: () => unarchiveMutation.mutate() },
+      });
     },
   });
 
@@ -175,15 +194,17 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     lead.company_linkedin_url ?? "",
   );
 
-  const bucket = assessment?.user_override ?? assessment?.bucket;
+  const aiBucket = assessment?.bucket; // the AI's original call
+  const bucket = assessment?.user_override ?? assessment?.bucket; // effective
   const isOverridden = !!assessment?.user_override_at;
   const rating = assessment?.user_rating ?? null;
 
   return (
     <div
       style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
-      className={`bg-card border border-border border-l-4 ${borderColor[bucket ?? ""] ?? "border-l-border"} rounded-2xl p-5 space-y-3.5 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 animate-fade-in-up`}
+      className="bg-card border border-border rounded-2xl p-5 space-y-3.5 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 animate-fade-in-up"
     >
+      {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
@@ -197,7 +218,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
                   href={lead.company_linkedin_url}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-info hover:text-info hover:underline"
+                  className="text-info hover:underline"
                   data-testid="company-linkedin-link"
                 >
                   LinkedIn ↗
@@ -220,86 +241,95 @@ export default function LeadCard({ lead, index = 0 }: Props) {
           {bucket && <Badge label={bucket} variant={bucketVariant[bucket]} />}
           {isOverridden && (
             <span
-              className="text-[10px] uppercase tracking-wider text-primary font-medium"
+              className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium"
               title={`Manually overridden${assessment?.user_override_at ? " at " + new Date(assessment.user_override_at).toLocaleString("en-GB") : ""}`}
             >
-              Manual
+              Your override
             </span>
           )}
         </div>
       </div>
 
+      {/* AI recommendation */}
       {assessment && (
-        <div className="flex items-center gap-1" data-testid="bucket-override-controls">
-          {(["YES", "MAYBE", "REJECT"] as const).map((b) => {
-            const active = bucket === b;
-            const color = {
-              YES: active ? "bg-success/20 text-success ring-1 ring-success/40" : "bg-muted/50 text-muted-foreground hover:text-success hover:bg-success/10",
-              MAYBE: active ? "bg-warning/20 text-warning ring-1 ring-warning/40" : "bg-muted/50 text-muted-foreground hover:text-warning hover:bg-warning/10",
-              REJECT: active ? "bg-error/20 text-error ring-1 ring-error/40" : "bg-muted/50 text-muted-foreground hover:text-error hover:bg-error/10",
-            }[b];
-            return (
+        <div className="rounded-xl bg-muted/40 border border-border p-3 space-y-2.5">
+          <div className="flex items-center justify-between" data-testid="rating-controls">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              AI recommendation
+            </span>
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-muted-foreground mr-1">Rate:</span>
               <button
-                key={b}
-                disabled={active || overrideMutation.isPending}
-                onClick={() => setPendingBucket(b)}
-                className={`text-[10px] uppercase font-semibold tracking-wider px-2.5 py-1 rounded-full transition-colors ${color} ${active ? "cursor-default" : "cursor-pointer"} disabled:opacity-100`}
-                data-testid={`override-${b.toLowerCase()}`}
+                onClick={() => setShowFeedback("up")}
+                disabled={rateMutation.isPending}
+                title="The AI got this right"
+                data-testid="rate-up"
+                className={`grid place-items-center h-6 w-6 rounded-md transition-colors ${
+                  rating === "up" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
+                }`}
               >
-                {b}
+                <ThumbIcon up />
               </button>
-            );
-          })}
-          {overrideMutation.isPending && (
-            <span className="text-[10px] text-muted-foreground ml-1 animate-pulse">re-drafting…</span>
-          )}
-
-          {/* Thumbs up/down — rate the AI recommendation (training signal). */}
-          <div className="flex items-center gap-1 ml-auto" data-testid="rating-controls">
-            <button
-              onClick={() => setShowFeedback("up")}
-              disabled={rateMutation.isPending}
-              title="The AI got this right — add optional feedback"
-              data-testid="rate-up"
-              className={`text-sm px-1.5 py-0.5 rounded transition-colors ${
-                rating === "up"
-                  ? "bg-success/20 text-success ring-1 ring-success/40"
-                  : "text-muted-foreground hover:text-success hover:bg-success/10"
-              }`}
-            >
-              👍
-            </button>
-            <button
-              onClick={() => setShowFeedback("down")}
-              disabled={rateMutation.isPending}
-              title="The AI got this wrong — give feedback"
-              data-testid="rate-down"
-              className={`text-sm px-1.5 py-0.5 rounded transition-colors ${
-                rating === "down"
-                  ? "bg-warning/20 text-warning ring-1 ring-warning/40"
-                  : "text-muted-foreground hover:text-warning hover:bg-warning/10"
-              }`}
-            >
-              👎
-            </button>
+              <button
+                onClick={() => setShowFeedback("down")}
+                disabled={rateMutation.isPending}
+                title="The AI got this wrong"
+                data-testid="rate-down"
+                className={`grid place-items-center h-6 w-6 rounded-md transition-colors ${
+                  rating === "down" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <ThumbIcon />
+              </button>
+            </div>
           </div>
+          <div className="flex items-center gap-3">
+            {aiBucket && <Badge label={aiBucket} variant={bucketVariant[aiBucket]} />}
+            <div className="flex-1">
+              <ConfidenceBar score={assessment.confidence_score} bucket={aiBucket ?? ""} />
+            </div>
+          </div>
+          {assessment.summary && (
+            <p className="text-xs text-muted-foreground leading-relaxed">{assessment.summary}</p>
+          )}
+          <ReasoningBox
+            positive_signals={assessment.positive_signals}
+            red_flags={assessment.red_flags}
+            data_gaps={assessment.data_gaps}
+          />
         </div>
       )}
 
+      {/* Your decision */}
       {assessment && (
-        <ConfidenceBar score={assessment.confidence_score} bucket={bucket ?? ""} />
-      )}
-
-      {assessment?.summary && (
-        <p className="text-xs text-muted-foreground leading-relaxed">{assessment.summary}</p>
-      )}
-
-      {assessment && (
-        <ReasoningBox
-          positive_signals={assessment.positive_signals}
-          red_flags={assessment.red_flags}
-          data_gaps={assessment.data_gaps}
-        />
+        <div className="space-y-1.5" data-testid="bucket-override-controls">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Your decision
+          </span>
+          <div className="flex items-center gap-1.5">
+            {(["YES", "MAYBE", "REJECT"] as const).map((b) => {
+              const active = bucket === b;
+              return (
+                <button
+                  key={b}
+                  disabled={active || overrideMutation.isPending}
+                  onClick={() => setPendingBucket(b)}
+                  className={`text-[10px] uppercase font-semibold tracking-wider px-3 py-1.5 rounded-full border transition-colors ${
+                    active
+                      ? "bg-foreground text-white border-foreground cursor-default"
+                      : "bg-card text-muted-foreground border-border hover:text-foreground hover:border-foreground cursor-pointer"
+                  } disabled:opacity-100`}
+                  data-testid={`override-${b.toLowerCase()}`}
+                >
+                  {b}
+                </button>
+              );
+            })}
+            {overrideMutation.isPending && (
+              <span className="text-[10px] text-muted-foreground ml-1 animate-pulse">re-drafting…</span>
+            )}
+          </div>
+        </div>
       )}
 
       {!assessment && lead.status === "processing" && (
@@ -309,6 +339,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
         <p className="text-xs text-muted-foreground">Queued for assessment</p>
       )}
 
+      {/* Actions */}
       <div className="flex items-center justify-between pt-1">
         <ActionButtons
           lead={lead}
@@ -318,13 +349,9 @@ export default function LeadCard({ lead, index = 0 }: Props) {
         />
         <div className="flex items-center gap-3">
           <button
-            onClick={() => {
-              if (confirm(`Archive ${lead.company_name} without sending any email?`)) {
-                skipMutation.mutate();
-              }
-            }}
+            onClick={() => skipMutation.mutate()}
             disabled={skipMutation.isPending}
-            className="text-xs text-muted-foreground hover:text-error transition-colors disabled:opacity-50"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
             data-testid="archive-no-reply-btn"
             title="Skip the email and archive this lead. Sets Copper status to Unqualified."
           >
@@ -332,7 +359,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
           </button>
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-muted-foreground hover:text-muted-foreground transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             {expanded ? "Less ▲" : "More ▼"}
           </button>
@@ -387,7 +414,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
               <button
                 onClick={() => findLinkedinMutation.mutate()}
                 disabled={findLinkedinMutation.isPending}
-                className="text-[10px] text-info hover:text-info disabled:opacity-50"
+                className="text-[10px] text-info hover:underline disabled:opacity-50"
                 data-testid="find-linkedin-btn"
               >
                 {findLinkedinMutation.isPending ? "Searching…" : "Find ↻"}
@@ -403,7 +430,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
                 }
               }}
               placeholder="https://linkedin.com/company/..."
-              className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-border"
+              className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
               data-testid="linkedin-input"
             />
             {findLinkedinMutation.data?.source && (
@@ -412,7 +439,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
               </p>
             )}
             {findLinkedinMutation.data && !findLinkedinMutation.data.company_linkedin_url && (
-              <p className="text-[10px] text-warning">
+              <p className="text-[10px] text-muted-foreground">
                 Auto-discovery found nothing. Paste a URL above to set manually.
               </p>
             )}
@@ -425,17 +452,13 @@ export default function LeadCard({ lead, index = 0 }: Props) {
             </span>
             {lead.pitch_deck_filename ? (
               lead.pitch_deck_drive_id ? (
-                // Drive ID is mapped — clicking opens Drive's native viewer in a
-                // new tab. The browser follows the 307 from our backend, lands
-                // on drive.google.com/file/d/<id>/view, Drive verifies the
-                // user's @raed.vc session via its own cookies.
                 <span className="text-foreground flex items-center gap-2">
                   <a
                     href={`/api/v1/leads/${lead.id}/pitch-deck`}
                     target="_blank"
                     rel="noreferrer"
                     title={lead.pitch_deck_filename}
-                    className="text-info hover:text-info hover:underline text-xs"
+                    className="text-info hover:underline text-xs"
                   >
                     View PDF ↗
                   </a>
@@ -446,9 +469,6 @@ export default function LeadCard({ lead, index = 0 }: Props) {
                   )}
                 </span>
               ) : (
-                // Filename is on file but the Drive sync hasn't run yet — this
-                // is the post-migration state until scripts/sync_drive_to_db.py
-                // runs (gated on platform DB access).
                 <span
                   className="text-muted-foreground text-xs"
                   title={`${lead.pitch_deck_filename} — Drive sync hasn't run yet; ping Abdulrahman.`}
@@ -461,7 +481,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
             )}
           </div>
 
-          {/* Scoring breakdown (existing) */}
+          {/* Scoring breakdown */}
           {assessment?.scoring_breakdown && (
             <div className="space-y-1.5">
               {Object.entries(assessment.scoring_breakdown).map(([key, val]) => (
@@ -475,5 +495,18 @@ export default function LeadCard({ lead, index = 0 }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+function ThumbIcon({ up = false }: { up?: boolean }) {
+  return (
+    <svg
+      width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      className={up ? "" : "rotate-180"}
+    >
+      <path d="M7 10v12" />
+      <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+    </svg>
   );
 }

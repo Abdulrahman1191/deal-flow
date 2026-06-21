@@ -156,7 +156,12 @@ export default function ArchivePage() {
       })}
 
       {total === 0 && (
-        <p className="text-sm text-muted-foreground">No archived companies yet.</p>
+        <div className="border border-dashed border-border rounded-2xl bg-card/50 py-16 px-6 text-center max-w-md mx-auto">
+          <h3 className="font-heading text-base font-semibold text-foreground">Nothing archived yet</h3>
+          <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
+            Deals you skip or action from the board will show up here, grouped by outcome.
+          </p>
+        </div>
       )}
     </div>
   );

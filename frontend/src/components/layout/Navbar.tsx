@@ -7,6 +7,8 @@ import { useMe } from "../../lib/auth";
 const baseTabs = [
   { id: "leads", label: "Deal Flow" },
   { id: "framework", label: "Framework" },
+  { id: "portfolio", label: "Portfolio" },
+  { id: "briefings", label: "Briefings" },
   { id: "archive", label: "Archive" },
 ] as const;
 

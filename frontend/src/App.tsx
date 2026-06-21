@@ -4,6 +4,8 @@ import Onboarding from "./components/onboarding/Onboarding";
 import Navbar from "./components/layout/Navbar";
 import LeadsPage from "./pages/LeadsPage";
 import FrameworkPage from "./pages/FrameworkPage";
+import PortfolioPage from "./pages/PortfolioPage";
+import BriefingPage from "./pages/BriefingPage";
 import ArchivePage from "./pages/ArchivePage";
 import FeedbackInboxPage from "./pages/FeedbackInboxPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
@@ -29,6 +31,16 @@ function Dashboard() {
           {activeTab === "framework" && (
             <div className="h-full overflow-y-auto animate-fade-in">
               <FrameworkPage />
+            </div>
+          )}
+          {activeTab === "portfolio" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <PortfolioPage />
+            </div>
+          )}
+          {activeTab === "briefings" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <BriefingPage />
             </div>
           )}
           {activeTab === "archive" && (
