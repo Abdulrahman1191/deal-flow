@@ -26,9 +26,12 @@ export default {
         border: "#E2E8F0",
         input: "#E2E8F0",
         ring: "#1F2533",
-        success: "#10B981",
-        warning: "#D97706", // amber-600 — readable on light bg
-        error: "#EF4444",
+        // Navy-monochrome status scale (no green/red): YES is the most
+        // prominent (navy), REJECT the most muted (light slate). Differentiation
+        // comes from shade + label, not hue.
+        success: "#1F2533", // YES  — navy (= primary)
+        warning: "#475569", // MAYBE — slate-600
+        error: "#64748B",   // REJECT — slate-500 (de-emphasised)
         info: "#2563EB", // blue-600 — links/info on light bg
         // legacy alias kept so any stray `brand` reference still resolves to navy
         brand: "#1F2533",

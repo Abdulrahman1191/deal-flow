@@ -137,7 +137,7 @@ export default function FeedbackModal({
             <button
               onClick={() => onSubmit({ reason_tags: Array.from(selected), reason: note })}
               className={`px-5 py-2 text-sm font-medium rounded-lg text-white transition-colors ${
-                isUp ? "bg-success hover:bg-success/90" : "bg-warning hover:bg-warning"
+                "bg-primary hover:bg-primary/90"
               }`}
             >
               Submit feedback

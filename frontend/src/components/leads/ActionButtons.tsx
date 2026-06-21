@@ -35,7 +35,7 @@ export default function ActionButtons({ lead, onApprove, onReassess, reassessing
       {effectiveBucket === "REJECT" && (
         <button
           onClick={onApprove}
-          className="px-3 py-1.5 text-xs rounded-lg bg-error hover:bg-error/90 text-white transition-colors"
+          className="px-3 py-1.5 text-xs rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
         >
           Approve Email
         </button>
@@ -43,7 +43,7 @@ export default function ActionButtons({ lead, onApprove, onReassess, reassessing
       {effectiveBucket === "YES" && (
         <button
           onClick={onApprove}
-          className="px-3 py-1.5 text-xs rounded-lg bg-success hover:bg-success/90 text-white transition-colors"
+          className="px-3 py-1.5 text-xs rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
         >
           Approve Meeting Request
         </button>

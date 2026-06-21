@@ -69,7 +69,7 @@ function SendQueueCard({ item }: { item: SendQueueItem }) {
           onClick={() => markSentMutation.mutate()}
           disabled={markSentMutation.isPending || !item.recipient_email}
           title={!item.recipient_email ? "Add an email address in Copper first" : undefined}
-          className="px-5 py-2 text-sm rounded-lg bg-success hover:bg-success/90 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+          className="px-5 py-2 text-sm rounded-lg bg-primary hover:bg-primary/90 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
         >
           {markSentMutation.isPending ? "Marking…" : "Mark as Sent"}
         </button>

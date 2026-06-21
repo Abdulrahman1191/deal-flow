@@ -166,7 +166,7 @@ function Spinner() {
 function SuccessMark() {
   return (
     <div className="mx-auto h-12 w-12 rounded-full bg-success/10 flex items-center justify-center animate-scale-in">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1F2533" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M20 6 9 17l-5-5" />
       </svg>
     </div>
