@@ -20,7 +20,7 @@ const DECISION_COLOR: Record<Decision, string> = {
 };
 
 const STATUS_COLOR: Record<OutcomeStatus, string> = {
-  exited: "text-emerald-300 bg-emerald-500/10",
+  exited: "text-success bg-success/10",
   growing: "text-success bg-success/10",
   stalled: "text-warning bg-warning/10",
   zombie: "text-warning bg-warning/10",
@@ -53,15 +53,15 @@ export default function PortfolioPage() {
   if (isError) {
     const status = (error as { response?: { status?: number } })?.response?.status;
     if (status === 403) {
-      return <p className="p-6 text-sm text-muted-foreground">Portfolio view is owner-only.</p>;
+      return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Portfolio view is owner-only.</p>;
     }
-    return <p className="p-6 text-sm text-error">Failed to load portfolio.</p>;
+    return <p className="p-4 sm:p-6 text-sm text-error">Failed to load portfolio.</p>;
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
       {/* Header + stats */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Portfolio Intelligence</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -125,8 +125,8 @@ export default function PortfolioPage() {
           </p>
         </div>
       ) : (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-card border border-border rounded-xl overflow-x-auto">
+          <table className="w-full min-w-[680px] text-sm">
             <thead className="bg-background text-xs uppercase tracking-wider text-muted-foreground">
               <tr>
                 <th className="text-left px-4 py-3 font-medium">Company</th>
@@ -178,7 +178,7 @@ function StatCard({
     green: "text-success",
     red: "text-error",
     gray: "text-foreground",
-    emerald: "text-emerald-300",
+    emerald: "text-success",
   }[tone ?? "gray"];
   return (
     <button

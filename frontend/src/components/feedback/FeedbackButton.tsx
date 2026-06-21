@@ -41,7 +41,7 @@ export default function FeedbackButton() {
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4">
-          <div className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl">
+          <div className="bg-card border border-border rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <p className="text-foreground font-semibold">Send feedback</p>
               <button
@@ -52,7 +52,7 @@ export default function FeedbackButton() {
               </button>
             </div>
 
-            <div className="px-5 py-4 space-y-3">
+            <div className="px-5 py-4 space-y-3 overflow-y-auto">
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
                   Category

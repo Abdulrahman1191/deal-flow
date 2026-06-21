@@ -122,14 +122,14 @@ export default function ArchivePage() {
   });
 
   if (isLoading) {
-    return <p className="p-6 text-sm text-muted-foreground">Loading archive…</p>;
+    return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Loading archive…</p>;
   }
   if (!data) return null;
 
   const total = SECTIONS.reduce((sum, s) => sum + (data[s.key]?.length ?? 0), 0);
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-5xl mx-auto">
       <div>
         <h1 className="text-xl font-semibold text-foreground">Archive</h1>
         <p className="text-sm text-muted-foreground mt-1">

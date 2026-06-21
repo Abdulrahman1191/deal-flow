@@ -55,7 +55,7 @@ export default function FeedbackModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4">
-      <div className={`bg-card border ${isUp ? "border-success" : "border-warning"} rounded-2xl w-full max-w-md shadow-2xl`}>
+      <div className={`bg-card border ${isUp ? "border-success" : "border-warning"} rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]`}>
         {/* Header */}
         <div className="px-5 py-4 border-b border-border">
           <p className="text-foreground font-semibold">{companyName}</p>
@@ -79,7 +79,7 @@ export default function FeedbackModal({
         </div>
 
         {/* Tags */}
-        <div className="px-5 py-4 space-y-3">
+        <div className="px-5 py-4 space-y-3 overflow-y-auto">
           <div>
             <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">
               Quick reasons (tap any that apply)

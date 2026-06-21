@@ -67,13 +67,13 @@ export default function FeedbackInboxPage() {
     refetchInterval: 30_000,
   });
 
-  if (isLoading) return <p className="p-6 text-sm text-muted-foreground">Loading feedback…</p>;
+  if (isLoading) return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Loading feedback…</p>;
   if (isError) {
     const status = (error as { response?: { status?: number } })?.response?.status;
     if (status === 403) {
-      return <p className="p-6 text-sm text-muted-foreground">Feedback inbox is only visible to the owner.</p>;
+      return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Feedback inbox is only visible to the owner.</p>;
     }
-    return <p className="p-6 text-sm text-error">Failed to load feedback.</p>;
+    return <p className="p-4 sm:p-6 text-sm text-error">Failed to load feedback.</p>;
   }
 
   const items = data ?? [];
@@ -81,7 +81,7 @@ export default function FeedbackInboxPage() {
   const done = items.filter((i) => i.resolved_at);
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-foreground">Feedback Inbox</h1>
         <p className="text-sm text-muted-foreground mt-1">

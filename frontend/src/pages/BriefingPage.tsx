@@ -34,8 +34,8 @@ export default function BriefingPage() {
   const displayDate = briefing ? format(new Date(briefing.date), "EEEE, dd/MM/yyyy") : null;
 
   return (
-    <div className="flex h-full">
-      <aside className="w-52 shrink-0 border-r border-border p-4 overflow-y-auto">
+    <div className="flex flex-col md:flex-row h-full">
+      <aside className="w-full md:w-52 shrink-0 border-b md:border-b-0 md:border-r border-border p-4 overflow-y-auto max-h-44 md:max-h-none">
         <button
           onClick={() => setSelectedDate(null)}
           className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-foreground bg-muted mb-3"
@@ -45,7 +45,7 @@ export default function BriefingPage() {
         <BriefingArchive onSelect={setSelectedDate} selectedDate={selectedDate ?? undefined} />
       </aside>
 
-      <main className="flex-1 overflow-y-auto p-6 space-y-4">
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-lg font-semibold text-foreground">Daily Investment Briefing</h1>

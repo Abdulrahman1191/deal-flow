@@ -51,7 +51,7 @@ const rejects = [
 
 export default function FrameworkPage() {
   return (
-    <div className="p-6 max-w-3xl space-y-8">
+    <div className="p-4 sm:p-6 max-w-3xl space-y-8">
       <div>
         <h1 className="text-lg font-semibold text-foreground mb-1">Investment Framework</h1>
         <p className="text-xs text-muted-foreground">

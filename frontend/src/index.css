@@ -12,3 +12,14 @@
     @apply font-heading;
   }
 }
+
+@layer utilities {
+  /* Horizontal scroll strips (e.g. nav tabs on mobile) without a visible bar */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}

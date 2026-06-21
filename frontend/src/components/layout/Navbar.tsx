@@ -28,17 +28,17 @@ export default function Navbar() {
     : baseTabs;
 
   return (
-    <nav className="bg-card border-b border-border px-6 py-0 flex items-center gap-8 h-14">
-      <span className="font-heading text-foreground font-semibold tracking-tight mr-4">
-        Raed Ventures{" "}
-        <span className="text-muted-foreground text-xs font-sans font-normal ml-1">AI Deal Flow</span>
+    <nav className="bg-card border-b border-border px-4 sm:px-6 py-0 flex items-center gap-3 sm:gap-8 h-14">
+      <span className="font-heading text-foreground font-semibold tracking-tight shrink-0">
+        Raed Ventures
+        <span className="hidden sm:inline text-muted-foreground text-xs font-sans font-normal ml-1">AI Deal Flow</span>
       </span>
-      <div className="flex gap-1">
+      <div className="flex gap-1 overflow-x-auto no-scrollbar -mx-1 px-1">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`relative px-4 py-4 text-sm font-medium border-b-2 transition-colors ${
+            className={`relative shrink-0 whitespace-nowrap px-3 sm:px-4 py-4 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.id
                 ? "border-primary text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -53,9 +53,9 @@ export default function Navbar() {
           </button>
         ))}
       </div>
-      <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">
+      <div className="ml-auto shrink-0 flex items-center gap-4 text-xs text-muted-foreground">
         {me.data && (
-          <span>
+          <span className="hidden md:inline">
             Signed in as <span className="text-foreground">{me.data.email}</span>
           </span>
         )}

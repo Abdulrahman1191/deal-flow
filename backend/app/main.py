@@ -103,7 +103,14 @@ if _FRONTEND_DIST.is_dir():
         if candidate.is_file():
             return FileResponse(candidate)
 
-        # Otherwise — let React Router take over
+        # Otherwise — let React Router take over. index.html must NOT be cached:
+        # it references hash-busted asset filenames that change every build, so a
+        # stale cached index.html points at JS/CSS that no longer exist → blank
+        # page after a redeploy. The /assets bundles themselves are content-hashed
+        # and safe to cache forever (handled by the StaticFiles mount above).
         if _INDEX_HTML.is_file():
-            return FileResponse(_INDEX_HTML)
+            return FileResponse(
+                _INDEX_HTML,
+                headers={"Cache-Control": "no-cache, must-revalidate"},
+            )
         return JSONResponse({"detail": "Frontend not built"}, status_code=503)
