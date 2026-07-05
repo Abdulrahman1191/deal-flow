@@ -18,9 +18,13 @@ router = APIRouter(prefix="/briefings", tags=["briefings"])
 @router.get("/today", response_model=BriefingOut)
 async def get_today(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(DailyBriefing).where(DailyBriefing.date == date.today()))
+    result = await db.execute(
+        select(DailyBriefing).where(
+            DailyBriefing.date == date.today(), DailyBriefing.owner_email == user.email
+        )
+    )
     briefing = result.scalar_one_or_none()
     if not briefing:
         raise HTTPException(status_code=404, detail="Today's briefing not yet generated")
@@ -32,11 +36,15 @@ async def list_briefings(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    total = (await db.execute(select(func.count()).select_from(DailyBriefing))).scalar()
+    total = (await db.execute(
+        select(func.count()).select_from(DailyBriefing).where(DailyBriefing.owner_email == user.email)
+    )).scalar()
     result = await db.execute(
-        select(DailyBriefing).order_by(DailyBriefing.date.desc()).offset((page - 1) * page_size).limit(page_size)
+        select(DailyBriefing)
+        .where(DailyBriefing.owner_email == user.email)
+        .order_by(DailyBriefing.date.desc()).offset((page - 1) * page_size).limit(page_size)
     )
     return PaginatedBriefings(total=total, page=page, page_size=page_size, items=result.scalars().all())
 
@@ -45,9 +53,13 @@ async def list_briefings(
 async def get_by_date(
     briefing_date: date,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(DailyBriefing).where(DailyBriefing.date == briefing_date))
+    result = await db.execute(
+        select(DailyBriefing).where(
+            DailyBriefing.date == briefing_date, DailyBriefing.owner_email == user.email
+        )
+    )
     briefing = result.scalar_one_or_none()
     if not briefing:
         raise HTTPException(status_code=404, detail="Briefing not found for this date")
@@ -55,6 +67,6 @@ async def get_by_date(
 
 
 @router.post("/generate", status_code=202)
-async def trigger_briefing(_: User = Depends(get_current_user)):
-    generate_briefing_task.delay()
+async def trigger_briefing(user: User = Depends(get_current_user)):
+    generate_briefing_task.delay(user.email)
     return {"status": "queued"}

@@ -19,7 +19,7 @@ celery.conf.update(
     enable_utc=True,
     beat_schedule={
         "daily-briefing": {
-            "task": "app.tasks.generate_briefing.generate_briefing_task",
+            "task": "app.tasks.generate_briefing.generate_all_briefings_task",
             "schedule": crontab(hour=settings.briefing_cron_hour, minute=settings.briefing_cron_minute),
         },
         # Reconcile the board with Copper every 5 minutes: import leads newly

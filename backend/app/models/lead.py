@@ -15,6 +15,9 @@ class Lead(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     copper_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
+    # Per-user ownership: the @raed.vc email of the user this lead belongs to
+    # (the Copper assignee). Leads are scoped to their owner across the app.
+    owner_email: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     website: Mapped[Optional[str]] = mapped_column(String(512))
     description: Mapped[Optional[str]] = mapped_column(Text)
