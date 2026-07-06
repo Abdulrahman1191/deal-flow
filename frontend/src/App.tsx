@@ -1,7 +1,11 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useMe } from "./lib/auth";
+import Onboarding from "./components/onboarding/Onboarding";
 import Navbar from "./components/layout/Navbar";
 import LeadsPage from "./pages/LeadsPage";
 import FrameworkPage from "./pages/FrameworkPage";
+import PortfolioPage from "./pages/PortfolioPage";
+import BriefingPage from "./pages/BriefingPage";
 import ArchivePage from "./pages/ArchivePage";
 import FeedbackInboxPage from "./pages/FeedbackInboxPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
@@ -15,27 +19,37 @@ import useAppStore from "./store/useAppStore";
 function Dashboard() {
   const { activeTab } = useAppStore();
   return (
-    <div className="h-screen flex flex-col bg-gray-950">
+    <div className="h-screen flex flex-col bg-background">
       <Navbar />
       <div className="flex-1 overflow-hidden">
         <ErrorBoundary>
           {activeTab === "leads" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <LeadsPage />
             </div>
           )}
           {activeTab === "framework" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <FrameworkPage />
             </div>
           )}
+          {activeTab === "portfolio" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <PortfolioPage />
+            </div>
+          )}
+          {activeTab === "briefings" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <BriefingPage />
+            </div>
+          )}
           {activeTab === "archive" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <ArchivePage />
             </div>
           )}
           {activeTab === "feedback" && (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto animate-fade-in">
               <FeedbackInboxPage />
             </div>
           )}
@@ -48,24 +62,24 @@ function Dashboard() {
 
 function NotAuthenticated() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-950 p-6">
+    <div className="min-h-screen flex items-center justify-center bg-background p-6">
       <div className="max-w-md text-center space-y-3">
-        <h1 className="text-2xl font-semibold text-white">Not signed in</h1>
-        <p className="text-gray-400 text-sm leading-relaxed">
+        <h1 className="text-2xl font-semibold text-foreground">Not signed in</h1>
+        <p className="text-muted-foreground text-sm leading-relaxed">
           Open this app through{" "}
           <a
-            className="text-blue-400 underline"
+            className="text-info underline"
             href="https://auth.apps.raed.vc"
           >
             auth.apps.raed.vc
           </a>{" "}
-          and sign in with your <code className="text-gray-200">@raed.vc</code>{" "}
+          and sign in with your <code className="text-foreground">@raed.vc</code>{" "}
           Slack account. The platform proxy will gate your request and send you
           here.
         </p>
-        <p className="text-gray-600 text-xs">
+        <p className="text-muted-foreground text-xs">
           If you're running locally:{" "}
-          <code className="text-gray-400">
+          <code className="text-foreground">
             localStorage.setItem('fake_email','you@raed.vc')
           </code>{" "}
           then reload.
@@ -77,13 +91,22 @@ function NotAuthenticated() {
 
 export default function App() {
   const me = useMe();
+  const qc = useQueryClient();
   if (me.isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-950">
-        <p className="text-sm text-gray-500 animate-pulse">Loading…</p>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <p className="text-sm text-muted-foreground animate-pulse">Loading…</p>
       </div>
     );
   }
   if (me.isError || !me.data) return <NotAuthenticated />;
+  if (!me.data.onboarded) {
+    return (
+      <Onboarding
+        user={me.data}
+        onDone={() => qc.invalidateQueries({ queryKey: ["me"] })}
+      />
+    );
+  }
   return <Dashboard />;
 }

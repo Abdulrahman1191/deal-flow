@@ -13,13 +13,13 @@ function SendQueueCard({ item }: { item: SendQueueItem }) {
   return (
     <div
       data-testid="send-queue-item"
-      className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4"
+      className="bg-card border border-border rounded-xl p-5 space-y-4"
     >
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="font-semibold text-white text-sm">{item.company_name}</p>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="font-semibold text-foreground text-sm">{item.company_name}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
             Approved {format(new Date(item.approved_at), "dd/MM/yyyy · HH:mm")}
           </p>
         </div>
@@ -31,10 +31,10 @@ function SendQueueCard({ item }: { item: SendQueueItem }) {
 
       {/* Recipient */}
       <div>
-        <p className="text-xs text-gray-500 mb-1 uppercase tracking-wider">To</p>
+        <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">To</p>
         <p
           data-testid="recipient-email"
-          className="text-sm text-white font-mono bg-gray-800 px-3 py-2 rounded-lg"
+          className="text-sm text-foreground font-mono bg-muted px-3 py-2 rounded-lg"
         >
           {item.recipient_email || "— no email on record —"}
         </p>
@@ -42,10 +42,10 @@ function SendQueueCard({ item }: { item: SendQueueItem }) {
 
       {/* Subject */}
       <div>
-        <p className="text-xs text-gray-500 mb-1 uppercase tracking-wider">Subject</p>
+        <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">Subject</p>
         <p
           data-testid="email-subject"
-          className="text-sm text-white bg-gray-800 px-3 py-2 rounded-lg"
+          className="text-sm text-foreground bg-muted px-3 py-2 rounded-lg"
         >
           {item.draft_subject || "—"}
         </p>
@@ -53,10 +53,10 @@ function SendQueueCard({ item }: { item: SendQueueItem }) {
 
       {/* Body */}
       <div>
-        <p className="text-xs text-gray-500 mb-1 uppercase tracking-wider">Body</p>
+        <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">Body</p>
         <pre
           data-testid="email-body"
-          className="text-sm text-gray-200 bg-gray-800 px-4 py-3 rounded-lg whitespace-pre-wrap font-sans leading-relaxed"
+          className="text-sm text-foreground bg-muted px-4 py-3 rounded-lg whitespace-pre-wrap font-sans leading-relaxed"
         >
           {item.draft_body || "—"}
         </pre>
@@ -69,14 +69,14 @@ function SendQueueCard({ item }: { item: SendQueueItem }) {
           onClick={() => markSentMutation.mutate()}
           disabled={markSentMutation.isPending || !item.recipient_email}
           title={!item.recipient_email ? "Add an email address in Copper first" : undefined}
-          className="px-5 py-2 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+          className="px-5 py-2 text-sm rounded-lg bg-primary hover:bg-primary/90 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
         >
           {markSentMutation.isPending ? "Marking…" : "Mark as Sent"}
         </button>
       </div>
 
       {markSentMutation.isError && (
-        <p className="text-xs text-red-400 text-right">Failed — try again.</p>
+        <p className="text-xs text-error text-right">Failed — try again.</p>
       )}
     </div>
   );
@@ -90,23 +90,23 @@ export default function SendQueuePage() {
   });
 
   if (isLoading) {
-    return <p className="text-gray-500 text-sm p-6 animate-pulse">Loading send queue…</p>;
+    return <p className="text-muted-foreground text-sm p-6 animate-pulse">Loading send queue…</p>;
   }
 
   return (
-    <div className="p-6 max-w-2xl space-y-4">
+    <div className="p-4 sm:p-6 max-w-2xl space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-white">Send Queue</h1>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <h1 className="text-lg font-semibold text-foreground">Send Queue</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
             Approved drafts waiting to be sent via Gmail
           </p>
         </div>
-        <span className="text-xs text-gray-500">{items.length} pending</span>
+        <span className="text-xs text-muted-foreground">{items.length} pending</span>
       </div>
 
       {items.length === 0 && (
-        <div className="text-center py-16 text-gray-600 text-sm border border-dashed border-gray-800 rounded-xl">
+        <div className="text-center py-16 text-muted-foreground text-sm border border-dashed border-border rounded-xl">
           No emails pending — all caught up.
         </div>
       )}

@@ -41,6 +41,18 @@ async def _get_card(lead_id: str, db: AsyncSession) -> AssessmentCard:
     return card
 
 
+def _require_rating(card: AssessmentCard) -> None:
+    """Enforced learning: a human 👍/👎 on the AI recommendation is MANDATORY
+    before a lead can be approved or sent (meeting request or rejection). Raises
+    428 if the card is unrated. NOTE: a bucket override alone does NOT satisfy
+    this — the reviewer must explicitly rate up or down."""
+    if not card.user_rating:
+        raise HTTPException(
+            status_code=428,
+            detail="Rate the recommendation (👍 or 👎) before approving or sending this lead.",
+        )
+
+
 @router.get("/send-queue")
 async def get_send_queue(
     db: AsyncSession = Depends(get_db),
@@ -93,6 +105,7 @@ async def approve_assessment(
 ):
     """Marks the draft as approved and queues it for sending."""
     card = await _get_card(lead_id, db)
+    _require_rating(card)
 
     if card.approved_at:
         return {"status": "already_approved"}
@@ -181,6 +194,7 @@ async def mark_sent(
     """Called by an EXTERNAL sender (e.g. Cowork) after it sends the email.
     Just records 'sent' + runs the terminal Copper transition — does NOT send."""
     card = await _get_card(lead_id, db)
+    _require_rating(card)
     lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
     return await _finalize_sent(db, card, lead)
 
@@ -198,6 +212,7 @@ async def send_assessment(
     going out. On a send failure we abort (no state change) so it can be retried.
     """
     card = await _get_card(lead_id, db)
+    _require_rating(card)
     lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")

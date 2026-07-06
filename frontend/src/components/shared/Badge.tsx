@@ -4,11 +4,11 @@ interface BadgeProps {
 }
 
 const variantClass: Record<string, string> = {
-  yes: "bg-green-900/60 text-green-300 border border-green-700",
-  maybe: "bg-yellow-900/60 text-yellow-300 border border-yellow-700",
-  reject: "bg-red-900/60 text-red-300 border border-red-700",
-  neutral: "bg-gray-800 text-gray-300 border border-gray-700",
-  purple: "bg-purple-900/60 text-purple-300 border border-purple-700",
+  yes: "bg-success/10 text-success border border-success/30",
+  maybe: "bg-warning/10 text-warning border border-warning/30",
+  reject: "bg-error/10 text-error border border-error/30",
+  neutral: "bg-muted text-muted-foreground border border-border",
+  purple: "bg-primary/10 text-primary border border-primary/30",
 };
 
 export default function Badge({ label, variant = "neutral" }: BadgeProps) {

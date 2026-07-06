@@ -13,10 +13,16 @@ export interface CurrentUser {
   email: string;
   name: string;
   is_owner: boolean;
+  onboarded: boolean;
+  copper_linked: boolean;
 }
 
 export const fetchMe = () =>
   client.get<CurrentUser>("/auth/me").then((r) => r.data);
+
+/** Mark first-run onboarding complete. Returns the updated user. */
+export const completeOnboarding = () =>
+  client.post<CurrentUser>("/auth/onboard").then((r) => r.data);
 
 /** React Query hook for components to read the current user. */
 export function useMe() {
