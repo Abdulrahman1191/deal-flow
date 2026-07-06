@@ -14,9 +14,6 @@ from app.services.auth import get_current_user
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
-from app.config import settings as _settings
-OWNER_EMAIL = _settings.owner_email
-
 
 class FeedbackIn(BaseModel):
     message: str = Field(min_length=2, max_length=4000)
@@ -69,10 +66,12 @@ async def list_feedback(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Inbox view — only the owner can see all feedback."""
-    if user.email != OWNER_EMAIL:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    result = await db.execute(select(Feedback).order_by(Feedback.created_at.desc()))
+    """Inbox view — each user sees only the feedback they submitted."""
+    result = await db.execute(
+        select(Feedback)
+        .where(Feedback.user_email == user.email)
+        .order_by(Feedback.created_at.desc())
+    )
     return [FeedbackOut.from_row(fb) for fb in result.scalars().all()]
 
 
@@ -82,9 +81,9 @@ async def resolve_feedback(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if user.email != OWNER_EMAIL:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    result = await db.execute(select(Feedback).where(Feedback.id == feedback_id))
+    result = await db.execute(
+        select(Feedback).where(Feedback.id == feedback_id, Feedback.user_email == user.email)
+    )
     fb = result.scalar_one_or_none()
     if not fb:
         raise HTTPException(status_code=404, detail="Not found")

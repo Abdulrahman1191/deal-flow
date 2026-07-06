@@ -23,14 +23,19 @@ def _headers() -> dict:
     }
 
 
-def fetch_open_leads_for_user() -> list[dict]:
+def fetch_open_leads_for_user(copper_user_id: Optional[int] = None) -> list[dict]:
     """
-    Fetches all open leads assigned to our configured user, paginating until exhausted.
+    Fetches all open leads assigned to a Copper user, paginating until exhausted.
     Returns a list of raw Copper lead dicts.
+
+    The shared Copper API key can read the whole account, so we filter by
+    `assignee_ids` to pull only the leads connected to `copper_user_id`. When
+    omitted, falls back to the configured `settings.copper_user_id` (back-compat).
     """
-    if not settings.copper_user_id or not settings.copper_open_status_id:
+    assignee_id = copper_user_id or settings.copper_user_id
+    if not assignee_id or not settings.copper_open_status_id:
         raise RuntimeError(
-            "COPPER_USER_ID and COPPER_OPEN_STATUS_ID must be set in .env. "
+            "copper_user_id (or COPPER_USER_ID) and COPPER_OPEN_STATUS_ID must be set. "
             "Run: python scripts/bootstrap_copper.py"
         )
 
@@ -42,7 +47,7 @@ def fetch_open_leads_for_user() -> list[dict]:
             body = {
                 "page_size": PAGE_SIZE,
                 "page_number": page,
-                "assignee_ids": [settings.copper_user_id],
+                "assignee_ids": [assignee_id],
                 "status_ids": [settings.copper_open_status_id],
                 "sort_by": "date_created",
                 "sort_direction": "desc",
@@ -77,18 +82,31 @@ def fetch_lead_by_id(copper_id: str) -> Optional[dict]:
 
 
 def lookup_user_id(email: str) -> int:
-    """Look up the Copper user_id for a given email (one-time bootstrap)."""
+    """Look up the Copper user_id for a given email.
+
+    NOTE: Copper's `/users/search` IGNORES the `emails` filter — it returns the
+    full account user list regardless. So we must paginate and match the email
+    ourselves; taking `users[0]` would map every app user to the same (first)
+    Copper user. Raises if no exact match is found.
+    """
+    target = (email or "").strip().lower()
     with httpx.Client(timeout=30) as client:
-        response = client.post(
-            f"{COPPER_BASE}/users/search",
-            headers=_headers(),
-            json={"emails": [email], "page_size": 10},
-        )
-        response.raise_for_status()
-        users = response.json()
-        if not users:
-            raise RuntimeError(f"No Copper user found for email {email}")
-        return int(users[0]["id"])
+        page = 1
+        while True:
+            response = client.post(
+                f"{COPPER_BASE}/users/search",
+                headers=_headers(),
+                json={"page_size": PAGE_SIZE, "page_number": page},
+            )
+            response.raise_for_status()
+            users = response.json() or []
+            for u in users:
+                if str(u.get("email", "")).strip().lower() == target:
+                    return int(u["id"])
+            if len(users) < PAGE_SIZE:
+                break
+            page += 1
+    raise RuntimeError(f"No Copper user found for email {email}")
 
 
 def lookup_status_id_by_name(name: str) -> int:

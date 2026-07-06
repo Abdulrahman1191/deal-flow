@@ -33,6 +33,23 @@ def _verify_copper_hmac(body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+async def _owner_for_assignee(db: AsyncSession, raw_payload: dict) -> str:
+    """Map a Copper lead's assignee_id to the owning app user's email so
+    webhook-created leads are scoped to the right person. Falls back to the
+    configured account owner when the assignee isn't a known app user yet."""
+    p = raw_payload.get("payload", raw_payload)
+    assignee_id = p.get("assignee_id")
+    if assignee_id:
+        try:
+            r = await db.execute(select(User).where(User.copper_user_id == int(assignee_id)))
+            u = r.scalar_one_or_none()
+            if u:
+                return u.email
+        except (ValueError, TypeError):
+            pass
+    return settings.owner_email
+
+
 def _parse_copper_payload(payload: dict) -> dict:
     """
     Maps Copper CRM webhook payload to our Lead schema fields.
@@ -141,7 +158,7 @@ async def ingest_lead(
         if not lead:
             # Unknown locally — fall through to "new" logic via map_copper_lead
             lead_data = map_copper_lead(fresh)
-            lead = Lead(**lead_data)
+            lead = Lead(**lead_data, owner_email=await _owner_for_assignee(db, fresh))
             db.add(lead)
             await db.commit()
             await db.refresh(lead)
@@ -187,7 +204,7 @@ async def ingest_lead(
         if existing.scalar_one_or_none():
             return {"status": "duplicate", "copper_id": lead_data["copper_id"]}
 
-    lead = Lead(**lead_data)
+    lead = Lead(**lead_data, owner_email=await _owner_for_assignee(db, raw))
     db.add(lead)
     await db.commit()
     await db.refresh(lead)
@@ -195,6 +212,16 @@ async def ingest_lead(
     assess_lead_task.delay(str(lead.id))
 
     return {"lead_id": str(lead.id), "status": "queued"}
+
+
+@router.post("/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_my_leads(user: User = Depends(get_current_user)):
+    """Pull the current user's open-assigned Copper leads on demand (resolves +
+    caches their Copper user id on first call). The board calls this on load so a
+    new user's leads appear without waiting for the periodic beat sync."""
+    from app.tasks.sync_copper import sync_user_copper_leads_task
+    sync_user_copper_leads_task.delay(user.email)
+    return {"status": "queued"}
 
 
 @router.get("", response_model=PaginatedLeads)
@@ -207,9 +234,9 @@ async def list_leads(
     # (it groups all leads into YES/MAYBE/REJECT columns; there's no "load more").
     page_size: int = Query(default=20, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    query = select(Lead).options(selectinload(Lead.assessment))
+    query = select(Lead).options(selectinload(Lead.assessment)).where(Lead.owner_email == user.email)
     if status:
         query = query.where(Lead.status == status)
     else:
@@ -233,10 +260,12 @@ async def list_leads(
 async def get_lead(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Lead).options(selectinload(Lead.assessment)).where(Lead.id == lead_id)
+        select(Lead).options(selectinload(Lead.assessment)).where(
+            Lead.id == lead_id, Lead.owner_email == user.email
+        )
     )
     lead = result.scalar_one_or_none()
     if not lead:
@@ -249,9 +278,9 @@ async def update_lead(
     lead_id: str,
     body: LeadUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -266,9 +295,9 @@ async def update_lead(
 async def delete_lead(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -293,7 +322,7 @@ async def delete_lead(
 @router.get("/archive/list")
 async def list_archive(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """
     Returns archived leads grouped by the action that archived them.
@@ -302,7 +331,7 @@ async def list_archive(
     result = await db.execute(
         select(Lead)
         .options(selectinload(Lead.assessment))
-        .where(Lead.status == "archived")
+        .where(Lead.status == "archived", Lead.owner_email == user.email)
         .order_by(Lead.updated_at.desc())
     )
     leads = result.scalars().all()
@@ -355,13 +384,13 @@ async def list_archive(
 async def archive_no_reply(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """
     Archive a lead without sending any email. Sets app status=archived AND moves
     the Copper Lead to Unqualified so it disappears from 'My Open Leads'.
     """
-    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -399,13 +428,13 @@ async def archive_no_reply(
 async def find_linkedin(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Re-run LinkedIn discovery for one lead. Tries website-scrape first,
     then the Tavily + LLM verifier. Persists the result on the Lead row."""
     from app.services import research
 
-    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -435,9 +464,14 @@ async def find_linkedin(
 async def list_lead_events(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Returns the event timeline for a single lead, oldest first."""
+    owns = await db.execute(
+        select(Lead.id).where(Lead.id == lead_id, Lead.owner_email == user.email)
+    )
+    if not owns.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Lead not found")
     result = await db.execute(
         select(LeadEvent)
         .where(LeadEvent.lead_id == lead_id)
@@ -459,7 +493,7 @@ async def list_lead_events(
 async def get_pitch_deck(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Redirects to the lead's pitch deck in the shared Google Drive folder.
 
@@ -473,7 +507,7 @@ async def get_pitch_deck(
     """
     from fastapi.responses import RedirectResponse
 
-    result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")

@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # value for backwards-compat with the Lightsail deployment during cutover.
     owner_email: str = "abdulrahman@raed.vc"
     associate_name: str = "Abdulrahman"
+    # Comma-separated allow-list of emails with ADMIN access (Portfolio +
+    # Feedback + Overrides tabs). Empty → just `owner_email`. NOTE: per-user
+    # LEAD visibility is independent of this — every user always sees only their
+    # own leads regardless of admin status.
+    admin_emails: str = ""
 
     # --- Misc behavioural flags ---
     # Skip the periodic Copper sync task. Useful when bulk-pruning leads or
@@ -81,6 +86,12 @@ class Settings(BaseSettings):
 
     # --- UptimeRobot (optional; vestigial, kept to avoid pydantic strict mode) ---
     uptimerobot_main_api_key: str = ""
+
+    def admin_email_set(self) -> set[str]:
+        """Lowercased set of admin emails. Defaults to just `owner_email` when
+        ADMIN_EMAILS is unset — so admin is never accidentally granted to all."""
+        raw = [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
+        return set(raw) if raw else {self.owner_email.strip().lower()}
 
     class Config:
         env_file = ".env"

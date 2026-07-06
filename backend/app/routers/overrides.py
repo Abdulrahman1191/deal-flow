@@ -18,12 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.override import AssessmentOverride
 from app.models.user import User
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, is_owner
 
 router = APIRouter(prefix="/overrides", tags=["overrides"])
-
-from app.config import settings as _settings
-OWNER_EMAIL = _settings.owner_email
 
 
 class OverrideOut(BaseModel):
@@ -48,7 +45,7 @@ async def list_overrides(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if user.email != OWNER_EMAIL:
+    if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     query = select(AssessmentOverride).order_by(AssessmentOverride.created_at.desc()).limit(limit)
@@ -82,7 +79,7 @@ async def override_stats(
     user: User = Depends(get_current_user),
 ):
     """Aggregate metrics for the LLM-tuning loop. Cheap query — uses indexes."""
-    if user.email != OWNER_EMAIL:
+    if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     from sqlalchemy import text

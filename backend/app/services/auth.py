@@ -91,18 +91,15 @@ async def get_current_user(
 
 
 def is_owner(user: User) -> bool:
-    """True if this user has owner-level access (Portfolio + Feedback admin).
+    """True if this user has ADMIN access — Portfolio + Feedback + Overrides tabs.
 
-    Resolution order:
-      1. settings.owner_email (preferred — env-driven)
-      2. legacy OWNER_EMAIL strings in the routers (kept as a fallback so
-         we don't have to rip them out in this migration)
+    Restricted to the ADMIN_EMAILS allow-list (defaults to just `owner_email`).
+    This gates the ADMIN tabs ONLY. Per-user LEAD visibility is enforced
+    separately — leads are always scoped to `owner_email == user.email` — so a
+    non-admin teammate still sees their own leads; they just don't get the admin
+    tabs. Add teammates to ADMIN_EMAILS to grant them admin.
     """
-    owner = (getattr(settings, "owner_email", "") or "").strip().lower()
-    if not owner:
-        # Fallback for backwards-compat with hardcoded router checks.
-        return False
-    return user.email.lower() == owner
+    return user.email.strip().lower() in settings.admin_email_set()
 
 
 def verify_webhook_signature(payload: bytes, signature: str) -> bool:
