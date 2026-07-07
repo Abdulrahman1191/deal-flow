@@ -50,5 +50,5 @@ jobs:
             6. If no defects: wait for CI checks to conclude if still running, and if
                green add the label `ready-for-qa`. Post no other comments.
           claude_args: |
-            --model claude-fable-5
+            --model claude-sonnet-5
             --max-turns 30

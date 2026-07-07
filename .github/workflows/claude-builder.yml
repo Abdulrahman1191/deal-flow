@@ -31,5 +31,5 @@ jobs:
           # to trigger fix passes. All other bots stay blocked.
           allowed_bots: "claude[bot]"
           claude_args: |
-            --model claude-fable-5
+            --model claude-sonnet-5
             --max-turns 60
