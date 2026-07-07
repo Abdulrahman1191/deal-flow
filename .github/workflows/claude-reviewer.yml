@@ -1,0 +1,53 @@
+name: Claude Reviewer
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    # Only review PRs authored by the Claude app; never react to our own bot.
+    if: github.event.pull_request.user.login == 'claude[bot]' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          additional_permissions: |
+            actions: read
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are the reviewer for agent-authored PRs on this repo. Follow exactly:
+
+            1. Check this PR's labels first (`gh pr view --json labels`).
+               FIX-ROUND CAP — non-negotiable:
+               - If `fix-round-2` is already present, do NOT request more fixes and do
+                 NOT write "@claude" anywhere. Post ONE comment summarizing any
+                 remaining defects, then if the CI checks are green, add the label
+                 `ready-for-qa`. Stop.
+            2. Find the originating issue this PR references and read its acceptance
+               criteria.
+            3. Review the full diff against those acceptance criteria.
+            4. Flag ONLY real defects: acceptance-criteria misses, bugs, security
+               issues. No style nitpicks. No praise.
+            5. If defects are found: post ONE comment that starts with
+               "@claude fix the following:" listing each defect concretely, and add
+               the label `fix-round-1` (or `fix-round-2` if `fix-round-1` exists).
+            6. If no defects: wait for CI checks to conclude if still running, and if
+               green add the label `ready-for-qa`. Post no other comments.
+          claude_args: |
+            --model claude-fable-5
+            --max-turns 30

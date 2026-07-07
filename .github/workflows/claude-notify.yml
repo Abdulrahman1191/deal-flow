@@ -1,0 +1,69 @@
+name: Claude Notify
+
+# Exactly two Slack pings, both label-driven:
+#   1. deliverable-ready — reviewer applied `ready-for-qa` to an agent PR
+#   2. blocked           — builder applied `blocked` to an issue
+# Silence between spec and deliverable is the design. No other notifications.
+
+on:
+  pull_request:
+    types: [labeled]
+  issues:
+    types: [labeled]
+
+jobs:
+  deliverable-ready:
+    if: github.event_name == 'pull_request' && github.event.label.name == 'ready-for-qa'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Send Slack ping
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Issue link: first #N reference in the PR body
+          ISSUE_NUM=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body -q .body | grep -oE '#[0-9]+' | head -1 | tr -d '#') || true
+          ISSUE_LINE=""
+          if [ -n "$ISSUE_NUM" ]; then
+            ISSUE_LINE="\nIssue: https://github.com/$REPO/issues/$ISSUE_NUM"
+          fi
+          # Preview URL: first deploy-preview link found in PR comments (Vercel or Raed platform)
+          PREVIEW=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" -q '.[].body' 2>/dev/null | grep -oE 'https://[a-zA-Z0-9./_-]*(vercel\.app|apps\.raed\.vc)[a-zA-Z0-9./_-]*' | head -1) || true
+          PREVIEW_LINE=""
+          if [ -n "$PREVIEW" ]; then
+            PREVIEW_LINE="\nPreview: $PREVIEW"
+          fi
+          TEXT=":white_check_mark: *Deliverable ready:* $PR_TITLE\nPR: $PR_URL$ISSUE_LINE$PREVIEW_LINE"
+          jq -n --arg text "$(printf '%b' "$TEXT")" '{text: $text}' | curl -sf -X POST -H 'Content-type: application/json' -d @- "$SLACK_WEBHOOK_URL"
+
+  blocked:
+    if: github.event_name == 'issues' && github.event.label.name == 'blocked'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: read
+    steps:
+      - name: Send Slack ping
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # The builder's question = last claude[bot] comment on the issue
+          QUESTION=$(gh api "repos/$REPO/issues/$ISSUE_NUMBER/comments" -q '[.[] | select(.user.login == "claude[bot]")] | last | .body' 2>/dev/null | head -c 500) || true
+          if [ -z "$QUESTION" ] || [ "$QUESTION" = "null" ]; then
+            QUESTION="(see issue for details)"
+          fi
+          TEXT=":no_entry: *Blocked:* $ISSUE_TITLE\nIssue: $ISSUE_URL\nQuestion: $QUESTION"
+          jq -n --arg text "$(printf '%b' "$TEXT")" '{text: $text}' | curl -sf -X POST -H 'Content-type: application/json' -d @- "$SLACK_WEBHOOK_URL"
