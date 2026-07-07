@@ -1,0 +1,40 @@
+name: Claude Builder
+
+# Builds from a spec issue (or a fix request) when @claude is tagged, on a fresh
+# branch, and opens a PR referencing the issue. Fix requests come from the
+# reviewer commenting "@claude ..." on the PR (a PR comment is an issue_comment).
+on:
+  issues:
+    types: [opened, assigned]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+# One run per issue/PR conversation; a newer trigger cancels an in-flight one.
+concurrency:
+  group: claude-builder-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@claude')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90          # hard cap — a stuck run can never burn overnight
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # v1: model + max-turns are passed via claude_args (not separate inputs).
+          claude_args: "--model claude-fable-5 --max-turns 60"

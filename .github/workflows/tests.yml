@@ -1,0 +1,38 @@
+name: Tests
+
+# Test gate for the build loop: a PR isn't "ready" until this is green.
+# NOTE (developer): verify both jobs pass in CI and adjust env/deps as needed,
+# THEN mark this workflow a required status check in branch protection.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r backend/requirements.txt
+      - name: pytest
+        working-directory: backend
+        # Dummy DATABASE_URL so app.config (which requires it) imports; the unit
+        # tests (scoring, pitch-deck parsing) don't hit a real DB.
+        env:
+          DATABASE_URL: "postgresql+asyncpg://x:x@localhost/x"
+        run: python -m pytest -q
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

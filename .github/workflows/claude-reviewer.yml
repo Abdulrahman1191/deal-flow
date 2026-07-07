@@ -1,0 +1,56 @@
+name: Claude Reviewer
+
+# Reviews PRs opened by the Claude builder against the originating issue's
+# acceptance criteria. Requests fixes (capped at 2 rounds via labels), then
+# marks the PR `ready-for-qa` (which triggers the Slack "deliverable ready" ping).
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: claude-reviewer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Only review agent-authored PRs, never a human's, never a draft.
+    if: >
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.user.login, 'claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--model claude-fable-5 --max-turns 40"
+          prompt: |
+            You are the code REVIEWER for pull request #${{ github.event.pull_request.number }}
+            in ${{ github.repository }}. It was opened by the automated builder from a spec issue.
+
+            1. Find the originating issue (referenced in the PR body, e.g. "Closes #N")
+               and read its "Acceptance criteria" and "Out of scope" sections.
+            2. Review the diff ONLY for: acceptance-criteria misses, real bugs, and
+               security issues. Do NOT comment on style or formatting. No praise.
+            3. Read the PR's current labels to find `fix-round-1` / `fix-round-2`.
+
+            Then act:
+            - If you find NO real defects: add the label `ready-for-qa`, post a single
+              one-line "Review passed — ready for QA" comment, and stop.
+            - If you find defects AND the PR does NOT already have `fix-round-2`:
+                * Add the next round label (`fix-round-1` if neither exists, else `fix-round-2`).
+                * Post ONE comment that begins with "@claude" and lists the specific
+                  defects to fix — concise and actionable. Then stop; the builder will fix.
+            - If you find defects AND the PR ALREADY has `fix-round-2` (rounds exhausted):
+                * Do NOT request another fix. Post one comment summarizing what still
+                  remains, add the label `ready-for-qa` (so a human decides), and stop.
+
+            Never approve or merge. Keep every comment minimal.

@@ -1,0 +1,38 @@
+name: Slack Notify
+
+# The ONLY two notifications, both label-driven so they're reliable:
+#   1. Deliverable ready — reviewer added `ready-for-qa` to a PR.
+#   2. Blocked          — builder added `blocked` to an issue (it asked a question).
+# Silence between spec and deliverable is the design.
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+
+jobs:
+  notify:
+    if: >
+      (github.event_name == 'issues' && github.event.label.name == 'blocked') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'ready-for-qa')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack message
+        # Untrusted values (titles) are passed via env, never interpolated into
+        # the shell, to avoid script injection.
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          KIND: ${{ github.event_name }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$KIND" = "issues" ]; then
+            TEXT="🚧 Blocked — needs your input: ${ISSUE_TITLE} — ${ISSUE_URL} (see the issue for the question)"
+          else
+            TEXT="✅ Deliverable ready for QA — ${PR_TITLE} (PR #${PR_NUM}) — ${PR_URL} — the preview link is on the PR"
+          fi
+          payload=$(jq -n --arg t "$TEXT" '{text: $t}')
+          curl -sf -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
