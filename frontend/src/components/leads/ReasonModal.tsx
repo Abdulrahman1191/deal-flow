@@ -44,9 +44,9 @@ const TAGS_BY_BUCKET: Record<Bucket, string[]> = {
 };
 
 const BUCKET_TONE: Record<Bucket, string> = {
-  YES: "text-green-400 border-green-700",
-  MAYBE: "text-yellow-400 border-yellow-700",
-  REJECT: "text-red-400 border-red-700",
+  YES: "text-success border-success",
+  MAYBE: "text-warning border-warning",
+  REJECT: "text-error border-error",
 };
 
 const BUCKET_LABEL: Record<Bucket, string> = {
@@ -76,24 +76,24 @@ export default function ReasonModal({
     });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className={`bg-gray-900 border ${BUCKET_TONE[bucket]} rounded-2xl w-full max-w-md shadow-2xl`}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className={`bg-card border ${BUCKET_TONE[bucket]} rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[90vh] animate-scale-in`}>
         {/* Header */}
-        <div className="px-5 py-4 border-b border-gray-800">
-          <p className="text-white font-semibold">{companyName}</p>
+        <div className="px-5 py-4 border-b border-border">
+          <p className="text-foreground font-semibold">{companyName}</p>
           <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${BUCKET_TONE[bucket]}`}>
             {BUCKET_LABEL[bucket]}
           </p>
-          <p className="text-[11px] text-gray-500 mt-2">
+          <p className="text-[11px] text-muted-foreground mt-2">
             Why this bucket? Helps train the AI to match your judgement.
-            <span className="text-gray-600"> Optional — skip anytime.</span>
+            <span className="text-muted-foreground"> Optional — skip anytime.</span>
           </p>
         </div>
 
         {/* Tags */}
-        <div className="px-5 py-4 space-y-3">
+        <div className="px-5 py-4 space-y-3 overflow-y-auto">
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-gray-500 block mb-2">
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">
               Quick reasons (tap any that apply)
             </label>
             <div className="flex flex-wrap gap-2">
@@ -106,11 +106,11 @@ export default function ReasonModal({
                     className={`text-xs px-3 py-1.5 rounded-full transition-colors border ${
                       isOn
                         ? bucket === "YES"
-                          ? "bg-green-500/20 text-green-200 border-green-600"
+                          ? "bg-success/20 text-success border-success"
                           : bucket === "REJECT"
-                            ? "bg-red-500/20 text-red-200 border-red-600"
-                            : "bg-yellow-500/20 text-yellow-200 border-yellow-600"
-                        : "bg-gray-800/50 text-gray-400 border-gray-700 hover:text-gray-200"
+                            ? "bg-error/20 text-error border-error"
+                            : "bg-warning/20 text-warning border-warning"
+                        : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
                     }`}
                   >
                     {tag}
@@ -121,7 +121,7 @@ export default function ReasonModal({
           </div>
 
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               Optional note
             </label>
             <textarea
@@ -129,23 +129,23 @@ export default function ReasonModal({
               onChange={(e) => setNote(e.target.value)}
               rows={3}
               placeholder="Anything specific to remember about this lead…"
-              className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder:text-gray-700 focus:outline-none focus:border-gray-600 resize-none"
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-border resize-none"
             />
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-4 border-t border-gray-800">
+        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
           <button
             onClick={onCancel}
-            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             Cancel
           </button>
           <div className="flex items-center gap-3">
             <button
               onClick={onSkip}
-              className="text-xs text-gray-400 hover:text-gray-200 transition-colors px-3 py-2"
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-2"
             >
               Skip
             </button>
@@ -153,7 +153,7 @@ export default function ReasonModal({
               onClick={() =>
                 onSubmit({ reason_tags: Array.from(selected), reason: note })
               }
-              className="px-5 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+              className="px-5 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
             >
               Save
             </button>

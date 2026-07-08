@@ -4,6 +4,10 @@ import type { Lead, PaginatedLeads } from "../types/lead";
 export const fetchLeads = (params?: Record<string, unknown>) =>
   client.get<PaginatedLeads>("/leads", { params }).then((r) => r.data);
 
+/** Pull the current user's Copper-assigned leads on demand (queues a sync). */
+export const syncMyLeads = () =>
+  client.post<{ status: string }>("/leads/sync").then((r) => r.data);
+
 export const fetchLead = (id: string) =>
   client.get<Lead>(`/leads/${id}`).then((r) => r.data);
 

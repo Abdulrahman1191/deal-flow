@@ -14,19 +14,19 @@ import PortfolioCompanyDetailModal from "../components/portfolio/PortfolioCompan
 import AddCompanyModal from "../components/portfolio/AddCompanyModal";
 
 const DECISION_COLOR: Record<Decision, string> = {
-  FUNDED: "text-green-300 bg-green-500/10",
-  PASSED: "text-red-300 bg-red-500/10",
-  NOT_SEEN: "text-gray-300 bg-gray-700/30",
+  FUNDED: "text-success bg-success/10",
+  PASSED: "text-error bg-error/10",
+  NOT_SEEN: "text-foreground bg-muted/30",
 };
 
 const STATUS_COLOR: Record<OutcomeStatus, string> = {
-  exited: "text-emerald-300 bg-emerald-500/10",
-  growing: "text-green-300 bg-green-500/10",
-  stalled: "text-yellow-300 bg-yellow-500/10",
-  zombie: "text-orange-300 bg-orange-500/10",
-  failed: "text-red-300 bg-red-500/10",
-  acqui_hire: "text-purple-300 bg-purple-500/10",
-  too_early: "text-blue-300 bg-blue-500/10",
+  exited: "text-success bg-success/10",
+  growing: "text-success bg-success/10",
+  stalled: "text-warning bg-warning/10",
+  zombie: "text-warning bg-warning/10",
+  failed: "text-error bg-error/10",
+  acqui_hire: "text-primary bg-primary/10",
+  too_early: "text-info bg-primary/10",
 };
 
 export default function PortfolioPage() {
@@ -53,24 +53,24 @@ export default function PortfolioPage() {
   if (isError) {
     const status = (error as { response?: { status?: number } })?.response?.status;
     if (status === 403) {
-      return <p className="p-6 text-sm text-gray-500">Portfolio view is owner-only.</p>;
+      return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Portfolio view is owner-only.</p>;
     }
-    return <p className="p-6 text-sm text-red-400">Failed to load portfolio.</p>;
+    return <p className="p-4 sm:p-6 text-sm text-error">Failed to load portfolio.</p>;
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
       {/* Header + stats */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-white">Portfolio Intelligence</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-xl font-semibold text-foreground">Portfolio Intelligence</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             Companies we've funded, passed on, or learned from. Outcomes + signals feed the AI.
           </p>
         </div>
         <button
           onClick={() => setShowAdd(true)}
-          className="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+          className="px-4 py-2 text-sm rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
         >
           + Add company
         </button>
@@ -116,18 +116,18 @@ export default function PortfolioPage() {
 
       {/* Table */}
       {isLoading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-muted-foreground">Loading…</p>
       ) : companies.length === 0 ? (
-        <div className="border border-dashed border-gray-800 rounded-xl p-12 text-center">
-          <p className="text-gray-400">No companies yet.</p>
-          <p className="text-xs text-gray-600 mt-2">
+        <div className="border border-dashed border-border rounded-xl p-12 text-center">
+          <p className="text-muted-foreground">No companies yet.</p>
+          <p className="text-xs text-muted-foreground mt-2">
             Add your first one with the button above. Start with 5 you remember well.
           </p>
         </div>
       ) : (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-950 text-xs uppercase tracking-wider text-gray-500">
+        <div className="bg-card border border-border rounded-xl overflow-x-auto">
+          <table className="w-full min-w-[680px] text-sm">
+            <thead className="bg-background text-xs uppercase tracking-wider text-muted-foreground">
               <tr>
                 <th className="text-left px-4 py-3 font-medium">Company</th>
                 <th className="text-left px-4 py-3 font-medium">Sector</th>
@@ -175,21 +175,21 @@ function StatCard({
   onClick?: () => void;
 }) {
   const toneClass = {
-    green: "text-green-300",
-    red: "text-red-300",
-    gray: "text-gray-300",
-    emerald: "text-emerald-300",
+    green: "text-success",
+    red: "text-error",
+    gray: "text-foreground",
+    emerald: "text-success",
   }[tone ?? "gray"];
   return (
     <button
       onClick={onClick}
-      className={`bg-gray-900 border ${
-        active ? "border-blue-500" : "border-gray-800"
-      } rounded-xl px-4 py-3 text-left hover:border-gray-700 transition-colors`}
+      className={`bg-card border ${
+        active ? "border-primary" : "border-border"
+      } rounded-xl px-4 py-3 text-left hover:border-border transition-colors`}
       disabled={!onClick}
     >
-      <p className="text-[10px] uppercase tracking-wider text-gray-500">{label}</p>
-      <p className={`text-xl font-semibold mt-1 ${tone ? toneClass : "text-white"}`}>
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className={`text-xl font-semibold mt-1 ${tone ? toneClass : "text-foreground"}`}>
         {value}
       </p>
     </button>
@@ -200,15 +200,15 @@ function CompanyRow({ c, onClick }: { c: PortfolioCompany; onClick: () => void }
   return (
     <tr
       onClick={onClick}
-      className="border-t border-gray-800 hover:bg-gray-850 cursor-pointer transition-colors"
+      className="border-t border-border hover:bg-muted cursor-pointer transition-colors"
     >
       <td className="px-4 py-3">
         <div>
-          <p className="font-medium text-white">{c.name}</p>
-          {c.region && <p className="text-[11px] text-gray-500 mt-0.5">{c.region}</p>}
+          <p className="font-medium text-foreground">{c.name}</p>
+          {c.region && <p className="text-[11px] text-muted-foreground mt-0.5">{c.region}</p>}
         </div>
       </td>
-      <td className="px-4 py-3 text-gray-300">{c.sector ?? "—"}</td>
+      <td className="px-4 py-3 text-foreground">{c.sector ?? "—"}</td>
       <td className="px-4 py-3">
         <span
           className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${DECISION_COLOR[c.our_decision]}`}
@@ -223,8 +223,8 @@ function CompanyRow({ c, onClick }: { c: PortfolioCompany; onClick: () => void }
           {c.current_status.replace("_", " ")}
         </span>
       </td>
-      <td className="px-4 py-3 text-gray-400">{c.signal_count}</td>
-      <td className="px-4 py-3 text-gray-500 text-xs">
+      <td className="px-4 py-3 text-muted-foreground">{c.signal_count}</td>
+      <td className="px-4 py-3 text-muted-foreground text-xs">
         {c.last_reviewed_at
           ? new Date(c.last_reviewed_at).toLocaleDateString("en-GB")
           : "—"}

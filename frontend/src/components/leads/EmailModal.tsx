@@ -65,7 +65,7 @@ export default function EmailModal({ lead, onClose }: Props) {
   });
 
   const effectiveBucket = assessment?.user_override ?? assessment?.bucket;
-  const bucketColor = effectiveBucket === "YES" ? "text-green-400" : "text-red-400";
+  const bucketColor = effectiveBucket === "YES" ? "text-success" : "text-error";
   const headerLabel = (() => {
     const dt = assessment?.draft_type;
     if (dt === "meeting_request") return "Meeting Request";
@@ -76,17 +76,17 @@ export default function EmailModal({ lead, onClose }: Props) {
   const generating = regenMutation.isPending;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh] animate-scale-in">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
-            <p className="text-white font-semibold">{lead.company_name}</p>
+            <p className="text-foreground font-semibold">{lead.company_name}</p>
             <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${bucketColor}`}>
               {headerLabel}
             </p>
             {generating && (
-              <p className="text-[10px] text-blue-400 mt-1 animate-pulse">
+              <p className="text-[10px] text-info mt-1 animate-pulse">
                 AI is writing the draft…
               </p>
             )}
@@ -95,14 +95,14 @@ export default function EmailModal({ lead, onClose }: Props) {
             <button
               onClick={() => regenMutation.mutate()}
               disabled={generating || effectiveBucket === "MAYBE"}
-              className="text-xs text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
+              className="text-xs text-info hover:text-info transition-colors disabled:opacity-50"
               title="Ask the AI to rewrite this draft"
             >
               {generating ? "…" : "Regenerate ↻"}
             </button>
             <button
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-300 text-lg leading-none"
+              className="text-muted-foreground hover:text-foreground text-lg leading-none"
             >
               ✕
             </button>
@@ -112,7 +112,7 @@ export default function EmailModal({ lead, onClose }: Props) {
         {/* Editable email */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               Subject
             </label>
             <input
@@ -120,14 +120,14 @@ export default function EmailModal({ lead, onClose }: Props) {
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
               disabled={generating}
-              className={`w-full bg-gray-950 border rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-gray-600 disabled:opacity-50 ${!subject.trim() && !generating ? "border-red-800" : "border-gray-800"}`}
+              className={`w-full bg-background border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border disabled:opacity-50 ${!subject.trim() && !generating ? "border-error" : "border-border"}`}
             />
             {!subject.trim() && !generating && (
-              <p className="text-[10px] text-red-400 mt-1">Subject is required</p>
+              <p className="text-[10px] text-error mt-1">Subject is required</p>
             )}
           </div>
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               Body
             </label>
             <textarea
@@ -135,24 +135,24 @@ export default function EmailModal({ lead, onClose }: Props) {
               onChange={(e) => setBody(e.target.value)}
               disabled={generating}
               rows={12}
-              className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-gray-600 resize-none font-mono leading-relaxed disabled:opacity-50"
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border resize-none font-mono leading-relaxed disabled:opacity-50"
             />
           </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-error">{error}</p>}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-4 border-t border-gray-800">
+        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
           <button
             onClick={onClose}
-            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={() => sendMutation.mutate()}
             disabled={sendMutation.isPending || generating || !body.trim() || !subject.trim()}
-            className="px-5 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-5 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {sendMutation.isPending ? "Sending…" : "Send Email"}
           </button>

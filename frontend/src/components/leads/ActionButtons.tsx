@@ -14,7 +14,7 @@ export default function ActionButtons({ lead, onApprove, onReassess, reassessing
 
   if (sent) {
     return (
-      <span className="text-xs text-gray-500">
+      <span className="text-xs text-muted-foreground">
         Sent {new Date(assessment!.sent_at!).toLocaleDateString("en-GB")}
       </span>
     );
@@ -22,7 +22,7 @@ export default function ActionButtons({ lead, onApprove, onReassess, reassessing
 
   if (approved) {
     return (
-      <span className="text-xs text-green-600 font-medium">
+      <span className="text-xs text-success font-medium">
         Approved — in Send Queue
       </span>
     );
@@ -31,11 +31,11 @@ export default function ActionButtons({ lead, onApprove, onReassess, reassessing
   const effectiveBucket = assessment?.user_override ?? assessment?.bucket;
 
   return (
-    <div className="flex gap-2 flex-wrap">
+    <div className="flex gap-2 flex-wrap items-center">
       {effectiveBucket === "REJECT" && (
         <button
           onClick={onApprove}
-          className="px-3 py-1.5 text-xs rounded-lg bg-red-700 hover:bg-red-600 text-white transition-colors"
+          className="px-3 py-1.5 text-xs rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
         >
           Approve Email
         </button>
@@ -43,18 +43,18 @@ export default function ActionButtons({ lead, onApprove, onReassess, reassessing
       {effectiveBucket === "YES" && (
         <button
           onClick={onApprove}
-          className="px-3 py-1.5 text-xs rounded-lg bg-green-700 hover:bg-green-600 text-white transition-colors"
+          className="px-3 py-1.5 text-xs rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
         >
           Approve Meeting Request
         </button>
       )}
       {effectiveBucket === "MAYBE" && (
-        <span className="text-xs text-yellow-400 py-1.5">Flagged for review</span>
+        <span className="text-xs text-warning py-1.5">Flagged for review</span>
       )}
       <button
         onClick={onReassess}
         disabled={reassessing}
-        className="px-3 py-1.5 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="px-3 py-1.5 text-xs rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {reassessing ? "Reassessing…" : "Reassess"}
       </button>

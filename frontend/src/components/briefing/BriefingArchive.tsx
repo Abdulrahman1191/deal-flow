@@ -12,15 +12,15 @@ export default function BriefingArchive({ onSelect, selectedDate }: Props) {
 
   return (
     <div className="space-y-1">
-      <p className="text-xs text-gray-600 mb-2 uppercase tracking-wider">Archive</p>
+      <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Archive</p>
       {data?.items.map((b) => (
         <button
           key={b.id}
           onClick={() => onSelect(b.date)}
           className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
             selectedDate === b.date
-              ? "bg-gray-800 text-white"
-              : "text-gray-400 hover:bg-gray-800/50 hover:text-gray-200"
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
           }`}
         >
           {format(new Date(b.date), "dd/MM/yyyy")}

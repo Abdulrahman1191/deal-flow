@@ -9,18 +9,25 @@ export default function StatsRow({ leads: all }: Props) {
     all.filter((l) => (l.assessment?.user_override ?? l.assessment?.bucket) === b).length;
 
   const stats = [
-    { label: "Total Inbound", value: all.length, color: "text-purple-400" },
-    { label: "Yes — Meet", value: bucket("YES"), color: "text-green-400" },
-    { label: "Maybe — Review", value: bucket("MAYBE"), color: "text-yellow-400" },
-    { label: "Auto-Reject", value: bucket("REJECT"), color: "text-red-400" },
+    { label: "Total Inbound", value: all.length, color: "text-foreground", dot: "bg-primary" },
+    { label: "Yes — Meet", value: bucket("YES"), color: "text-success", dot: "bg-success" },
+    { label: "Maybe — Review", value: bucket("MAYBE"), color: "text-warning", dot: "bg-warning" },
+    { label: "Auto-Reject", value: bucket("REJECT"), color: "text-error", dot: "bg-error" },
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      {stats.map((s) => (
-        <div key={s.label} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">{s.label}</p>
-          <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+      {stats.map((s, i) => (
+        <div
+          key={s.label}
+          style={{ animationDelay: `${i * 50}ms` }}
+          className="bg-card border border-border rounded-2xl p-4 sm:p-5 shadow-sm hover:shadow-md transition-shadow animate-fade-in-up"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`h-2 w-2 rounded-full ${s.dot}`} />
+            <p className="text-xs font-medium text-muted-foreground">{s.label}</p>
+          </div>
+          <p className={`text-3xl font-semibold tracking-tight ${s.color}`}>{s.value}</p>
         </div>
       ))}
     </div>
