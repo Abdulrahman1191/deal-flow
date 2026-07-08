@@ -34,6 +34,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         with:
           claude_code_oauth_token: ${{ steps.trim.outputs.token }}
+          # Builder's fix-pushes (claude[bot]) must be able to trigger re-review
+          allowed_bots: "claude[bot]"
           additional_permissions: |
             actions: read
           prompt: |
