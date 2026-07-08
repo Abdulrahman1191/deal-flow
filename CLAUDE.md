@@ -36,6 +36,9 @@ https://deal-flow.apps.raed.vc (Raed apps platform — auth via platform proxy,
    mock in place of the real thing.
 4. **One PR per issue**, on a fresh branch, PR body references the issue
    (`Closes #N`) and states how each acceptance criterion is met.
+   **Open the pull request yourself** using your GitHub tools after pushing the
+   branch — do NOT just post a "Create PR" link. The PR must be authored by
+   claude[bot] so the reviewer workflow triggers.
 5. **Never write `@claude` in your own comments** (it re-triggers the builder).
    The only exception: the reviewer workflow's single fix-instruction comment.
 6. Respect the issue's **Out of scope** section literally.
