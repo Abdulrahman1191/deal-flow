@@ -5,7 +5,6 @@ interface Props {
   aiBucket: string;
   rating: "up" | "down";
   onSubmit: (data: { reason_tags: string[]; reason: string }) => void;
-  onSkip: () => void;
   onCancel: () => void;
 }
 
@@ -35,7 +34,6 @@ export default function FeedbackModal({
   aiBucket,
   rating,
   onSubmit,
-  onSkip,
   onCancel,
 }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -44,6 +42,7 @@ export default function FeedbackModal({
   const isUp = rating === "up";
   const tags = isUp ? TAGS_UP : TAGS_DOWN;
   const accent = isUp ? "green" : "orange";
+  const hasFeedback = selected.size > 0 || note.trim().length > 0;
 
   const toggle = (tag: string) =>
     setSelected((prev) => {
@@ -66,7 +65,6 @@ export default function FeedbackModal({
           </p>
           <p className="text-[11px] text-muted-foreground mt-2">
             Your feedback trains the AI to match your judgement.
-            <span className="text-muted-foreground"> Optional — skip anytime.</span>
             {!isUp && (
               <>
                 <br />
@@ -127,17 +125,17 @@ export default function FeedbackModal({
           >
             Cancel
           </button>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onSkip}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-2"
-            >
-              Skip
-            </button>
+          <div className="flex items-center gap-2">
+            {!hasFeedback && (
+              <span className="text-[11px] text-muted-foreground">Pick a tag or add a note</span>
+            )}
             <button
               onClick={() => onSubmit({ reason_tags: Array.from(selected), reason: note })}
+              disabled={!hasFeedback}
               className={`px-5 py-2 text-sm font-medium rounded-lg text-white transition-colors ${
-                "bg-primary hover:bg-primary/90"
+                hasFeedback
+                  ? "bg-primary hover:bg-primary/90"
+                  : "bg-primary/40 cursor-not-allowed"
               }`}
             >
               Submit feedback

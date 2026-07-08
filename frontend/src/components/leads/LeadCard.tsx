@@ -395,10 +395,6 @@ export default function LeadCard({ lead, index = 0 }: Props) {
             rateMutation.mutate({ rating: showFeedback, reasonData });
             setShowFeedback(null);
           }}
-          onSkip={() => {
-            rateMutation.mutate({ rating: showFeedback });
-            setShowFeedback(null);
-          }}
           onCancel={() => setShowFeedback(null)}
         />
       )}
