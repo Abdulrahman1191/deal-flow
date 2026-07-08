@@ -37,6 +37,9 @@ class AssessmentOverride(Base):
 
     human_bucket: Mapped[str] = mapped_column(String(8), nullable=False)
     trigger: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Email of the user who performed the action (rate/override/approve/skip).
+    # Nullable because rows captured before this column existed have no value.
+    acted_by_email: Mapped[Optional[str]] = mapped_column(String(255))
 
     research_snap: Mapped[Optional[Any]] = mapped_column(JSONB)
     deck_excerpt: Mapped[Optional[str]] = mapped_column(Text)

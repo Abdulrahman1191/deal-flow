@@ -453,7 +453,10 @@ async def archive_no_reply(
     )
     card = card_result.scalar_one_or_none()
     if card:
-        await capture_override(db, lead=lead, card=card, human_bucket="REJECT", trigger="skip")
+        await capture_override(
+            db, lead=lead, card=card, human_bucket="REJECT", trigger="skip",
+            acted_by_email=user.email,
+        )
 
     return {"status": "archived", "outcome": "no_reply"}
 

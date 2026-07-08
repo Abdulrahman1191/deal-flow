@@ -42,6 +42,7 @@ async def capture_override(
     reason_tags: list[str] | None = None,
     reason: str | None = None,
     ai_bucket: str | None = None,
+    acted_by_email: str | None = None,
 ) -> None:
     """Snapshot the current (AI call, human decision) pair.
 
@@ -73,6 +74,7 @@ async def capture_override(
             deck_excerpt=(lead.pitch_deck_text or "")[:_DECK_EXCERPT_CAP] or None,
             human_reason_tags=reason_tags or None,
             human_reason=(reason or "").strip() or None,
+            acted_by_email=acted_by_email,
         )
         db.add(row)
         await db.commit()
