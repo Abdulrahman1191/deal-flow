@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r backend/requirements.txt
+      # pytest is a dev-only dep (not in requirements.txt), so install it here.
+      - run: pip install -r backend/requirements.txt pytest
       - name: pytest
         working-directory: backend
         # Dummy DATABASE_URL so app.config (which requires it) imports; the unit
