@@ -9,11 +9,11 @@ import {
 } from "../api/leads";
 
 const SECTIONS: { key: ArchiveOutcomes; label: string; tone: string }[] = [
-  { key: "sent_meeting_request", label: "Sent: Meeting Request", tone: "text-green-300" },
-  { key: "sent_rejection",       label: "Sent: Rejection",       tone: "text-red-300" },
-  { key: "no_reply",             label: "Archived: No Reply",    tone: "text-gray-300" },
-  { key: "sent_other",           label: "Sent: Other",           tone: "text-yellow-300" },
-  { key: "manual",               label: "Manually Archived",     tone: "text-gray-400" },
+  { key: "sent_meeting_request", label: "Sent: Meeting Request", tone: "text-success" },
+  { key: "sent_rejection",       label: "Sent: Rejection",       tone: "text-error" },
+  { key: "no_reply",             label: "Archived: No Reply",    tone: "text-foreground" },
+  { key: "sent_other",           label: "Sent: Other",           tone: "text-warning" },
+  { key: "manual",               label: "Manually Archived",     tone: "text-muted-foreground" },
 ];
 
 const EVENT_LABEL: Record<string, string> = {
@@ -34,11 +34,11 @@ function EventRow({ event }: { event: LeadEvent }) {
     : null;
   return (
     <li className="flex items-start gap-3 py-1.5 text-xs">
-      <span className="text-gray-500 w-32 shrink-0">
+      <span className="text-muted-foreground w-32 shrink-0">
         {new Date(event.created_at).toLocaleString("en-GB")}
       </span>
-      <span className="text-gray-200 font-medium">{label}</span>
-      {detail && <span className="text-gray-500 truncate">— {detail}</span>}
+      <span className="text-foreground font-medium">{label}</span>
+      {detail && <span className="text-muted-foreground truncate">— {detail}</span>}
     </li>
   );
 }
@@ -53,31 +53,31 @@ function ArchiveRow({ item }: { item: ArchiveItem }) {
 
   return (
     <div
-      className="bg-gray-900 border border-gray-800 rounded-lg"
+      className="bg-card border border-border rounded-lg"
       data-testid="archive-row"
     >
       <button
-        className="w-full px-4 py-3 flex items-center justify-between gap-3 hover:bg-gray-850 transition-colors text-left"
+        className="w-full px-4 py-3 flex items-center justify-between gap-3 hover:bg-muted transition-colors text-left"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-white text-sm truncate">
+            <span className="font-medium text-foreground text-sm truncate">
               {item.company_name}
             </span>
             {item.bucket && (
-              <span className="text-[10px] uppercase tracking-wider text-gray-500">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 {item.bucket}
               </span>
             )}
             {item.copper_opportunity_id && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-300">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success">
                 Opportunity
               </span>
             )}
           </div>
           <div className="flex items-center gap-3 mt-0.5">
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-muted-foreground">
               {new Date(item.archived_at).toLocaleString("en-GB")}
             </span>
             {item.company_linkedin_url && (
@@ -86,21 +86,21 @@ function ArchiveRow({ item }: { item: ArchiveItem }) {
                 target="_blank"
                 rel="noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="text-xs text-blue-400 hover:underline"
+                className="text-xs text-info hover:underline"
               >
                 LinkedIn ↗
               </a>
             )}
           </div>
         </div>
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-muted-foreground">
           {expanded ? "▲" : "▼"}
         </span>
       </button>
       {expanded && (
-        <div className="border-t border-gray-800 px-4 py-3">
+        <div className="border-t border-border px-4 py-3">
           {events.length === 0 ? (
-            <p className="text-xs text-gray-500">No events recorded.</p>
+            <p className="text-xs text-muted-foreground">No events recorded.</p>
           ) : (
             <ul className="space-y-0.5">
               {events.map((e) => (
@@ -122,17 +122,17 @@ export default function ArchivePage() {
   });
 
   if (isLoading) {
-    return <p className="p-6 text-sm text-gray-500">Loading archive…</p>;
+    return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Loading archive…</p>;
   }
   if (!data) return null;
 
   const total = SECTIONS.reduce((sum, s) => sum + (data[s.key]?.length ?? 0), 0);
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-5xl mx-auto">
       <div>
-        <h1 className="text-xl font-semibold text-white">Archive</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-xl font-semibold text-foreground">Archive</h1>
+        <p className="text-sm text-muted-foreground mt-1">
           {total} archived {total === 1 ? "company" : "companies"}. Click a row to see its full activity timeline.
         </p>
       </div>
@@ -144,7 +144,7 @@ export default function ArchivePage() {
           <section key={section.key}>
             <h2 className={`text-sm font-semibold mb-2 ${section.tone}`}>
               {section.label}{" "}
-              <span className="text-gray-600 font-normal">({items.length})</span>
+              <span className="text-muted-foreground font-normal">({items.length})</span>
             </h2>
             <div className="space-y-2">
               {items.map((item) => (
@@ -156,7 +156,12 @@ export default function ArchivePage() {
       })}
 
       {total === 0 && (
-        <p className="text-sm text-gray-500">No archived companies yet.</p>
+        <div className="border border-dashed border-border rounded-2xl bg-card/50 py-16 px-6 text-center max-w-md mx-auto">
+          <h3 className="font-heading text-base font-semibold text-foreground">Nothing archived yet</h3>
+          <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
+            Deals you skip or action from the board will show up here, grouped by outcome.
+          </p>
+        </div>
       )}
     </div>
   );

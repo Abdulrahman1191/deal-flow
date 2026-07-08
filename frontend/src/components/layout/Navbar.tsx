@@ -28,10 +28,10 @@ export default function Navbar() {
     : baseTabs;
 
   return (
-    <nav className="bg-gray-900 border-b border-gray-800 px-6 py-0 flex items-center gap-8 h-14">
-      <span className="text-white font-semibold tracking-tight mr-4">
+    <nav className="bg-card border-b border-border px-6 py-0 flex items-center gap-8 h-14">
+      <span className="font-heading text-foreground font-semibold tracking-tight mr-4">
         Raed Ventures{" "}
-        <span className="text-brand text-xs font-normal ml-1">AI Deal Flow</span>
+        <span className="text-muted-foreground text-xs font-sans font-normal ml-1">AI Deal Flow</span>
       </span>
       <div className="flex gap-1">
         {tabs.map((tab) => (
@@ -40,28 +40,28 @@ export default function Navbar() {
             onClick={() => setActiveTab(tab.id)}
             className={`relative px-4 py-4 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.id
-                ? "border-brand text-white"
-                : "border-transparent text-gray-400 hover:text-gray-200"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
             {tab.label}
             {tab.id === "feedback" && unresolved > 0 && (
-              <span className="absolute top-3 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">
+              <span className="absolute top-3 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-info text-[10px] font-bold text-white">
                 {unresolved}
               </span>
             )}
           </button>
         ))}
       </div>
-      <div className="ml-auto flex items-center gap-4 text-xs text-gray-500">
+      <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">
         {me.data && (
           <span>
-            Signed in as <span className="text-gray-300">{me.data.email}</span>
+            Signed in as <span className="text-foreground">{me.data.email}</span>
           </span>
         )}
         <a
           href="https://auth.apps.raed.vc"
-          className="hover:text-gray-300 transition-colors"
+          className="hover:text-foreground transition-colors"
           title="The platform handles sign-out — open auth.apps.raed.vc and log out there."
         >
           Account
