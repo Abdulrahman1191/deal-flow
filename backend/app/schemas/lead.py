@@ -27,6 +27,7 @@ class LeadUpdate(BaseModel):
 class LeadOut(BaseModel):
     id: uuid.UUID
     copper_id: Optional[str]
+    owner_email: Optional[str]
     company_name: str
     website: Optional[str]
     description: Optional[str]

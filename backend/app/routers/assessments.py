@@ -101,7 +101,7 @@ async def get_assessment(
 async def approve_assessment(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Marks the draft as approved and queues it for sending."""
     card = await _get_card(lead_id, db)
@@ -134,6 +134,7 @@ async def approve_assessment(
         effective = card.user_override or card.bucket
         await capture_override(
             db, lead=lead, card=card, human_bucket=effective, trigger="approve",
+            acted_by_email=user.email,
         )
 
     return {"status": "approved", "draft_type": card.draft_type}
@@ -203,7 +204,7 @@ async def mark_sent(
 async def send_assessment(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Actually SEND the drafted email (via SMTP — SES/SendGrid), then finalize.
 
@@ -248,6 +249,7 @@ async def send_assessment(
                 print(f"[send] Copper approve write failed: {exc!r}")
         await capture_override(
             db, lead=lead, card=card, human_bucket=(card.user_override or card.bucket), trigger="approve",
+            acted_by_email=user.email,
         )
 
     result = await _finalize_sent(db, card, lead)
@@ -290,7 +292,7 @@ async def override_bucket(
     lead_id: str,
     body: BucketOverride,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     if body.bucket not in ("YES", "MAYBE", "REJECT"):
         raise HTTPException(status_code=400, detail="bucket must be YES, MAYBE, or REJECT")
@@ -360,6 +362,7 @@ async def override_bucket(
             reason_tags=body.reason_tags,
             reason=body.reason,
             ai_bucket=ai_bucket_snapshot,
+            acted_by_email=user.email,
         )
 
     return card
@@ -370,7 +373,7 @@ async def rate_assessment(
     lead_id: str,
     body: AssessmentRating,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Thumbs up/down on the AI recommendation — enforced-learning signal.
 
@@ -402,6 +405,7 @@ async def rate_assessment(
             trigger="confirm" if body.rating == "up" else "rate_down",
             reason_tags=body.reason_tags,
             reason=body.reason,
+            acted_by_email=user.email,
         )
 
     return card
