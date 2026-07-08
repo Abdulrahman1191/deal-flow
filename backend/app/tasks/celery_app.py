@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks"],
 )
 
 celery.conf.update(
@@ -39,6 +39,13 @@ celery.conf.update(
         "dedupe-leads": {
             "task": "app.tasks.dedupe_leads.dedupe_leads_task",
             "schedule": crontab(hour=2, minute=0),
+        },
+        # Scan the pitch-deck Drive folder for new files and attach them to
+        # leads (see app/tasks/sync_pitch_decks.py). No-ops until a maintainer
+        # sets GOOGLE_SERVICE_ACCOUNT_JSON.
+        "sync-pitch-decks": {
+            "task": "app.tasks.sync_pitch_decks.sync_pitch_decks_task",
+            "schedule": 1800.0,  # every 30 minutes
         },
     },
 )

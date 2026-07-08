@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # scripts/sync_drive_to_db.py backfill (which DOES need OAuth, but only
     # runs locally when an admin wants to refresh the Drive→DB mapping).
     drive_pitch_deck_folder_id: str = ""
+    # Service account JSON key (as a raw JSON string) used by the scheduled
+    # sync_pitch_decks task to list/download files from the folder above.
+    # Unset in dev/until a maintainer adds it post-merge — the task no-ops
+    # gracefully rather than crashing the worker when this is empty.
+    google_service_account_json: str = ""
 
     # --- Daily briefing schedule ---
     briefing_cron_hour: int = 4
