@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
 from app.routers import (
-    auth, leads, assessments, briefings, feedback, overrides, portfolio,
+    auth, leads, assessments, briefings, feedback, overrides, portfolio, health,
 )
 
 _is_prod = os.getenv("ENV", "dev").lower() == "prod"
@@ -55,6 +55,7 @@ app.include_router(briefings.router, prefix=API_PREFIX)
 app.include_router(feedback.router, prefix=API_PREFIX)
 app.include_router(overrides.router, prefix=API_PREFIX)
 app.include_router(portfolio.router, prefix=API_PREFIX)
+app.include_router(health.router, prefix=API_PREFIX)
 
 
 @app.get("/health")
