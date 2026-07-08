@@ -25,7 +25,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true  # TEMP: debug wiring; remove after loop verified
           # Allow the reviewer's "@claude fix ..." comments (posted as claude[bot])
           # to trigger fix passes. All other bots stay blocked.
