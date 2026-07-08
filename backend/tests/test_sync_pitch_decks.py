@@ -103,6 +103,30 @@ def test_ingest_skips_reassessment_when_never_assessed(monkeypatch):
     assert lead.pitch_deck_drive_id == "file123"
 
 
+def test_ingest_commits_before_queuing_reassessment(monkeypatch):
+    """assess_lead_task re-fetches the lead from the DB at task start, so the
+    commit must land before delay() is called -- otherwise a worker can pick
+    up the task and re-assess with pitch_deck_text still NULL."""
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "clean deck text")
+
+    events = []
+
+    class _OrderTrackingSession(_FakeSession):
+        async def commit(self):
+            events.append("commit")
+
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: events.append("delay"))
+
+    lead = _fake_lead()
+    db = _OrderTrackingSession(has_card=True)
+    drive_file = {"id": "file123", "name": "Acme.pdf"}
+
+    asyncio.run(spd._ingest_from_drive(db, None, lead, drive_file))
+
+    assert events == ["commit", "delay"]
+
+
 def test_ingest_does_not_store_garbled_text_but_still_records_drive_id(monkeypatch):
     lead, requeued, queued = _run_ingest(monkeypatch, has_card=True, extracted_text="")
 

@@ -98,7 +98,7 @@ async def _ingest_from_drive(db: AsyncSession, service, lead: Lead, drive_file: 
     lead.pitch_deck_drive_id = drive_file["id"]
     lead.pitch_deck_filename = drive_file["name"]
 
-    requeued = False
+    should_requeue = False
     if text:
         lead.pitch_deck_text = text
         lead.pitch_deck_ingested_at = datetime.now(timezone.utc)
@@ -106,13 +106,20 @@ async def _ingest_from_drive(db: AsyncSession, service, lead: Lead, drive_file: 
         existing_card = await db.execute(
             select(AssessmentCard.id).where(AssessmentCard.lead_id == lead.id).limit(1)
         )
-        if existing_card.scalar_one_or_none():
-            from app.tasks.assess_lead import assess_lead_task
-            assess_lead_task.delay(str(lead.id))
-            requeued = True
+        should_requeue = existing_card.scalar_one_or_none() is not None
 
     await db.commit()
-    return requeued
+
+    if should_requeue:
+        # Queued only after commit lands: assess_lead_task re-fetches the
+        # lead from the DB at task start, so queuing before commit risks a
+        # worker picking it up and re-assessing with pitch_deck_text still
+        # NULL -- and a permanent stale assessment, since the next sync run
+        # skips this lead once pitch_deck_drive_id is set.
+        from app.tasks.assess_lead import assess_lead_task
+        assess_lead_task.delay(str(lead.id))
+
+    return should_requeue
 
 
 async def _run() -> dict:
