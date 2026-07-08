@@ -43,7 +43,7 @@ jobs:
           if [ -n "$PREVIEW" ]; then
             PREVIEW_LINE="\nPreview: $PREVIEW"
           fi
-          TEXT=":white_check_mark: *Deliverable ready:* $PR_TITLE\nPR: $PR_URL$ISSUE_LINE$PREVIEW_LINE"
+          TEXT=":white_check_mark: *Shipped to production:* $PR_TITLE\\nAuto-merging to main now - test it live.\nPR: $PR_URL$ISSUE_LINE$PREVIEW_LINE"
           jq -n --arg text "$(printf '%b' "$TEXT")" '{text: $text}' | curl -sf -X POST -H 'Content-type: application/json' -d @- "$SLACK_WEBHOOK_URL"
 
   blocked-label:

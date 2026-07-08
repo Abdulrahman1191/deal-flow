@@ -40,7 +40,7 @@ https://deal-flow.apps.raed.vc (Raed apps platform — auth via platform proxy,
 5. **Never write `@claude` in your own comments** (it re-triggers the builder).
    The only exception: the reviewer workflow's single fix-instruction comment.
 6. Respect the issue's **Out of scope** section literally.
-7. No auto-merge, ever. Humans merge.
+7. Agent PRs auto-merge to main after the reviewer passes them and CI is green. Production is the QA surface - never mark a PR ready-for-qa lightly.
 
 ## Labels the loop uses
 
