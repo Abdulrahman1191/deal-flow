@@ -9,7 +9,9 @@ ingest_pitch_decks.py locally. Every cycle:
   1. Lists PDFs in settings.drive_pitch_deck_folder_id via a Google service
      account (read-only scope — no OAuth browser flow needed, unlike the
      local scripts).
-  2. Matches each file to a lead with no deck yet, reusing
+  2. Matches each file to a lead with no deck yet (no drive id AND no deck
+     text — a lead ingested locally via scripts/ingest_pitch_decks.py has
+     text but no drive id and must not be re-matched), reusing
      app.services.pitch_deck.match_filename_to_lead.
   3. Downloads + extracts text (same PyMuPDF/OCR/garble-guard pipeline as the
      local scripts) and stores it on the lead.
@@ -120,8 +122,15 @@ async def _run() -> dict:
     async with CelerySessionLocal() as db:
         all_leads = (await db.execute(select(Lead))).scalars().all()
         # Idempotency: a lead that already has a Drive-matched deck is never
-        # re-matched, so a re-run with no new files changes nothing.
-        remaining_leads = [l for l in all_leads if not l.pitch_deck_drive_id]
+        # re-matched, so a re-run with no new files changes nothing. Leads
+        # ingested via the local scripts/ingest_pitch_decks.py flow have
+        # pitch_deck_text set but no pitch_deck_drive_id ("on file, sync
+        # pending" — see LeadCard.tsx) — exclude those too, since they
+        # already have a deck and re-ingesting would overwrite it and queue
+        # a spurious re-assessment.
+        remaining_leads = [
+            l for l in all_leads if not l.pitch_deck_drive_id and not l.pitch_deck_text
+        ]
 
         matched, unmatched, requeued = 0, 0, 0
         for drive_file in drive_files:
