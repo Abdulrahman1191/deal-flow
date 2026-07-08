@@ -49,6 +49,11 @@ export const fetchArchive = () =>
     .get<Record<ArchiveOutcomes, ArchiveItem[]>>("/leads/archive/list")
     .then((r) => r.data);
 
+export const exportLeadsCsv = (bucket: string) =>
+  client
+    .get(`/leads/export`, { params: { bucket }, responseType: "blob" })
+    .then((r) => r.data as Blob);
+
 export const findLinkedin = (id: string) =>
   client
     .post<{ company_linkedin_url: string | null; source: string | null }>(

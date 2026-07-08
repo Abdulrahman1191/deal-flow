@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { fetchLeads } from "../api/leads";
+import { useEffect, useState } from "react";
+import { exportLeadsCsv, fetchLeads } from "../api/leads";
 import useAppStore from "../store/useAppStore";
 import StatsRow from "../components/leads/StatsRow";
 import LeadBucket from "../components/leads/LeadBucket";
@@ -13,6 +13,7 @@ function LeadCardPending({ lead }: { lead: Lead }) {
 
 export default function LeadsPage() {
   const { leads, setLeads } = useAppStore();
+  const [exporting, setExporting] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["leads"],
@@ -27,6 +28,21 @@ export default function LeadsPage() {
   const bucket = (b: string) =>
     leads.filter((l: Lead) => (l.assessment?.user_override ?? l.assessment?.bucket) === b);
 
+  const handleExportYes = async () => {
+    setExporting(true);
+    try {
+      const blob = await exportLeadsCsv("YES");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "yes_leads.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (isLoading) {
     return <p className="text-gray-500 text-sm p-6">Loading leads…</p>;
   }
@@ -34,6 +50,15 @@ export default function LeadsPage() {
   return (
     <div className="p-6 space-y-6">
       <StatsRow leads={leads} />
+      <div className="flex justify-end">
+        <button
+          onClick={handleExportYes}
+          disabled={exporting}
+          className="text-xs px-3 py-1.5 rounded-lg bg-gray-900 border border-gray-800 text-gray-300 hover:bg-gray-850 disabled:opacity-50 transition-colors"
+        >
+          {exporting ? "Exporting…" : "Export CSV"}
+        </button>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <LeadBucket title="Yes — Schedule Meeting" leads={bucket("YES")} accent="bg-green-500" />
         <LeadBucket title="Maybe — Review" leads={bucket("MAYBE")} accent="bg-yellow-500" />

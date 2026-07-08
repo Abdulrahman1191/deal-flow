@@ -6,7 +6,7 @@ from typing import Optional
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,6 +20,7 @@ from app.schemas.lead import LeadOut, LeadUpdate, LeadWithAssessment, PaginatedL
 from app.services.auth import get_current_user
 from app.services import copper_writer
 from app.services.copper_echo_guard import is_recent_echo
+from app.services.csv_export import build_leads_csv, effective_bucket
 from app.services.events import EVENT_ARCHIVED, EVENT_ARCHIVED_NO_REPLY, EVENT_COPPER_UPDATED, log_event
 from app.tasks.assess_lead import assess_lead_task
 
@@ -254,6 +255,39 @@ async def list_leads(
     leads = result.scalars().all()
 
     return PaginatedLeads(total=total, page=page, page_size=page_size, items=leads)
+
+
+@router.get("/export")
+async def export_leads(
+    bucket: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Streams a CSV of the current user's leads, optionally filtered by
+    bucket (YES/MAYBE/REJECT). Bucket resolution mirrors the kanban: a user
+    override wins over the AI's original bucket. Returns headers-only CSV
+    when nothing matches."""
+    query = select(Lead).options(selectinload(Lead.assessment)).where(Lead.owner_email == user.email)
+    result = await db.execute(query)
+    leads = result.scalars().all()
+
+    rows = (
+        {
+            "company_name": lead.company_name,
+            "bucket": effective_bucket(lead.assessment),
+            "confidence_score": lead.assessment.confidence_score if lead.assessment else None,
+            "created_date": lead.created_at.isoformat(),
+        }
+        for lead in leads
+        if not bucket or effective_bucket(lead.assessment) == bucket
+    )
+    csv_text = build_leads_csv(rows)
+
+    return StreamingResponse(
+        iter([csv_text]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=leads_export.csv"},
+    )
 
 
 @router.get("/{lead_id}", response_model=LeadWithAssessment)
