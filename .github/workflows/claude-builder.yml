@@ -34,7 +34,6 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ steps.trim.outputs.token }}
-          show_full_output: true  # TEMP: debug wiring; remove after loop verified
           # Allow the reviewer's "@claude fix ..." comments (posted as claude[bot])
           # to trigger fix passes. All other bots stay blocked.
           allowed_bots: "claude[bot]"

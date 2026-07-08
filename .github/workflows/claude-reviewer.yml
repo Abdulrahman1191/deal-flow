@@ -34,7 +34,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         with:
           claude_code_oauth_token: ${{ steps.trim.outputs.token }}
-          show_full_output: true  # TEMP: debug wiring; remove after loop verified
           additional_permissions: |
             actions: read
           prompt: |
