@@ -39,5 +39,5 @@ jobs:
           allowed_bots: "claude[bot]"
           claude_args: |
             --model claude-sonnet-5
-            --max-turns 60
+            --max-turns 120
             --allowedTools "Bash(pytest:*),Bash(python3:*),Bash(pip:*),Bash(pip3:*),Bash(cd:*),Bash(npm:*),Bash(npx:*)"
