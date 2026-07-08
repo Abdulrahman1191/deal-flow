@@ -10,6 +10,8 @@ on:
     types: [labeled]
   issues:
     types: [labeled]
+  issue_comment:
+    types: [created, edited]
 
 jobs:
   deliverable-ready:
@@ -44,7 +46,7 @@ jobs:
           TEXT=":white_check_mark: *Deliverable ready:* $PR_TITLE\nPR: $PR_URL$ISSUE_LINE$PREVIEW_LINE"
           jq -n --arg text "$(printf '%b' "$TEXT")" '{text: $text}' | curl -sf -X POST -H 'Content-type: application/json' -d @- "$SLACK_WEBHOOK_URL"
 
-  blocked:
+  blocked-label:
     if: github.event_name == 'issues' && github.event.label.name == 'blocked'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -66,4 +68,24 @@ jobs:
             QUESTION="(see issue for details)"
           fi
           TEXT=":no_entry: *Blocked:* $ISSUE_TITLE\nIssue: $ISSUE_URL\nQuestion: $QUESTION"
+          jq -n --arg text "$(printf '%b' "$TEXT")" '{text: $text}' | curl -sf -X POST -H 'Content-type: application/json' -d @- "$SLACK_WEBHOOK_URL"
+
+  blocked-comment:
+    if: >
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == 'claude[bot]' &&
+      contains(github.event.comment.body, 'BLOCKED:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send Slack ping
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          QUESTION=$(printf '%s' "$COMMENT_BODY" | grep -A3 'BLOCKED:' | head -c 500)
+          TEXT=":no_entry: *Blocked:* $ISSUE_TITLE\nIssue: $ISSUE_URL\n$QUESTION"
           jq -n --arg text "$(printf '%b' "$TEXT")" '{text: $text}' | curl -sf -X POST -H 'Content-type: application/json' -d @- "$SLACK_WEBHOOK_URL"

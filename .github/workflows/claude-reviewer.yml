@@ -7,7 +7,7 @@ on:
 jobs:
   review:
     # Only review PRs authored by the Claude app; never react to our own bot.
-    if: github.event.pull_request.user.login == 'claude[bot]' && github.actor != 'github-actions[bot]'
+    if: startsWith(github.event.pull_request.head.ref, 'claude/') && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -30,6 +30,8 @@ jobs:
           echo "token=$T" >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         with:
           claude_code_oauth_token: ${{ steps.trim.outputs.token }}
           show_full_output: true  # TEMP: debug wiring; remove after loop verified
@@ -60,3 +62,4 @@ jobs:
           claude_args: |
             --model claude-sonnet-5
             --max-turns 30
+            --allowedTools "Bash(gh:*)"

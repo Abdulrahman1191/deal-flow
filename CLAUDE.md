@@ -31,14 +31,12 @@ https://deal-flow.apps.raed.vc (Raed apps platform — auth via platform proxy,
 2. **Never touch `.github/workflows/`, secrets, `Dockerfile`, or
    `docker-compose.yml`** unless the issue explicitly asks for it.
 3. **If blocked** (missing credential, access, or a decision only a human can
-   make): comment the specific question on the issue, add the `blocked` label
-   to the issue, and stop. Do NOT guess credentials, invent access, or build a
-   mock in place of the real thing.
-4. **One PR per issue**, on a fresh branch, PR body references the issue
-   (`Closes #N`) and states how each acceptance criterion is met.
-   **Open the pull request yourself** using your GitHub tools after pushing the
-   branch — do NOT just post a "Create PR" link. The PR must be authored by
-   claude[bot] so the reviewer workflow triggers.
+   make): update your comment with a line starting exactly `BLOCKED:` followed
+   by the specific question, and stop. Do NOT guess credentials, invent
+   access, or build a mock in place of the real thing.
+4. **One PR per issue**, on a fresh branch whose name contains `issue-<N>`.
+   Push the branch — a repo automation opens the PR automatically. In your
+   final comment, state how each acceptance criterion is met.
 5. **Never write `@claude` in your own comments** (it re-triggers the builder).
    The only exception: the reviewer workflow's single fix-instruction comment.
 6. Respect the issue's **Out of scope** section literally.

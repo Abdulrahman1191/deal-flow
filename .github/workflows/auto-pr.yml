@@ -1,0 +1,35 @@
+name: Auto PR
+
+# Opens a PR automatically whenever the builder pushes a claude/* branch.
+# Uses GH_PAT (not GITHUB_TOKEN) so the resulting PR fires pull_request
+# events for CI and the reviewer.
+
+on:
+  push:
+    branches: ['claude/**']
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open PR if none exists
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --json number -q '.[0].number' || true)
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING already exists for $BRANCH"; exit 0
+          fi
+          ISSUE=$(echo "$BRANCH" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+          TITLE=$(git log -1 --pretty=%s)
+          BODY="Automated PR for \`$BRANCH\`."
+          if [ -n "$ISSUE" ]; then
+            TITLE=$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title -q .title)
+            BODY="Closes #$ISSUE — agent-built deliverable. Acceptance-criteria mapping is in Claude's comment on the issue."
+          fi
+          gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --title "$TITLE" --body "$BODY"
