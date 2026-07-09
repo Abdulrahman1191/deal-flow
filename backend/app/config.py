@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     # LEAD visibility is independent of this — every user always sees only their
     # own leads regardless of admin status.
     admin_emails: str = ""
+    # Comma-separated list of @raed.vc emails to pre-provision ahead of first
+    # sign-in, so the periodic Copper sync can populate their board before
+    # they ever log in. Empty → just `owner_email` (see team_email_list()).
+    team_emails: str = ""
 
     # --- Misc behavioural flags ---
     # Skip the periodic Copper sync task. Useful when bulk-pruning leads or
@@ -97,6 +101,16 @@ class Settings(BaseSettings):
         ADMIN_EMAILS is unset — so admin is never accidentally granted to all."""
         raw = [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
         return set(raw) if raw else {self.owner_email.strip().lower()}
+
+    def team_email_list(self) -> list[str]:
+        """Lowercased, deduplicated list of TEAM_EMAILS to pre-provision.
+        `owner_email` is always included even if not explicitly listed."""
+        raw = [e.strip().lower() for e in self.team_emails.split(",") if e.strip()]
+        emails = list(dict.fromkeys(raw))
+        owner = self.owner_email.strip().lower()
+        if owner not in emails:
+            emails.append(owner)
+        return emails
 
     class Config:
         env_file = ".env"

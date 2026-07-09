@@ -22,6 +22,34 @@ def _disabled() -> bool:
     return os.getenv("DISABLE_COPPER_SYNC", "").lower() in ("1", "true", "yes")
 
 
+async def provision_team_users(db: AsyncSession) -> list[User]:
+    """Ensure every email in settings.team_email_list() has a `users` row,
+    so the periodic sync below can import their leads before they ever sign
+    in. Mirrors the auto-create fields used by get_current_user's first-contact
+    path (app/services/auth.py), so a later real sign-in finds the same row
+    instead of creating a duplicate. Idempotent — only inserts missing rows.
+    """
+    emails = settings.team_email_list()
+    if not emails:
+        return []
+    existing = (
+        await db.execute(select(User.email).where(User.email.in_(emails)))
+    ).scalars().all()
+    existing_set = {e.strip().lower() for e in existing}
+
+    created = []
+    for email in emails:
+        if email in existing_set:
+            continue
+        user = User(email=email, hashed_password="platform-managed", is_active=True)
+        db.add(user)
+        created.append(user)
+
+    if created:
+        await db.commit()
+    return created
+
+
 async def resolve_copper_id(db: AsyncSession, user: User) -> int | None:
     """Return the user's Copper user id, resolving + caching it on first use.
 
@@ -112,6 +140,10 @@ def sync_copper_leads_task(self) -> dict:
 async def _run_all() -> dict:
     results = []
     async with CelerySessionLocal() as db:
+        provisioned = await provision_team_users(db)
+        if provisioned:
+            emails = ", ".join(u.email for u in provisioned)
+            print(f"[sync_copper] provisioned {len(provisioned)} team user(s): {emails}")
         users = (await db.execute(select(User).where(User.is_active == True))).scalars().all()  # noqa: E712
         for user in users:
             try:
