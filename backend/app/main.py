@@ -23,13 +23,16 @@ from app.routers import (
     auth, leads, assessments, briefings, feedback, overrides, portfolio, health,
 )
 
-_is_prod = os.getenv("ENV", "dev").lower() == "prod"
+# Fails CLOSED, mirroring the ENV check in app.services.auth (SECURITY_AUDIT.md
+# F1): docs/redoc are only exposed when ENV is explicitly "dev". An unset or
+# misconfigured ENV var must never leave API docs exposed in production.
+_is_dev = os.getenv("ENV", "prod").lower() == "dev"
 
 app = FastAPI(
     title="Raed Ventures Deal Flow",
     version="2.0.0",
-    docs_url=None if _is_prod else "/api/docs",
-    redoc_url=None if _is_prod else "/api/redoc",
+    docs_url="/api/docs" if _is_dev else None,
+    redoc_url="/api/redoc" if _is_dev else None,
 )
 
 # CORS — the platform proxy and frontend are same-origin in production, so
@@ -45,6 +48,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Standard response-hardening headers (SECURITY_AUDIT.md F8). The platform
+    proxy terminates TLS in front of us, but these cost nothing to set here too
+    and cap the blast radius of a future stored-XSS / clickjacking vector."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'"
+    )
+    return response
 
 # ----- API routes -----
 API_PREFIX = "/api/v1"
@@ -62,14 +82,17 @@ app.include_router(health.router, prefix=API_PREFIX)
 async def health(response: Response):
     """Deep healthcheck — exercises the DB pool. Returns 200 if Postgres
     responds, 503 otherwise. Used by the platform proxy and external
-    uptime monitors."""
+    uptime monitors. Unauthenticated by design, so the failure body must
+    never echo exception internals (SECURITY_AUDIT.md F7) — full detail
+    goes to the server log only."""
     try:
         async with AsyncSessionLocal() as db:
             await db.execute(text("SELECT 1"))
         return {"status": "ok", "db": "ok"}
     except Exception as exc:
+        print(f"[health] DB check failed: {exc!r}")
         response.status_code = 503
-        return {"status": "degraded", "db": "error", "detail": repr(exc)[:200]}
+        return {"status": "degraded", "db": "error"}
 
 
 # ----- Frontend serving -----
@@ -82,7 +105,7 @@ async def health(response: Response):
 # In dev (without the build artefact present) this section quietly no-ops
 # and Vite at :5173 serves the frontend independently.
 
-_FRONTEND_DIST = Path(os.getenv("FRONTEND_DIST", "/app/frontend-dist"))
+_FRONTEND_DIST = Path(os.getenv("FRONTEND_DIST", "/app/frontend-dist")).resolve()
 _INDEX_HTML = _FRONTEND_DIST / "index.html"
 
 if _FRONTEND_DIST.is_dir():
@@ -99,9 +122,13 @@ if _FRONTEND_DIST.is_dir():
         if spa_path.startswith(("api/", "health", "assets/")):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
 
-        # Try to serve a real file from dist (e.g. /favicon.ico, /robots.txt)
-        candidate = _FRONTEND_DIST / spa_path
-        if candidate.is_file():
+        # Try to serve a real file from dist (e.g. /favicon.ico, /robots.txt).
+        # Resolve and confirm the result is still inside _FRONTEND_DIST before
+        # serving — `Path.__truediv__` alone does not collapse `..` segments,
+        # which allowed reading arbitrary files outside the build directory
+        # (SECURITY_AUDIT.md F4).
+        candidate = (_FRONTEND_DIST / spa_path).resolve()
+        if candidate.is_relative_to(_FRONTEND_DIST) and candidate.is_file():
             return FileResponse(candidate)
 
         # Otherwise — let React Router take over. index.html must NOT be cached:

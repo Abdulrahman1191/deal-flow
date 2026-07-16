@@ -1,5 +1,23 @@
 # Security Audit — Auth / Authorization / Data-Access Layer
 
+**Remediation status (follow-up to this audit, same issue #25 thread):** F1–F8
+have been fixed in code — see the corresponding files for details. F1: dev
+bypass and API-docs exposure now fail closed by default (`ENV` must be
+explicitly `dev`). F2: every `/assessments/*` endpoint is now scoped to
+`Lead.owner_email == user.email` via `_get_card_and_lead()`, with a
+`test_assessment_cross_user_returns_404` regression test. F3: the Copper
+webhook now rejects (401) whenever the signature is missing/invalid or the
+secret is unset, via the shared `verify_webhook_signature()`. F4: the SPA
+fallback resolves and confines the candidate path to `frontend-dist` before
+serving. F5: outbound website fetches are blocked from targeting
+private/loopback/link-local/reserved IPs, including on redirect hops. F6: the
+unused `python-jose`/`passlib`/`bcrypt` pins were removed. F7: `/health` no
+longer echoes exception `repr()` to the caller. F8: a security-headers
+middleware now sets `X-Content-Type-Options`, `X-Frame-Options`,
+`Referrer-Policy`, `Strict-Transport-Security`, and a `Content-Security-Policy`
+on every response. The findings below are left as originally written, as the
+historical record of what was found.
+
 **Scope:** `backend/app` authentication, authorization, per-user data isolation,
 admin gating, Copper webhook ingestion, secrets handling, CORS/headers/docs
 exposure, injection surfaces, and pinned dependency risk.

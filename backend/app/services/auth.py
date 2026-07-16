@@ -31,7 +31,12 @@ from app.models.user import User
 
 # When True, accept ?fake_email=... as a stand-in for X-Auth-Email. Set this
 # in your local .env (or Docker compose override) for development only.
-_LOCAL_DEV = os.getenv("ENV", "dev").lower() != "prod"
+#
+# Fails CLOSED: the dev bypass requires ENV to be explicitly set to "dev".
+# An unset or misconfigured ENV var (e.g. missing on the platform's deploy
+# form, or a typo like "production") must never enable identity impersonation
+# via a query string — see SECURITY_AUDIT.md finding F1.
+_LOCAL_DEV = os.getenv("ENV", "prod").lower() == "dev"
 
 
 def _extract_email(request: Request) -> Optional[str]:

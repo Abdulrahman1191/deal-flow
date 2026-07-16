@@ -4,6 +4,10 @@ Replaces the Cowork browser agent. No authenticated sessions required;
 results cover public web including Crunchbase, LinkedIn public pages, news.
 """
 from __future__ import annotations
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
 from tavily import TavilyClient
 
 from app.config import settings
@@ -18,6 +22,43 @@ def _get_client() -> TavilyClient:
     return _client
 
 
+def _is_public_host(hostname: str) -> bool:
+    """True only if every address `hostname` resolves to is a public,
+    routable IP — no RFC1918/loopback/link-local/reserved/multicast range.
+    Blocks the SSRF class described in SECURITY_AUDIT.md F5 (e.g. a lead's
+    `website` pointed at the cloud metadata endpoint or an internal service)."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
+def _is_safe_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if not parsed.hostname:
+        return False
+    return _is_public_host(parsed.hostname)
+
+
 def scrape_linkedin_from_website(website: str | None) -> str | None:
     """
     Fetch the company's own website and extract a linkedin.com/company/* URL
@@ -27,14 +68,23 @@ def scrape_linkedin_from_website(website: str | None) -> str | None:
     if not website:
         return None
     url = website if website.startswith("http") else f"https://{website}"
+    if not _is_safe_url(url):
+        return None
     try:
         import httpx, re as _re
-        r = httpx.get(
-            url,
+
+        def _block_unsafe_redirect(request: "httpx.Request") -> None:
+            # Also guards every hop of a redirect chain, not just the initial URL.
+            if not _is_safe_url(str(request.url)):
+                raise ValueError(f"blocked SSRF-unsafe target: {request.url}")
+
+        with httpx.Client(
             timeout=8,
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (compatible; RaedBot/1.0)"},
-        )
+            event_hooks={"request": [_block_unsafe_redirect]},
+        ) as client:
+            r = client.get(url)
         if r.status_code >= 400:
             return None
         m = _re.search(
