@@ -3,9 +3,11 @@
 **Remediation status (follow-up to this audit, same issue #25 thread):** F1–F8
 have been fixed in code — see the corresponding files for details. F1: dev
 bypass and API-docs exposure now fail closed by default (`ENV` must be
-explicitly `dev`). F2: every `/assessments/*` endpoint is now scoped to
-`Lead.owner_email == user.email` via `_get_card_and_lead()`, with a
-`test_assessment_cross_user_returns_404` regression test. F3: the Copper
+explicitly `dev`). F2: every `/assessments/*` endpoint — including the
+`GET /send-queue` list — is now scoped to `Lead.owner_email == user.email`
+(via `_get_card_and_lead()` for the id-addressed endpoints, and an inline
+`Lead.owner_email` filter for `/send-queue`), with `test_assessment_cross_user_returns_404`
+and `test_send_queue_excludes_other_users_items` regression tests. F3: the Copper
 webhook now rejects (401) whenever the signature is missing/invalid or the
 secret is unset, via the shared `verify_webhook_signature()`. F4: the SPA
 fallback resolves and confines the candidate path to `frontend-dist` before

@@ -63,9 +63,13 @@ def _require_rating(card: AssessmentCard) -> None:
 @router.get("/send-queue")
 async def get_send_queue(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """Returns all approved but unsent email drafts for Cowork to action."""
+    """Returns the caller's own approved but unsent email drafts for Cowork to
+    action. Scoped to `Lead.owner_email == user.email` like every other
+    endpoint in this router (SECURITY_AUDIT.md F2) — the caller's Cowork
+    integration only ever mark-sents leads it owns, so an unscoped queue would
+    both leak cross-user draft content and list items `mark-sent` 404s on."""
     result = await db.execute(
         select(AssessmentCard, Lead)
         .join(Lead, AssessmentCard.lead_id == Lead.id)
@@ -74,6 +78,7 @@ async def get_send_queue(
                 AssessmentCard.approved_at.is_not(None),
                 AssessmentCard.sent_at.is_(None),
                 AssessmentCard.draft_type.is_not(None),
+                Lead.owner_email == user.email,
             )
         )
         .order_by(AssessmentCard.approved_at.asc())

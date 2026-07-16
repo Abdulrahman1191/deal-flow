@@ -333,6 +333,29 @@ def test_assessment_cross_user_returns_404(acting_email):
     assert str(lead_id) in values
 
 
+# ---------- send-queue scoping (F2 regression) ----------
+
+
+def test_send_queue_excludes_other_users_items():
+    """A queue item owned by user A must not appear in user B's send-queue —
+    regression test for SECURITY_AUDIT.md F2 follow-up, where /send-queue was
+    the one endpoint in this router left unscoped by `Lead.owner_email`."""
+    my_card = _fake_card(rated=True)
+    my_lead = _fake_lead_for_assessment(OWNER_EMAIL, lead_id=my_card.lead_id)
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([[(my_card, my_lead)]])
+    try:
+        response = client.get("/api/v1/assessments/send-queue")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    values = _bound_values(session, 0)
+    assert OWNER_EMAIL in values
+    assert COLLEAGUE_EMAIL not in values
+
+
 # ---------- rating gate ----------
 
 
