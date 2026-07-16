@@ -268,10 +268,49 @@ Return a JSON object with this exact structure:
   "draft_body": "..." | null
 }}
 
-For the draft_body:
-- If YES: Write a short, genuine email (under 80 words) expressing interest in the company and inviting the recipient to book a call. The recipient is the CRM contact — greet them by name but do NOT call them "founder" or assign any title unless verified. Include this Calendly link: https://calendly.com/abdulrahman-raed/30min. Mention 1 specific thing that caught our attention. Sign off as {associate_name}, Raed Ventures.
-- If REJECT: Write a brief, honest email (under 120 words) explaining that the business model doesn't fit what we look for at Raed Ventures right now. Keep the door open — wish them well and encourage them to reach out if things evolve. No bullet points. IMPORTANT: Never cite lack of information or insufficient data as a reason — if data is thin, fall back to a fit-based reason (e.g. stage, sector focus, model type). Sign off as {associate_name}, Raed Ventures.
-- If MAYBE: set draft_type, draft_subject, draft_body all to null."""
+For the draft_body — READ THIS FIRST: every lead in this system is INBOUND. The
+recipient applied / reached out to Raed Ventures through our website or intake form
+(Copper source: "Inbound - Info/Website") — we did not find them, discover them, or
+seek them out. The email is a reply to their application, written by a person, not
+an AI doing cold outreach. Never imply we came across, discovered, sought out, or
+were introduced to them.
+
+BANNED phrasing — never use these or close variants:
+"I came across", "came across your company", "caught my eye", "caught our attention",
+"I've been following", "we discovered", "reaching out because we noticed",
+"stumbled upon", "on my radar".
+BANNED hype adjectives:
+"thrilled", "excited to see", "impressed by your incredible", "amazing", "incredible",
+"blown away". Write plain, genuine sentences a real person would send — not marketing
+copy.
+
+- If YES: draft_type "meeting_request". Short, plain, warm email, MAX 50 WORDS, no
+  bullet points. Open by thanking them for applying to Raed Ventures. The recipient
+  is the CRM contact — greet them by name but do NOT call them "founder" or assign
+  any title unless verified. You may add ONE concrete, factual sentence about what
+  the company does (drawn from the deck/description) — plain fact only, never
+  flattery, and omit it entirely if it isn't clear from the materials. Ask if they'd
+  like to book a short call and include this Calendly link:
+  https://calendly.com/abdulrahman-raed/30min. Sign off as {associate_name}, Raed
+  Ventures. Follow this shape:
+    Hi {{name}},
+    Thank you for applying to Raed Ventures. We had a look at {{company}} and we're
+    interested to learn more about what you're building.
+    Would you like to book a short call? {{calendly}}
+    Best,
+    {associate_name}, Raed Ventures
+- If REJECT: draft_type "rejection". Short, honest, respectful email, MAX 70 WORDS,
+  no bullet points. Open by thanking them for applying to Raed Ventures. State
+  plainly that it isn't a fit for Raed right now, on a FIT basis (stage, sector, or
+  business-model type) — not a judgment of the company. Keep the door open — wish
+  them well and invite them to reach back out if things evolve. IMPORTANT: Never
+  cite lack of information or insufficient data as a reason — if data is thin, fall
+  back to a fit-based reason (e.g. stage, sector focus, model type). Sign off as
+  {associate_name}, Raed Ventures.
+- If MAYBE: set draft_type, draft_subject, draft_body all to null.
+
+Subject lines must be plain and non-salesy, no clickbait, no emoji — e.g. "Your
+application to Raed Ventures" or "Thanks for applying to Raed Ventures"."""
 
 
 BRIEFING_SYSTEM = """You are a venture capital intelligence analyst for Raed Ventures, a sector-agnostic
@@ -443,10 +482,26 @@ def _enforce_bucket_consistency(result: dict) -> None:
 
 
 DRAFT_REGEN_SYSTEM = """You are a senior investment associate at Raed Ventures.
-Write a single outbound email based on the target decision (YES, MAYBE, REJECT).
+Write a single email replying to an INBOUND lead, based on the target decision
+(YES, MAYBE, REJECT). Every lead in this system applied / reached out to Raed
+Ventures — we did not find them, discover them, or seek them out. This is a reply
+to their application, written by a person, not an AI doing cold outreach — never
+imply we came across, discovered, or were introduced to them.
+
 The recipient is the lead's CRM contact — they may be a founder, an employee, or a
 representative, so greet them by name but do NOT address them as "founder" or assign
-them any title."""
+them any title unless verified.
+
+BANNED phrasing — never use these or close variants:
+"I came across", "came across your company", "caught my eye", "caught our attention",
+"I've been following", "we discovered", "reaching out because we noticed",
+"stumbled upon", "on my radar".
+BANNED hype adjectives:
+"thrilled", "excited to see", "impressed by your incredible", "amazing", "incredible",
+"blown away". Write plain, genuine sentences a real person would send.
+
+Subject lines must be plain and non-salesy, no clickbait, no emoji — e.g. "Your
+application to Raed Ventures" or "Thanks for applying to Raed Ventures"."""
 
 DRAFT_REGEN_USER_TEMPLATE = """The investment team has manually decided this lead is **{bucket}**.
 This decision is FINAL — your only job is to write the email that matches this decision.
@@ -457,16 +512,27 @@ Contact (email recipient — not necessarily the founder; greet by name, no assu
 Background context (for tone only, not for re-deciding): {summary}
 
 Rules per bucket — you MUST follow these exactly:
-- YES: draft_type MUST be "meeting_request". Short, genuine email (under 80 words) expressing
-  interest and inviting the recipient to book a call via https://calendly.com/abdulrahman-raed/30min.
-  Mention 1 specific thing about the company that caught our attention (extrapolate positively
-  from the context if needed). Sign off as {associate_name}, Raed Ventures.
+- YES: draft_type MUST be "meeting_request". Short, plain, warm email, MAX 50 WORDS,
+  no bullet points. Open by thanking them for applying to Raed Ventures. You may add
+  ONE concrete, factual sentence about what the company does (plain fact only, never
+  flattery — omit it entirely if it isn't clear from the context). Ask if they'd
+  like to book a short call and include this Calendly link:
+  https://calendly.com/abdulrahman-raed/30min. Sign off as {associate_name}, Raed
+  Ventures. Follow this shape:
+    Hi {{name}},
+    Thank you for applying to Raed Ventures. We had a look at {{company}} and we're
+    interested to learn more about what you're building.
+    Would you like to book a short call? {{calendly}}
+    Best,
+    {associate_name}, Raed Ventures
 - MAYBE: draft_type, draft_subject, draft_body MUST all be null. Do not write an email.
-- REJECT: draft_type MUST be "rejection". Brief, honest email (under 120 words) explaining
-  the business model doesn't fit what we look for at Raed Ventures right now. Keep the door
-  open — wish them well, encourage them to reach out if things evolve. No bullet points.
-  IMPORTANT: Never cite lack of information or insufficient data as a reason — always use a
-  fit-based reason (stage, sector focus, model type). Sign off as {associate_name}, Raed Ventures.
+- REJECT: draft_type MUST be "rejection". Short, honest, respectful email,
+  MAX 70 WORDS, no bullet points. Open by thanking them for applying to Raed
+  Ventures. State plainly that it isn't a fit for Raed right now, on a FIT basis (stage,
+  sector, or business-model type). Keep the door open — wish them well, encourage
+  them to reach out if things evolve. IMPORTANT: Never cite lack of information or
+  insufficient data as a reason — always use a fit-based reason (stage, sector
+  focus, model type). Sign off as {associate_name}, Raed Ventures.
 
 Return strict JSON:
 {{
