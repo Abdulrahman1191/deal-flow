@@ -29,12 +29,16 @@ class _FakeResult:
     def scalar_one_or_none(self):
         return self._value
 
+    def first(self):
+        return self._value
+
 
 class _FakeSession:
-    """Returns queued results for each execute() call in order (the router
-    always queries the card first, then the lead); add()/commit()/refresh()
-    are no-ops since capture_override/log_event side effects aren't under
-    test here."""
+    """Returns queued results for each execute() call in order. The router
+    fetches the card and its owning lead together in a single joined query
+    (a `(card, lead)` tuple), so tests queue one tuple per assessment lookup;
+    add()/commit()/refresh() are no-ops since capture_override/log_event side
+    effects aren't under test here."""
 
     def __init__(self, results):
         self._results = list(results)
@@ -74,11 +78,13 @@ def _fake_card(rated: bool, bucket: str = "YES"):
 def _fake_lead():
     return SimpleNamespace(
         id=uuid.uuid4(),
+        owner_email="reviewer@raed.vc",
         copper_id=None,
         copper_opportunity_id=None,
         company_name="Acme Deep Tech",
         founder_names=["Founder One"],
         raw_copper_data={"recipient_email": "founder@acme.test"},
+        pitch_deck_text=None,
         status="pending",
     )
 
@@ -113,7 +119,8 @@ def _clear_db_override():
 )
 def test_unrated_card_returns_428(override_auth, path):
     card = _fake_card(rated=False)
-    _override_db([card])
+    lead = _fake_lead()
+    _override_db([(card, lead)])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/{path}")
     finally:
@@ -126,7 +133,7 @@ def test_unrated_card_returns_428(override_auth, path):
 def test_approve_succeeds_once_rated(override_auth):
     card = _fake_card(rated=True)
     lead = _fake_lead()
-    _override_db([card, lead])
+    _override_db([(card, lead)])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/approve")
     finally:
@@ -140,7 +147,7 @@ def test_approve_succeeds_once_rated(override_auth):
 def test_mark_sent_succeeds_once_rated(override_auth):
     card = _fake_card(rated=True)
     lead = _fake_lead()
-    _override_db([card, lead])
+    _override_db([(card, lead)])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/mark-sent")
     finally:
@@ -162,7 +169,7 @@ def test_send_succeeds_once_rated(override_auth, monkeypatch):
 
     card = _fake_card(rated=True)
     lead = _fake_lead()
-    _override_db([card, lead])
+    _override_db([(card, lead)])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
     finally:

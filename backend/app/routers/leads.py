@@ -1,6 +1,4 @@
 from __future__ import annotations
-import hashlib
-import hmac
 from typing import Optional
 
 from pathlib import Path
@@ -17,7 +15,7 @@ from app.models.event import LeadEvent
 from app.models.lead import Lead
 from app.models.user import User
 from app.schemas.lead import LeadOut, LeadUpdate, LeadWithAssessment, PaginatedLeads
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, verify_webhook_signature
 from app.services import copper_writer
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
@@ -25,13 +23,6 @@ from app.services.events import EVENT_ARCHIVED, EVENT_ARCHIVED_NO_REPLY, EVENT_C
 from app.tasks.assess_lead import assess_lead_task
 
 router = APIRouter(prefix="/leads", tags=["leads"])
-
-
-def _verify_copper_hmac(body: bytes, signature: str) -> bool:
-    expected = hmac.new(
-        settings.copper_webhook_secret.encode(), body, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
 
 
 async def _owner_for_assignee(db: AsyncSession, raw_payload: dict) -> str:
@@ -103,9 +94,11 @@ async def ingest_lead(
 ):
     body = await request.body()
 
-    if settings.copper_webhook_secret and x_copper_signature:
-        if not _verify_copper_hmac(body, x_copper_signature):
-            raise HTTPException(status_code=403, detail="Invalid webhook signature")
+    # Fail closed: reject whenever the signature header is missing or invalid,
+    # or the shared secret isn't configured — never silently skip verification
+    # (SECURITY_AUDIT.md F3).
+    if not verify_webhook_signature(body, x_copper_signature or ""):
+        raise HTTPException(status_code=401, detail="Missing or invalid webhook signature")
 
     raw = request.state.__dict__.get("_json") or {}
     try:

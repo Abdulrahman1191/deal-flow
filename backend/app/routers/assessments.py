@@ -28,17 +28,24 @@ from app.tasks.assess_lead import assess_lead_task
 router = APIRouter(prefix="/assessments", tags=["assessments"])
 
 
-async def _get_card(lead_id: str, db: AsyncSession) -> AssessmentCard:
+async def _get_card_and_lead(lead_id: str, db: AsyncSession, user: User) -> tuple[AssessmentCard, Lead]:
+    """Fetch the latest assessment card for lead_id, scoped to the caller's
+    own lead (join + `Lead.owner_email == user.email`), mirroring the pattern
+    already used throughout leads.py. Returns 404 — not 403 — when the lead
+    belongs to someone else, so a cross-user probe can't distinguish "doesn't
+    exist" from "not yours" (SECURITY_AUDIT.md F2: this router previously had
+    no ownership check at all)."""
     result = await db.execute(
-        select(AssessmentCard)
-        .where(AssessmentCard.lead_id == lead_id)
+        select(AssessmentCard, Lead)
+        .join(Lead, AssessmentCard.lead_id == Lead.id)
+        .where(AssessmentCard.lead_id == lead_id, Lead.owner_email == user.email)
         .order_by(AssessmentCard.created_at.desc())
         .limit(1)
     )
-    card = result.scalar_one_or_none()
-    if not card:
+    row = result.first()
+    if not row:
         raise HTTPException(status_code=404, detail="Assessment not found")
-    return card
+    return row
 
 
 def _require_rating(card: AssessmentCard) -> None:
@@ -56,9 +63,13 @@ def _require_rating(card: AssessmentCard) -> None:
 @router.get("/send-queue")
 async def get_send_queue(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """Returns all approved but unsent email drafts for Cowork to action."""
+    """Returns the caller's own approved but unsent email drafts for Cowork to
+    action. Scoped to `Lead.owner_email == user.email` like every other
+    endpoint in this router (SECURITY_AUDIT.md F2) — the caller's Cowork
+    integration only ever mark-sents leads it owns, so an unscoped queue would
+    both leak cross-user draft content and list items `mark-sent` 404s on."""
     result = await db.execute(
         select(AssessmentCard, Lead)
         .join(Lead, AssessmentCard.lead_id == Lead.id)
@@ -67,6 +78,7 @@ async def get_send_queue(
                 AssessmentCard.approved_at.is_not(None),
                 AssessmentCard.sent_at.is_(None),
                 AssessmentCard.draft_type.is_not(None),
+                Lead.owner_email == user.email,
             )
         )
         .order_by(AssessmentCard.approved_at.asc())
@@ -92,9 +104,10 @@ async def get_send_queue(
 async def get_assessment(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    return await _get_card(lead_id, db)
+    card, _lead = await _get_card_and_lead(lead_id, db, user)
+    return card
 
 
 @router.post("/{lead_id}/approve")
@@ -104,24 +117,20 @@ async def approve_assessment(
     user: User = Depends(get_current_user),
 ):
     """Marks the draft as approved and queues it for sending."""
-    card = await _get_card(lead_id, db)
+    card, lead = await _get_card_and_lead(lead_id, db, user)
     _require_rating(card)
 
     if card.approved_at:
         return {"status": "already_approved"}
 
     card.approved_at = datetime.now(timezone.utc)
-
-    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
-    lead = lead_result.scalar_one_or_none()
-    if lead:
-        lead.status = "approved"
-        await log_event(db, lead.id, EVENT_DRAFT_APPROVED, {"draft_type": card.draft_type})
+    lead.status = "approved"
+    await log_event(db, lead.id, EVENT_DRAFT_APPROVED, {"draft_type": card.draft_type})
 
     await db.commit()
 
     # F9 — sync approval to Copper via outbox (best-effort; don't fail the local commit)
-    if lead and lead.copper_id:
+    if lead.copper_id:
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
             copper_writer.mark_approved_in_copper(lead.copper_id, existing_tags)
@@ -130,12 +139,11 @@ async def approve_assessment(
 
     # Capture as training data — Approve is an implicit confirmation of the
     # effective bucket (user_override or bucket). human_bucket == that value.
-    if lead:
-        effective = card.user_override or card.bucket
-        await capture_override(
-            db, lead=lead, card=card, human_bucket=effective, trigger="approve",
-            acted_by_email=user.email,
-        )
+    effective = card.user_override or card.bucket
+    await capture_override(
+        db, lead=lead, card=card, human_bucket=effective, trigger="approve",
+        acted_by_email=user.email,
+    )
 
     return {"status": "approved", "draft_type": card.draft_type}
 
@@ -190,13 +198,12 @@ async def _finalize_sent(db: AsyncSession, card: AssessmentCard, lead: Optional[
 async def mark_sent(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Called by an EXTERNAL sender (e.g. Cowork) after it sends the email.
     Just records 'sent' + runs the terminal Copper transition — does NOT send."""
-    card = await _get_card(lead_id, db)
+    card, lead = await _get_card_and_lead(lead_id, db, user)
     _require_rating(card)
-    lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
     return await _finalize_sent(db, card, lead)
 
 
@@ -212,11 +219,8 @@ async def send_assessment(
     so a lead is never marked sent / converted in Copper without a real email
     going out. On a send failure we abort (no state change) so it can be retried.
     """
-    card = await _get_card(lead_id, db)
+    card, lead = await _get_card_and_lead(lead_id, db, user)
     _require_rating(card)
-    lead = (await db.execute(select(Lead).where(Lead.id == lead_id))).scalar_one_or_none()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
 
     if not email_sender.is_configured():
         raise HTTPException(
@@ -262,9 +266,9 @@ async def update_draft(
     lead_id: str,
     body: DraftUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    card = await _get_card(lead_id, db)
+    card, lead = await _get_card_and_lead(lead_id, db, user)
     changed = body.model_dump(exclude_none=True)
     for field, value in changed.items():
         setattr(card, field, value)
@@ -272,18 +276,15 @@ async def update_draft(
     await db.refresh(card)
 
     # F8 — sync edited draft text to Copper custom fields (best-effort)
-    if changed:
-        lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
-        lead = lead_result.scalar_one_or_none()
-        if lead and lead.copper_id:
-            try:
-                copper_writer.push_draft_edit(
-                    lead.copper_id,
-                    draft_subject=changed.get("draft_subject"),
-                    draft_body=changed.get("draft_body"),
-                )
-            except Exception as exc:
-                print(f"[update_draft] Copper write failed: {exc!r}")
+    if changed and lead.copper_id:
+        try:
+            copper_writer.push_draft_edit(
+                lead.copper_id,
+                draft_subject=changed.get("draft_subject"),
+                draft_body=changed.get("draft_body"),
+            )
+        except Exception as exc:
+            print(f"[update_draft] Copper write failed: {exc!r}")
     return card
 
 
@@ -296,7 +297,7 @@ async def override_bucket(
 ):
     if body.bucket not in ("YES", "MAYBE", "REJECT"):
         raise HTTPException(status_code=400, detail="bucket must be YES, MAYBE, or REJECT")
-    card = await _get_card(lead_id, db)
+    card, lead = await _get_card_and_lead(lead_id, db, user)
     if card.bucket == body.bucket and not card.user_override:
         return card  # no-op
 
@@ -315,34 +316,30 @@ async def override_bucket(
     card.bucket = body.bucket
 
     # Regenerate the draft email to match the new bucket.
-    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
-    lead = lead_result.scalar_one_or_none()
-    if lead:
-        await log_event(
-            db,
-            lead.id,
-            EVENT_BUCKET_OVERRIDDEN,
-            {"from": prior_bucket, "to": body.bucket},
+    await log_event(
+        db,
+        lead.id,
+        EVENT_BUCKET_OVERRIDDEN,
+        {"from": prior_bucket, "to": body.bucket},
+    )
+    try:
+        new_draft = claude_agent.regenerate_draft(
+            {"company_name": lead.company_name, "founder_names": lead.founder_names},
+            body.bucket,
+            card.summary or "",
         )
-    if lead:
-        try:
-            new_draft = claude_agent.regenerate_draft(
-                {"company_name": lead.company_name, "founder_names": lead.founder_names},
-                body.bucket,
-                card.summary or "",
-            )
-            card.draft_type = new_draft.get("draft_type")
-            card.draft_subject = new_draft.get("draft_subject")
-            card.draft_body = new_draft.get("draft_body")
-        except Exception as exc:
-            # Don't fail the override if the LLM call hiccups — user can hit "Re-assess".
-            print(f"[override_bucket] draft regen failed for lead {lead_id}: {exc!r}")
+        card.draft_type = new_draft.get("draft_type")
+        card.draft_subject = new_draft.get("draft_subject")
+        card.draft_body = new_draft.get("draft_body")
+    except Exception as exc:
+        # Don't fail the override if the LLM call hiccups — user can hit "Re-assess".
+        print(f"[override_bucket] draft regen failed for lead {lead_id}: {exc!r}")
 
     await db.commit()
     await db.refresh(card)
 
     # Mirror to Copper (best-effort): tag swap only.
-    if lead and lead.copper_id:
+    if lead.copper_id:
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
             copper_writer.set_bucket_tag(lead.copper_id, body.bucket, existing_tags)
@@ -355,15 +352,14 @@ async def override_bucket(
     # (see LLM_TUNING_PLAN.md). We pass `ai_bucket` explicitly rather than
     # mutating the live card: capture_override commits internally, so mutating
     # card.bucket here would persist the snapshot value over the real bucket.
-    if lead:
-        await capture_override(
-            db, lead=lead, card=card, human_bucket=body.bucket,
-            trigger="override" if was_first_override else "re-override",
-            reason_tags=body.reason_tags,
-            reason=body.reason,
-            ai_bucket=ai_bucket_snapshot,
-            acted_by_email=user.email,
-        )
+    await capture_override(
+        db, lead=lead, card=card, human_bucket=body.bucket,
+        trigger="override" if was_first_override else "re-override",
+        reason_tags=body.reason_tags,
+        reason=body.reason,
+        ai_bucket=ai_bucket_snapshot,
+        acted_by_email=user.email,
+    )
 
     return card
 
@@ -386,7 +382,7 @@ async def rate_assessment(
     if body.rating not in ("up", "down"):
         raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
 
-    card = await _get_card(lead_id, db)
+    card, lead = await _get_card_and_lead(lead_id, db, user)
     effective_bucket = card.user_override or card.bucket
 
     card.user_rating = body.rating
@@ -394,19 +390,16 @@ async def rate_assessment(
     await db.commit()
     await db.refresh(card)
 
-    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
-    lead = lead_result.scalar_one_or_none()
-    if lead:
-        await capture_override(
-            db,
-            lead=lead,
-            card=card,
-            human_bucket=effective_bucket,
-            trigger="confirm" if body.rating == "up" else "rate_down",
-            reason_tags=body.reason_tags,
-            reason=body.reason,
-            acted_by_email=user.email,
-        )
+    await capture_override(
+        db,
+        lead=lead,
+        card=card,
+        human_bucket=effective_bucket,
+        trigger="confirm" if body.rating == "up" else "rate_down",
+        reason_tags=body.reason_tags,
+        reason=body.reason,
+        acted_by_email=user.email,
+    )
 
     return card
 
@@ -415,15 +408,11 @@ async def rate_assessment(
 async def regenerate_draft(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Force the LLM to write a fresh draft email matching the current effective bucket.
     Used when a draft is missing (silent regen failure) or the user wants a rewrite."""
-    card = await _get_card(lead_id, db)
-    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
-    lead = lead_result.scalar_one_or_none()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    card, lead = await _get_card_and_lead(lead_id, db, user)
 
     effective_bucket = card.user_override or card.bucket
     if effective_bucket not in ("YES", "REJECT"):
@@ -453,9 +442,11 @@ async def regenerate_draft(
 async def reassess(
     lead_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead_result = await db.execute(
+        select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email)
+    )
     lead = lead_result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")

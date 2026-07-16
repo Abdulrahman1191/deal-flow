@@ -309,6 +309,53 @@ def test_lead_by_id_cross_user_returns_404(acting_email):
     assert str(lead_id) in values
 
 
+# ---------- id-addressed assessment access across users (F2 regression) ----------
+
+
+@pytest.mark.parametrize("acting_email", [COLLEAGUE_EMAIL, OWNER_EMAIL])
+def test_assessment_cross_user_returns_404(acting_email):
+    """A user requesting an assessment for a lead_id they don't own gets 404 —
+    regression test for SECURITY_AUDIT.md F2, where /assessments/* previously
+    had no owner_email scoping at all and would happily return (or mutate)
+    another user's lead assessment."""
+    lead_id = uuid.uuid4()
+    _auth_as(acting_email)
+    session = _use_db([None])
+    try:
+        response = client.get(f"/api/v1/assessments/{lead_id}")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 404
+    values = _bound_values(session, 0)
+    assert acting_email in values
+    assert str(lead_id) in values
+
+
+# ---------- send-queue scoping (F2 regression) ----------
+
+
+def test_send_queue_excludes_other_users_items():
+    """A queue item owned by user A must not appear in user B's send-queue —
+    regression test for SECURITY_AUDIT.md F2 follow-up, where /send-queue was
+    the one endpoint in this router left unscoped by `Lead.owner_email`."""
+    my_card = _fake_card(rated=True)
+    my_lead = _fake_lead_for_assessment(OWNER_EMAIL, lead_id=my_card.lead_id)
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([[(my_card, my_lead)]])
+    try:
+        response = client.get("/api/v1/assessments/send-queue")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    values = _bound_values(session, 0)
+    assert OWNER_EMAIL in values
+    assert COLLEAGUE_EMAIL not in values
+
+
 # ---------- rating gate ----------
 
 
@@ -318,14 +365,14 @@ def test_rating_gate_applies_to_every_user(acting_email):
     lead = _fake_lead_for_assessment(acting_email, lead_id=card.lead_id)
     _auth_as(acting_email)
 
-    session = _use_db([card])
+    session = _use_db([(card, lead)])
     try:
         blocked = client.post(f"/api/v1/assessments/{card.lead_id}/approve")
     finally:
         _clear_db()
     assert blocked.status_code == 428
 
-    session = _use_db([card, lead])
+    session = _use_db([(card, lead)])
     try:
         rated = client.post(f"/api/v1/assessments/{card.lead_id}/rate", json={"rating": "up"})
     finally:
@@ -333,7 +380,7 @@ def test_rating_gate_applies_to_every_user(acting_email):
     assert rated.status_code == 200
     assert card.user_rating == "up"
 
-    session = _use_db([card, lead])
+    session = _use_db([(card, lead)])
     try:
         approved = client.post(f"/api/v1/assessments/{card.lead_id}/approve")
     finally:
@@ -350,7 +397,7 @@ def test_rate_records_acting_users_email(acting_email, rating):
     card = _fake_card(rated=False)
     lead = _fake_lead_for_assessment(acting_email, lead_id=card.lead_id)
     _auth_as(acting_email)
-    session = _use_db([card, lead])
+    session = _use_db([(card, lead)])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/rate", json={"rating": rating})
     finally:
