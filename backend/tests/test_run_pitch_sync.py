@@ -84,6 +84,46 @@ def test_run_check_reports_wrong_key_type(monkeypatch, capsys):
     assert "wrong key type" in capsys.readouterr().out
 
 
+def test_format_sync_summary_reports_unmatched_candidates():
+    result = {
+        "drive_files": 2,
+        "matched": 0,
+        "unmatched": 2,
+        "failed": 0,
+        "reassessments_queued": 0,
+        "unmatched_files": [
+            {
+                "name": "Ailoo Pitch Deck.pdf",
+                "candidates": [
+                    {"company_name": "Ailoo Technologies", "score": 0.72},
+                    {"company_name": "Aileen", "score": 0.6},
+                ],
+            },
+            {"name": "Nobody Home.pdf", "candidates": []},
+        ],
+    }
+    summary = rps.format_sync_summary(result)
+
+    assert "Ailoo Pitch Deck.pdf -> no confident match" in summary
+    assert "'Ailoo Technologies' 0.72" in summary
+    assert "'Aileen' 0.60" in summary
+    assert f"threshold {rps.MATCH_THRESHOLD:.2f}" in summary
+    assert "Nobody Home.pdf -> no confident match (no leads to compare)" in summary
+
+
+def test_format_sync_summary_reports_failed_count_when_present():
+    result = {
+        "drive_files": 1,
+        "matched": 0,
+        "unmatched": 0,
+        "failed": 1,
+        "reassessments_queued": 0,
+        "unmatched_files": [],
+    }
+    summary = rps.format_sync_summary(result)
+    assert "Failed to ingest:      1" in summary
+
+
 def test_run_check_reports_drive_error_cause(monkeypatch, capsys):
     monkeypatch.setattr(
         rps.settings,

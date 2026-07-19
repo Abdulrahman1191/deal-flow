@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings
+from app.services.pitch_deck import MATCH_THRESHOLD
 from app.tasks.sync_pitch_decks import _drive_service, _list_pdfs_in_folder, _run
 
 MAX_CHECK_FILENAMES = 10
@@ -47,14 +48,34 @@ def format_sync_summary(result: dict) -> str:
     `matched` doubles as "decks newly attached": _run() always records
     pitch_deck_drive_id/filename on a matched lead, even when text extraction
     later fails, so matching and attaching are the same count in this pipeline.
+
+    Every unmatched file gets its own line with the closest lead candidates
+    and their scores, so a human can see WHY a deck didn't attach without
+    reading worker logs (e.g. a matcher regression, or a lead genuinely
+    missing from the DB).
     """
-    return (
-        f"Drive files seen:      {result['drive_files']}\n"
-        f"Leads matched:         {result['matched']}\n"
-        f"Decks newly attached:  {result['matched']}\n"
-        f"Reassessments queued:  {result['reassessments_queued']}\n"
-        f"Unmatched files:       {result['unmatched']}"
-    )
+    lines = [
+        f"Drive files seen:      {result['drive_files']}",
+        f"Leads matched:         {result['matched']}",
+        f"Decks newly attached:  {result['matched']}",
+        f"Reassessments queued:  {result['reassessments_queued']}",
+        f"Unmatched files:       {result['unmatched']}",
+    ]
+    failed = result.get("failed", 0)
+    if failed:
+        lines.append(f"Failed to ingest:      {failed}")
+
+    for f in result.get("unmatched_files") or []:
+        candidates = f.get("candidates") or []
+        if candidates:
+            closest = ", ".join(f"'{c['company_name']}' {c['score']:.2f}" for c in candidates)
+            lines.append(
+                f"  - {f['name']} -> no confident match (closest: {closest}, threshold {MATCH_THRESHOLD:.2f})"
+            )
+        else:
+            lines.append(f"  - {f['name']} -> no confident match (no leads to compare)")
+
+    return "\n".join(lines)
 
 
 def _diagnose_drive_error(exc: Exception, sa_email: str, folder_id: str) -> str:
