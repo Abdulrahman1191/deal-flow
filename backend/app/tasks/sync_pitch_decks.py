@@ -12,9 +12,13 @@ ingest_pitch_decks.py locally. Every cycle:
   2. Matches each file to a lead with no deck yet (no drive id AND no deck
      text — a lead ingested locally via scripts/ingest_pitch_decks.py has
      text but no drive id and must not be re-matched), reusing
-     app.services.pitch_deck.match_filename_to_lead.
+     app.services.pitch_deck.find_lead_match. Only high-confidence matches
+     attach; anything else is logged at WARNING with its closest candidates
+     and surfaced in the run result for scripts/run_pitch_sync.py to report.
   3. Downloads + extracts text (same PyMuPDF/OCR/garble-guard pipeline as the
-     local scripts) and stores it on the lead.
+     local scripts) and stores it on the lead. A single file's download/
+     extraction failure is caught and logged so it doesn't abort the rest of
+     the run.
   4. Queues a re-assessment ONLY if the lead already had an assessment card
      — a brand-new lead gets assessed with its deck via the normal
      sync_copper import flow, so re-queuing here would just duplicate work.
@@ -24,6 +28,7 @@ isn't set — expected until a maintainer adds the secret post-merge.
 """
 import asyncio
 import json
+import logging
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,8 +40,10 @@ from app.config import settings
 from app.database import CelerySessionLocal
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
-from app.services.pitch_deck import extract_text_from_pdf, match_filename_to_lead
+from app.services.pitch_deck import MATCH_THRESHOLD, extract_text_from_pdf, find_lead_match
 from app.tasks.celery_app import celery
+
+logger = logging.getLogger(__name__)
 
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -139,23 +146,54 @@ async def _run() -> dict:
             l for l in all_leads if not l.pitch_deck_drive_id and not l.pitch_deck_text
         ]
 
-        matched, unmatched, requeued = 0, 0, 0
+        matched, unmatched, failed, requeued = 0, 0, 0, 0
+        unmatched_files: list[dict] = []
         for drive_file in drive_files:
-            lead = match_filename_to_lead(drive_file["name"], remaining_leads)
-            if not lead:
+            match = find_lead_match(drive_file["name"], remaining_leads)
+            if not match.lead:
                 unmatched += 1
-                print(f"[sync_pitch_decks] no lead match for Drive file {drive_file['name']!r}")
+                candidates = [
+                    {"company_name": c.company_name, "score": round(c.score, 2)}
+                    for c in match.candidates
+                ]
+                unmatched_files.append({"name": drive_file["name"], "candidates": candidates})
+                if candidates:
+                    closest = ", ".join(f"{c['company_name']!r} {c['score']:.2f}" for c in candidates)
+                    logger.warning(
+                        "%r -> no confident match (closest: %s, threshold %.2f)",
+                        drive_file["name"], closest, MATCH_THRESHOLD,
+                    )
+                else:
+                    logger.warning(
+                        "%r -> no confident match (no unmatched leads to compare)",
+                        drive_file["name"],
+                    )
                 continue
+
+            lead = match.lead
             remaining_leads.remove(lead)
-            matched += 1
-            if await _ingest_from_drive(db, service, lead, drive_file):
-                requeued += 1
+            try:
+                if await _ingest_from_drive(db, service, lead, drive_file):
+                    requeued += 1
+                matched += 1
+            except Exception:
+                # One bad file (download hiccup, corrupt PDF, etc.) must not
+                # abort the whole sync -- the lead simply isn't marked as
+                # matched here, so the next run's DB-driven remaining_leads
+                # query picks it up again for a retry.
+                failed += 1
+                logger.exception(
+                    "failed to ingest Drive file %r for lead %r; continuing with remaining files",
+                    drive_file["name"], lead.company_name,
+                )
 
     result = {
         "drive_files": len(drive_files),
         "matched": matched,
         "unmatched": unmatched,
+        "failed": failed,
         "reassessments_queued": requeued,
+        "unmatched_files": unmatched_files,
     }
     print(f"[sync_pitch_decks] {result}")
     return result

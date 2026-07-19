@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from app.config import settings
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
-from app.services.pitch_deck import match_filename_to_lead
+from app.services.pitch_deck import find_lead_match, match_filename_to_lead
 from app.tasks import sync_pitch_decks as spd
 from app.tasks.assess_lead import assess_lead_task
 
@@ -34,6 +34,81 @@ def test_match_filename_to_lead_exact_and_fuzzy_and_miss():
     assert match_filename_to_lead("Hadawi.pdf", leads) is leads[1]
     assert match_filename_to_lead("Acme Deep Tech.pdf", leads) is leads[0]
     assert match_filename_to_lead("Totally Unrelated Co.pdf", leads) is None
+
+
+class TestMatchFilenameToLead:
+    """Deep coverage for the matcher hardening (issue #44).
+
+    Concrete motivating bug: a deck named e.g. 'Ailoo Pitch Deck.pdf' failed
+    to match a lead named 'Ailoo' because the old matcher didn't strip filler
+    tokens or entity suffixes before comparing, so the normalized filename
+    ('ailoo pitch deck') never got close enough to the lead's normalized name
+    ('ailoo') to clear the fuzzy cutoff.
+    """
+
+    def _leads(self, *names):
+        return [SimpleNamespace(company_name=n) for n in names]
+
+    def test_ailoo_pitch_deck_matches_bare_company_name(self):
+        leads = self._leads("Ailoo", "Some Other Startup")
+        assert match_filename_to_lead("Ailoo Pitch Deck.pdf", leads) is leads[0]
+
+    def test_ailoo_versioned_filename_matches(self):
+        leads = self._leads("Ailoo", "Some Other Startup")
+        assert match_filename_to_lead("ailoo_v2.pdf", leads) is leads[0]
+
+    def test_ailoo_technologies_filename_matches_bare_lead_name(self):
+        leads = self._leads("Ailoo", "Some Other Startup")
+        assert match_filename_to_lead("Ailoo Technologies.pdf", leads) is leads[0]
+
+    def test_bare_ailoo_filename_matches_lead_with_entity_suffix(self):
+        # Reverse direction: the lead's own company_name carries the suffix.
+        leads = self._leads("Ailoo Technologies", "Some Other Startup")
+        assert match_filename_to_lead("Ailoo.pdf", leads) is leads[0]
+
+    def test_filler_and_date_and_suffix_tokens_all_stripped(self):
+        leads = self._leads("Ailoo", "Some Other Startup")
+        assert match_filename_to_lead("Ailoo_Deck_Final_2024-05-01_v3.pdf", leads) is leads[0]
+        assert match_filename_to_lead("Ailoo FZ-LLC.pdf", leads) is leads[0]
+        assert match_filename_to_lead("RAED - Ailoo - Presentation Draft.pdf", leads) is leads[0]
+
+    def test_near_miss_does_not_match(self):
+        """'Aileen' is a genuinely different company -- must not attach to it,
+        and vice-versa (each file should land on its own lead only)."""
+        leads = self._leads("Ailoo", "Aileen")
+        assert match_filename_to_lead("Aileen Pitch Deck.pdf", leads) is leads[1]
+        assert match_filename_to_lead("Ailoo Pitch Deck.pdf", leads) is leads[0]
+        assert match_filename_to_lead("Aileen.pdf", leads) is leads[1]
+
+    def test_ambiguous_match_across_two_leads_is_left_unmatched(self):
+        """Two distinct leads that are each equally (fuzzy-)close to the same
+        filename: neither is confident enough to pick over the other, so this
+        must be left unmatched -- false matches are worse than misses."""
+        leads = self._leads("Ailooza", "Ailoozb")
+        result = find_lead_match("Ailooze.pdf", leads)
+        assert result.lead is None
+        # Both leads should still show up as diagnostic candidates.
+        assert {c.company_name for c in result.candidates} == {"Ailooza", "Ailoozb"}
+
+    def test_exact_match_tie_across_two_leads_is_left_unmatched(self):
+        """Two distinct leads whose company names normalize to the same key
+        (entity-suffix stripping collapses 'Alpha Tech' and 'Alpha Co' to
+        'alpha'): an exact-normalized hit must not short-circuit the
+        ambiguity guard -- attaching to whichever lead comes last in DB order
+        would be a false match, which is worse than leaving it unmatched."""
+        leads = self._leads("Alpha Tech", "Alpha Co")
+        result = find_lead_match("Alpha.pdf", leads)
+        assert result.lead is None
+        assert {c.company_name for c in result.candidates} == {"Alpha Tech", "Alpha Co"}
+
+    def test_unmatched_result_reports_closest_candidates_with_scores(self):
+        leads = self._leads("Ailoo", "Hadawi", "Acme Deep Tech")
+        result = find_lead_match("Totally Unrelated Filename.pdf", leads)
+        assert result.lead is None
+        assert len(result.candidates) <= 3
+        assert all(0.0 <= c.score <= 1.0 for c in result.candidates)
+        scores = [c.score for c in result.candidates]
+        assert scores == sorted(scores, reverse=True)
 
 
 def _fake_lead():
@@ -209,8 +284,89 @@ def test_run_does_not_reingest_lead_with_deck_text_but_no_drive_id(monkeypatch):
         "drive_files": 1,
         "matched": 0,
         "unmatched": 1,
+        "failed": 0,
         "reassessments_queued": 0,
+        "unmatched_files": [{"name": "Acme.pdf", "candidates": []}],
     }
     assert queued == []
     assert already_decked.pitch_deck_text == "existing local deck text"
     assert already_decked.pitch_deck_drive_id is None
+
+
+def test_run_second_pass_with_no_new_files_is_idempotent(monkeypatch):
+    """A lead that already has a Drive-matched deck (pitch_deck_drive_id set)
+    must not be re-matched, re-downloaded, or re-queued on a subsequent run
+    over the same Drive folder contents."""
+    already_synced = SimpleNamespace(
+        id=uuid.uuid4(),
+        pitch_deck_drive_id="file123",
+        pitch_deck_filename="Acme.pdf",
+        pitch_deck_text="existing synced text",
+        pitch_deck_ingested_at="already-set",
+        company_name="Acme Deep Tech",
+    )
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd, "_list_pdfs_in_folder", lambda service, folder_id: [{"id": "file123", "name": "Acme.pdf"}]
+    )
+    monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession([already_synced]))
+
+    def _boom_download(*_args, **_kwargs):
+        raise AssertionError("must not re-download an already-synced deck")
+
+    monkeypatch.setattr(spd, "_download_pdf", _boom_download)
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 0
+    assert result["unmatched"] == 1
+    assert result["failed"] == 0
+    assert result["reassessments_queued"] == 0
+    assert queued == []
+    assert already_synced.pitch_deck_text == "existing synced text"
+
+
+def test_one_failed_download_does_not_abort_remaining_files(monkeypatch):
+    """A Drive API hiccup on one file must not stop the rest of the batch
+    from being matched, downloaded, and (re-)assessed."""
+    lead_a = _fake_lead()
+    lead_a.company_name = "Ailoo"
+    lead_b = _fake_lead()
+    lead_b.company_name = "Hadawi"
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd,
+        "_list_pdfs_in_folder",
+        lambda service, folder_id: [
+            {"id": "bad", "name": "Ailoo.pdf"},
+            {"id": "good", "name": "Hadawi.pdf"},
+        ],
+    )
+    monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession([lead_a, lead_b], has_card=True))
+
+    def _download(service, file_id, dest):
+        if file_id == "bad":
+            raise RuntimeError("simulated Drive download failure")
+        dest.write_bytes(b"%PDF-fake")
+
+    monkeypatch.setattr(spd, "_download_pdf", _download)
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "clean deck text")
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 1
+    assert result["failed"] == 1
+    assert result["unmatched"] == 0
+    assert result["reassessments_queued"] == 1
+    assert queued == [str(lead_b.id)]
+    assert lead_b.pitch_deck_text == "clean deck text"
+    assert lead_a.pitch_deck_text is None
+    assert lead_a.pitch_deck_drive_id is None

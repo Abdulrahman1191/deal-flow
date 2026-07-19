@@ -20,6 +20,7 @@ Text extraction is layered (see extract_text_from_pdf):
 """
 import difflib
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -233,22 +234,130 @@ def extract_text_from_pdf(path: Path) -> str:
     return ""
 
 
-def match_filename_to_lead(filename: str, leads: list[Lead]) -> Optional[Lead]:
-    """Fuzzy-match a PDF filename to one of the supplied leads."""
+# --- Filename<->company-name matching tunables ------------------------------
+# Real Drive filenames carry noise a bare company name never has: "Ailoo Pitch
+# Deck.pdf", "ailoo_v2.pdf", "Ailoo Technologies.pdf". These tokens carry no
+# identifying signal, so both the filename and every lead's company_name are
+# stripped of them before comparing -- otherwise "Ailoo" (the lead) never
+# matches "Ailoo Pitch Deck" (the file) closely enough to clear the fuzzy
+# cutoff, and a real deck silently fails to attach.
+_FILLER_TOKENS = {"pitch", "deck", "final", "draft", "presentation", "raed"}
+
+# Trailing legal/entity suffixes: stripped from BOTH sides so "Ailoo" (lead)
+# and "Ailoo Technologies.pdf" (file) normalize to the same key.
+_ENTITY_SUFFIX_TOKENS = {"inc", "llc", "ltd", "fz", "technologies", "tech", "co", "company"}
+
+_VERSION_TOKEN_RE = re.compile(r"^v\d{1,3}$")   # v1, v2, v10
+_PURE_DIGIT_TOKEN_RE = re.compile(r"^\d+$")     # dates: 2024, 05, 20240501...
+
+# Conservative: false matches (wrong lead) are worse than misses (no lead), so
+# fuzzy matching only fires well above where genuinely different company
+# names land (see backend/tests/test_pitch_deck.py for calibration, e.g.
+# "Ailoo" vs "Aileen" must NOT clear this bar).
+MATCH_THRESHOLD = 0.85
+
+
+def _is_filler_token(token: str) -> bool:
+    if token in _FILLER_TOKENS or token in _ENTITY_SUFFIX_TOKENS:
+        return True
+    if _VERSION_TOKEN_RE.match(token):
+        return True
+    if _PURE_DIGIT_TOKEN_RE.match(token):
+        return True
+    return False
+
+
+def _normalize_company_key(s: str) -> str:
+    """Normalize + strip filler/suffix/version/date tokens for matching.
+
+    Applied identically to the filename stem and every lead's company_name so
+    both sides of the comparison get the same treatment.
+    """
+    normalized = _normalize_for_match(s)
+    if not normalized:
+        return ""
+    tokens = [t for t in normalized.split(" ") if t]
+    filtered = [t for t in tokens if not _is_filler_token(t)]
+    # If the whole name is filler tokens (shouldn't happen for a real company
+    # name, but keeps a degenerate stem from becoming an empty key that could
+    # spuriously equal another empty key), fall back to the unfiltered form.
+    return " ".join(filtered) if filtered else normalized
+
+
+@dataclass
+class MatchCandidate:
+    """A lead considered as a possible match, for diagnostics/reporting."""
+    lead: Lead
+    company_name: str
+    score: float
+
+
+@dataclass
+class MatchResult:
+    lead: Optional[Lead]
+    candidates: list[MatchCandidate] = field(default_factory=list)
+
+
+_MAX_REPORTED_CANDIDATES = 3
+
+
+def find_lead_match(
+    filename: str, leads: list[Lead], threshold: float = MATCH_THRESHOLD
+) -> MatchResult:
+    """Match a PDF filename to one of the supplied leads, with diagnostics.
+
+    Exact match (after normalization) wins -- but only when exactly one lead's
+    normalized company name matches the normalized filename. Two distinct
+    leads can normalize to the same key (e.g. "Alpha Tech" and "Alpha Co" both
+    strip to "alpha"), so an exact hit is treated exactly like the fuzzy path:
+    ambiguity means no attach. Otherwise, fuzzy match only when exactly one
+    lead clears `threshold` -- if two or more leads are plausible, or the best
+    score is below threshold, this returns no match (attaching to the wrong
+    lead is worse than leaving a file unmatched). Always returns the top few
+    candidates (whether or not one was chosen) so callers can log/report why
+    a file didn't attach.
+    """
     stem = Path(filename).stem  # "Hadawi.pdf" -> "Hadawi"
-    norm_stem = _normalize_for_match(stem)
+    norm_stem = _normalize_company_key(stem)
+
+    scored: list[MatchCandidate] = []
+    exact_matches: list[MatchCandidate] = []
+    for lead in leads:
+        if not lead.company_name:
+            continue
+        norm_name = _normalize_company_key(lead.company_name)
+        if not norm_name:
+            continue
+        score = difflib.SequenceMatcher(None, norm_stem, norm_name).ratio()
+        candidate = MatchCandidate(lead=lead, company_name=lead.company_name, score=score)
+        scored.append(candidate)
+        if norm_stem and norm_name == norm_stem:
+            exact_matches.append(candidate)
+
+    scored.sort(key=lambda c: c.score, reverse=True)
+    top_candidates = scored[:_MAX_REPORTED_CANDIDATES]
+
     if not norm_stem:
-        return None
+        return MatchResult(lead=None, candidates=top_candidates)
 
-    by_norm = {_normalize_for_match(l.company_name): l for l in leads if l.company_name}
+    if len(exact_matches) == 1:
+        return MatchResult(lead=exact_matches[0].lead, candidates=top_candidates)
+    if len(exact_matches) > 1:
+        return MatchResult(lead=None, candidates=top_candidates)
 
-    # Exact normalized match first
-    if norm_stem in by_norm:
-        return by_norm[norm_stem]
+    strong = [c for c in scored if c.score >= threshold]
+    if len(strong) == 1:
+        return MatchResult(lead=strong[0].lead, candidates=top_candidates)
+    return MatchResult(lead=None, candidates=top_candidates)
 
-    # Then fuzzy match (cutoff tuned for typical Copper filename variations)
-    candidates = difflib.get_close_matches(norm_stem, list(by_norm.keys()), n=1, cutoff=0.82)
-    return by_norm[candidates[0]] if candidates else None
+
+def match_filename_to_lead(filename: str, leads: list[Lead]) -> Optional[Lead]:
+    """Fuzzy-match a PDF filename to one of the supplied leads.
+
+    Thin wrapper around find_lead_match() for callers that only need the
+    result, not the diagnostic candidate list.
+    """
+    return find_lead_match(filename, leads).lead
 
 
 async def ingest_pdf(db: AsyncSession, lead: Lead, path: Path) -> bool:
