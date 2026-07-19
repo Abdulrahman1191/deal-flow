@@ -8,26 +8,74 @@ interface Props {
   onCancel: () => void;
 }
 
-// Tags differ by direction. Thumbs-up = "what made this a good call" (so we can
-// reinforce the pattern); thumbs-down = "what's off" (so we can correct it).
-const TAGS_DOWN = [
-  "Wrong bucket",
-  "Missed a red flag",
-  "Too harsh",
-  "Too generous",
-  "Weak research",
-  "Wrong precedents",
-  "Other",
-];
-const TAGS_UP = [
+// Tags depend on BOTH the bucket and the rating direction: thumbs-up = "why
+// the bucket is right" (reinforce the pattern); thumbs-down = "why it's
+// wrong" (correct it). A REJECT lead's 👍 reasons must not read like a YES
+// lead's 👍 reasons, since agreeing with a rejection means the opposite signals.
+const TAGS_YES_UP = [
   "Right bucket",
-  "Strong tech moat",
-  "Right founder",
+  "Strong founder–market fit",
+  "Real tech moat / IP",
+  "Big or growing market",
   "Good market timing",
   "Matches a winner pattern",
-  "Good precedents",
   "Other",
 ];
+const TAGS_YES_DOWN = [
+  "Wrong bucket — should pass",
+  "Weak founder–market fit",
+  "No real moat / commodity",
+  "Market too small",
+  "Team can't execute",
+  "Overhyped / thin substance",
+  "Other",
+];
+const TAGS_REJECT_UP = [
+  "Right bucket",
+  "Poor founder–market fit",
+  "Not deep tech / wrong model",
+  "Market too small / niche",
+  "No moat / easily copied",
+  "Wrong stage or bad timing",
+  "Other",
+];
+const TAGS_REJECT_DOWN = [
+  "Wrong bucket — should consider",
+  "Strong founder overlooked",
+  "Real tech / moat missed",
+  "Big market missed",
+  "Good timing missed",
+  "Matches a winner pattern",
+  "Other",
+];
+const TAGS_MAYBE_UP = [
+  "Right bucket — genuinely borderline",
+  "Unclear moat",
+  "Needs more diligence",
+  "Interesting but too early",
+  "Mixed signals",
+  "Other",
+];
+const TAGS_MAYBE_DOWN = [
+  "Should be a clear YES",
+  "Should be a clear REJECT",
+  "Enough signal to decide",
+  "Wrong bucket",
+  "Other",
+];
+
+// Fallback for an empty/unrecognized bucket, so the modal never renders empty.
+const TAGS_GENERIC_UP = ["Right bucket", "Other"];
+const TAGS_GENERIC_DOWN = ["Wrong bucket", "Other"];
+
+function getTags(aiBucket: string, rating: "up" | "down"): string[] {
+  const bucket = aiBucket.trim().toLowerCase();
+  const isUp = rating === "up";
+  if (bucket === "yes") return isUp ? TAGS_YES_UP : TAGS_YES_DOWN;
+  if (bucket === "reject") return isUp ? TAGS_REJECT_UP : TAGS_REJECT_DOWN;
+  if (bucket === "maybe") return isUp ? TAGS_MAYBE_UP : TAGS_MAYBE_DOWN;
+  return isUp ? TAGS_GENERIC_UP : TAGS_GENERIC_DOWN;
+}
 
 export default function FeedbackModal({
   companyName,
@@ -40,7 +88,7 @@ export default function FeedbackModal({
   const [note, setNote] = useState("");
 
   const isUp = rating === "up";
-  const tags = isUp ? TAGS_UP : TAGS_DOWN;
+  const tags = getTags(aiBucket, rating);
   const accent = isUp ? "green" : "orange";
   const hasFeedback = selected.size > 0 || note.trim().length > 0;
 
