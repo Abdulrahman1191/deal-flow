@@ -192,6 +192,16 @@ export default function LeadCard({ lead, index = 0 }: Props) {
           <p className="text-xs text-muted-foreground mt-0.5">
             {lead.stage ?? "—"} · {lead.region ?? "—"}
           </p>
+          {lead.applied_at && (
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Applied{" "}
+              {new Date(lead.applied_at).toLocaleDateString("en-GB", {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              })}
+            </p>
+          )}
           {(lead.company_linkedin_url || lead.website) && (
             <div className="flex items-center gap-2 mt-1 text-xs">
               {lead.company_linkedin_url && (
