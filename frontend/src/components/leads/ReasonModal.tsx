@@ -6,7 +6,6 @@ interface Props {
   bucket: Bucket;
   companyName: string;
   onSubmit: (data: { reason_tags: string[]; reason: string }) => void;
-  onSkip: () => void;
   onCancel: () => void;
 }
 
@@ -59,13 +58,13 @@ export default function ReasonModal({
   bucket,
   companyName,
   onSubmit,
-  onSkip,
   onCancel,
 }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
 
   const tags = TAGS_BY_BUCKET[bucket];
+  const hasReason = selected.size > 0 || note.trim().length > 0;
 
   const toggle = (tag: string) =>
     setSelected((prev) => {
@@ -86,7 +85,6 @@ export default function ReasonModal({
           </p>
           <p className="text-[11px] text-muted-foreground mt-2">
             Why this bucket? Helps train the AI to match your judgement.
-            <span className="text-muted-foreground"> Optional — skip anytime.</span>
           </p>
         </div>
 
@@ -142,18 +140,20 @@ export default function ReasonModal({
           >
             Cancel
           </button>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onSkip}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-2"
-            >
-              Skip
-            </button>
+          <div className="flex items-center gap-2">
+            {!hasReason && (
+              <span className="text-[11px] text-muted-foreground">Pick a tag or add a note</span>
+            )}
             <button
               onClick={() =>
                 onSubmit({ reason_tags: Array.from(selected), reason: note })
               }
-              className="px-5 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
+              disabled={!hasReason}
+              className={`px-5 py-2 text-sm font-medium rounded-lg text-white transition-colors ${
+                hasReason
+                  ? "bg-primary hover:bg-primary/90"
+                  : "bg-primary/40 cursor-not-allowed"
+              }`}
             >
               Save
             </button>
