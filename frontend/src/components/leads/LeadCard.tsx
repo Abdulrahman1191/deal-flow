@@ -8,7 +8,7 @@ import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { useToast } from "../shared/Toast";
 import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
-import { findLinkedin, updateLead } from "../../api/leads";
+import { archiveNoReply, findLinkedin, updateLead } from "../../api/leads";
 import ReasonModal from "./ReasonModal";
 import FeedbackModal from "./FeedbackModal";
 
@@ -157,6 +157,15 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     onSuccess: () => toast("Thanks — your feedback was recorded"),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: () => archiveNoReply(lead.id),
+    onSuccess: () => {
+      toast(`Archived ${lead.company_name} — no email sent`);
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["archive"] });
     },
   });
 
@@ -335,8 +344,10 @@ export default function LeadCard({ lead, index = 0 }: Props) {
         <ActionButtons
           lead={lead}
           onApprove={() => setShowEmailModal(true)}
+          onArchive={() => archiveMutation.mutate()}
           onReassess={() => reassessMutation.mutate()}
           reassessing={reassessInFlight}
+          archiving={archiveMutation.isPending}
         />
         <div className="flex items-center gap-3">
           <button
