@@ -8,7 +8,7 @@ import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { useToast } from "../shared/Toast";
 import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
-import { archiveNoReply, findLinkedin, updateLead } from "../../api/leads";
+import { findLinkedin, updateLead } from "../../api/leads";
 import ReasonModal from "./ReasonModal";
 import FeedbackModal from "./FeedbackModal";
 
@@ -27,8 +27,8 @@ const bucketVariant: Record<string, "yes" | "maybe" | "reject"> = {
 export default function LeadCard({ lead, index = 0 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
-  // When set, a ReasonModal is open for this bucket. The user can save with
-  // reason data, skip (no reason), or cancel (no override at all).
+  // When set, a ReasonModal is open for this bucket. The user must save with
+  // at least a tag or note, or cancel (no override at all).
   const [pendingBucket, setPendingBucket] = useState<"YES" | "MAYBE" | "REJECT" | null>(null);
   // Which rating's FeedbackModal is open ("up" | "down"), or null when closed.
   const [showFeedback, setShowFeedback] = useState<"up" | "down" | null>(null);
@@ -157,25 +157,6 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     onSuccess: () => toast("Thanks — your feedback was recorded"),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
-    },
-  });
-
-  const unarchiveMutation = useMutation({
-    mutationFn: () => updateLead(lead.id, { status: "assessed" }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["leads"] });
-      qc.invalidateQueries({ queryKey: ["archive"] });
-    },
-  });
-
-  const skipMutation = useMutation({
-    mutationFn: () => archiveNoReply(lead.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["leads"] });
-      qc.invalidateQueries({ queryKey: ["archive"] });
-      toast(`Archived ${lead.company_name}`, {
-        action: { label: "Undo", onClick: () => unarchiveMutation.mutate() },
-      });
     },
   });
 
@@ -349,15 +330,6 @@ export default function LeadCard({ lead, index = 0 }: Props) {
         />
         <div className="flex items-center gap-3">
           <button
-            onClick={() => skipMutation.mutate()}
-            disabled={skipMutation.isPending}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-            data-testid="archive-no-reply-btn"
-            title="Skip the email and archive this lead. Sets Copper status to Unqualified."
-          >
-            {skipMutation.isPending ? "Archiving…" : "Skip ⤬"}
-          </button>
-          <button
             onClick={() => setExpanded(!expanded)}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
@@ -376,10 +348,6 @@ export default function LeadCard({ lead, index = 0 }: Props) {
           companyName={lead.company_name}
           onSubmit={(reasonData) => {
             overrideMutation.mutate({ bucket: pendingBucket, reasonData });
-            setPendingBucket(null);
-          }}
-          onSkip={() => {
-            overrideMutation.mutate({ bucket: pendingBucket });
             setPendingBucket(null);
           }}
           onCancel={() => setPendingBucket(null)}

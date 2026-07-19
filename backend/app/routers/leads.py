@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models.event import LeadEvent
 from app.models.lead import Lead
 from app.models.user import User
+from app.routers.assessments import _require_rating
 from app.schemas.lead import LeadOut, LeadUpdate, LeadWithAssessment, PaginatedLeads
 from app.services.auth import get_current_user, verify_webhook_signature
 from app.services import copper_writer
@@ -416,6 +417,12 @@ async def archive_no_reply(
     """
     Archive a lead without sending any email. Sets app status=archived AND moves
     the Copper Lead to Unqualified so it disappears from 'My Open Leads'.
+
+    Gated behind the same rating mandate as /approve and /send: a lead with a
+    latest assessment card that hasn't been rated 👍/👎 can't be archived either
+    (defense-in-depth now that the frontend's one-click Skip button is gone). A
+    lead with no assessment card yet has no recommendation to rate, so that case
+    is allowed through.
     """
     result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()
@@ -423,6 +430,15 @@ async def archive_no_reply(
         raise HTTPException(status_code=404, detail="Lead not found")
     if lead.status == "archived":
         return {"status": "already_archived"}
+
+    from app.models.assessment import AssessmentCard
+    card_result = await db.execute(
+        select(AssessmentCard).where(AssessmentCard.lead_id == lead.id)
+        .order_by(AssessmentCard.created_at.desc()).limit(1)
+    )
+    card = card_result.scalar_one_or_none()
+    if card:
+        _require_rating(card)
 
     lead.status = "archived"
     await log_event(db, lead.id, EVENT_ARCHIVED_NO_REPLY, {})
@@ -438,13 +454,7 @@ async def archive_no_reply(
     # Capture for training — Skip is an implicit REJECT (the human is saying
     # "I don't want to do anything with this lead"). Only meaningful when the
     # AI didn't already say REJECT.
-    from app.models.assessment import AssessmentCard
     from app.services.override_capture import capture_override
-    card_result = await db.execute(
-        select(AssessmentCard).where(AssessmentCard.lead_id == lead.id)
-        .order_by(AssessmentCard.created_at.desc()).limit(1)
-    )
-    card = card_result.scalar_one_or_none()
     if card:
         await capture_override(
             db, lead=lead, card=card, human_bucket="REJECT", trigger="skip",
