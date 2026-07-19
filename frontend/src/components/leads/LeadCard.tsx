@@ -1,4 +1,5 @@
 import { useState } from "react";
+import axios from "axios";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Lead } from "../../types/lead";
 import Badge from "../shared/Badge";
@@ -8,7 +9,7 @@ import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { useToast } from "../shared/Toast";
 import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
-import { findLinkedin, updateLead } from "../../api/leads";
+import { archiveNoReply, findLinkedin, updateLead } from "../../api/leads";
 import ReasonModal from "./ReasonModal";
 import FeedbackModal from "./FeedbackModal";
 
@@ -157,6 +158,25 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     onSuccess: () => toast("Thanks — your feedback was recorded"),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: () => archiveNoReply(lead.id),
+    onSuccess: () => toast(`Archived ${lead.company_name} (no email sent)`),
+    onError: (err: unknown) => {
+      // The backend re-checks the rating mandate (428 when unrated) as
+      // defense-in-depth. Surface that message inline instead of a generic
+      // error so the reviewer knows exactly why it was refused.
+      const detail =
+        axios.isAxiosError(err) && err.response?.status === 428
+          ? (err.response.data as { detail?: string } | undefined)?.detail
+          : undefined;
+      toast(detail ?? "Couldn't archive this lead — please try again.");
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["archive"] });
     },
   });
 
@@ -337,6 +357,12 @@ export default function LeadCard({ lead, index = 0 }: Props) {
           onApprove={() => setShowEmailModal(true)}
           onReassess={() => reassessMutation.mutate()}
           reassessing={reassessInFlight}
+          archiving={archiveMutation.isPending}
+          onArchiveNoReply={() => {
+            if (confirm(`Archive ${lead.company_name} without sending an email?`)) {
+              archiveMutation.mutate();
+            }
+          }}
         />
         <div className="flex items-center gap-3">
           <button
