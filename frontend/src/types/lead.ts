@@ -14,6 +14,7 @@ export interface Lead {
   status: string;
   created_at: string;
   updated_at: string;
+  applied_at: string | null;
   assessment?: Assessment;
 }
 
