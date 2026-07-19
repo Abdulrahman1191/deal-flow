@@ -90,6 +90,17 @@ class TestMatchFilenameToLead:
         # Both leads should still show up as diagnostic candidates.
         assert {c.company_name for c in result.candidates} == {"Ailooza", "Ailoozb"}
 
+    def test_exact_match_tie_across_two_leads_is_left_unmatched(self):
+        """Two distinct leads whose company names normalize to the same key
+        (entity-suffix stripping collapses 'Alpha Tech' and 'Alpha Co' to
+        'alpha'): an exact-normalized hit must not short-circuit the
+        ambiguity guard -- attaching to whichever lead comes last in DB order
+        would be a false match, which is worse than leaving it unmatched."""
+        leads = self._leads("Alpha Tech", "Alpha Co")
+        result = find_lead_match("Alpha.pdf", leads)
+        assert result.lead is None
+        assert {c.company_name for c in result.candidates} == {"Alpha Tech", "Alpha Co"}
+
     def test_unmatched_result_reports_closest_candidates_with_scores(self):
         leads = self._leads("Ailoo", "Hadawi", "Acme Deep Tech")
         result = find_lead_match("Totally Unrelated Filename.pdf", leads)

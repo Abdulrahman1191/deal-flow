@@ -306,28 +306,33 @@ def find_lead_match(
 ) -> MatchResult:
     """Match a PDF filename to one of the supplied leads, with diagnostics.
 
-    Exact match (after normalization) always wins. Otherwise, fuzzy match only
-    when exactly one lead clears `threshold` -- if two or more leads are
-    plausible, or the best score is below threshold, this returns no match
-    (attaching to the wrong lead is worse than leaving a file unmatched).
-    Always returns the top few candidates (whether or not one was chosen) so
-    callers can log/report why a file didn't attach.
+    Exact match (after normalization) wins -- but only when exactly one lead's
+    normalized company name matches the normalized filename. Two distinct
+    leads can normalize to the same key (e.g. "Alpha Tech" and "Alpha Co" both
+    strip to "alpha"), so an exact hit is treated exactly like the fuzzy path:
+    ambiguity means no attach. Otherwise, fuzzy match only when exactly one
+    lead clears `threshold` -- if two or more leads are plausible, or the best
+    score is below threshold, this returns no match (attaching to the wrong
+    lead is worse than leaving a file unmatched). Always returns the top few
+    candidates (whether or not one was chosen) so callers can log/report why
+    a file didn't attach.
     """
     stem = Path(filename).stem  # "Hadawi.pdf" -> "Hadawi"
     norm_stem = _normalize_company_key(stem)
 
     scored: list[MatchCandidate] = []
-    exact_lead: Optional[Lead] = None
+    exact_matches: list[MatchCandidate] = []
     for lead in leads:
         if not lead.company_name:
             continue
         norm_name = _normalize_company_key(lead.company_name)
         if not norm_name:
             continue
-        if norm_stem and norm_name == norm_stem:
-            exact_lead = lead
         score = difflib.SequenceMatcher(None, norm_stem, norm_name).ratio()
-        scored.append(MatchCandidate(lead=lead, company_name=lead.company_name, score=score))
+        candidate = MatchCandidate(lead=lead, company_name=lead.company_name, score=score)
+        scored.append(candidate)
+        if norm_stem and norm_name == norm_stem:
+            exact_matches.append(candidate)
 
     scored.sort(key=lambda c: c.score, reverse=True)
     top_candidates = scored[:_MAX_REPORTED_CANDIDATES]
@@ -335,8 +340,10 @@ def find_lead_match(
     if not norm_stem:
         return MatchResult(lead=None, candidates=top_candidates)
 
-    if exact_lead is not None:
-        return MatchResult(lead=exact_lead, candidates=top_candidates)
+    if len(exact_matches) == 1:
+        return MatchResult(lead=exact_matches[0].lead, candidates=top_candidates)
+    if len(exact_matches) > 1:
+        return MatchResult(lead=None, candidates=top_candidates)
 
     strong = [c for c in scored if c.score >= threshold]
     if len(strong) == 1:
