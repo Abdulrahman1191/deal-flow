@@ -15,7 +15,7 @@ from app.models.event import LeadEvent
 from app.models.lead import Lead
 from app.models.user import User
 from app.routers.assessments import _require_rating
-from app.schemas.lead import LeadOut, LeadUpdate, LeadWithAssessment, PaginatedLeads
+from app.schemas.lead import LeadOut, LeadUpdate, LeadWithAssessment, PaginatedLeads, PitchDeckSyncResult
 from app.services.auth import get_current_user, verify_webhook_signature
 from app.services import copper_writer
 from app.services.copper_echo_guard import is_recent_echo
@@ -498,6 +498,32 @@ async def find_linkedin(
         "company_linkedin_url": found,
         "source": source if found else None,
     }
+
+
+@router.post("/{lead_id}/sync-pitch-deck", response_model=PitchDeckSyncResult)
+async def sync_pitch_deck(
+    lead_id: str,
+    force: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """On-demand per-lead Drive fetch+match+attach, with a structured
+    diagnostic explaining exactly why a deck did or didn't attach. Unlike the
+    30-min scheduled sweep (app.tasks.sync_pitch_decks.sync_pitch_decks_task),
+    this runs inline for THIS lead only and always returns 200 with a
+    diagnostic body -- never a bare 500.
+
+    Idempotent: a lead that already has a Drive-matched deck returns
+    "already attached" and queues nothing unless `force=true`. No rating
+    gate -- fetching a deck isn't a disposition.
+    """
+    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    from app.tasks.sync_pitch_decks import sync_lead_pitch_deck
+    return await sync_lead_pitch_deck(db, lead, force=force)
 
 
 @router.get("/{lead_id}/events")

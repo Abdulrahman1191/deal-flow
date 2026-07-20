@@ -9,7 +9,7 @@ import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { useToast } from "../shared/Toast";
 import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
-import { archiveNoReply, findLinkedin, updateLead } from "../../api/leads";
+import { archiveNoReply, findLinkedin, syncPitchDeck, updateLead } from "../../api/leads";
 import ReasonModal from "./ReasonModal";
 import FeedbackModal from "./FeedbackModal";
 
@@ -188,6 +188,11 @@ export default function LeadCard({ lead, index = 0 }: Props) {
   const saveLinkedinMutation = useMutation({
     mutationFn: (url: string) =>
       updateLead(lead.id, { company_linkedin_url: url || null }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["leads"] }),
+  });
+
+  const syncDeckMutation = useMutation({
+    mutationFn: (force: boolean) => syncPitchDeck(lead.id, force),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["leads"] }),
   });
 
@@ -446,38 +451,70 @@ export default function LeadCard({ lead, index = 0 }: Props) {
           </div>
 
           {/* Pitch deck status */}
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Pitch deck
-            </span>
-            {lead.pitch_deck_filename ? (
-              lead.pitch_deck_drive_id ? (
-                <span className="text-foreground flex items-center gap-2">
-                  <a
-                    href={`/api/v1/leads/${lead.id}/pitch-deck`}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={lead.pitch_deck_filename}
-                    className="text-info hover:underline text-xs"
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Pitch deck
+              </span>
+              <div className="flex items-center gap-2">
+                {lead.pitch_deck_drive_id ? (
+                  <span className="text-foreground flex items-center gap-2">
+                    <a
+                      href={`/api/v1/leads/${lead.id}/pitch-deck`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={lead.pitch_deck_filename ?? undefined}
+                      className="text-info hover:underline text-xs"
+                    >
+                      View PDF ↗
+                    </a>
+                    {lead.pitch_deck_ingested_at && (
+                      <span className="text-muted-foreground">
+                        · {new Date(lead.pitch_deck_ingested_at).toLocaleDateString("en-GB")}
+                      </span>
+                    )}
+                    {reassessInFlight && (
+                      <span className="text-muted-foreground animate-pulse">re-scoring…</span>
+                    )}
+                  </span>
+                ) : lead.pitch_deck_filename ? (
+                  <span
+                    className="text-muted-foreground text-xs"
+                    title={`${lead.pitch_deck_filename} — Drive sync hasn't run yet; ping Abdulrahman.`}
                   >
-                    View PDF ↗
-                  </a>
-                  {lead.pitch_deck_ingested_at && (
-                    <span className="text-muted-foreground">
-                      · {new Date(lead.pitch_deck_ingested_at).toLocaleDateString("en-GB")}
-                    </span>
-                  )}
-                </span>
-              ) : (
-                <span
-                  className="text-muted-foreground text-xs"
-                  title={`${lead.pitch_deck_filename} — Drive sync hasn't run yet; ping Abdulrahman.`}
+                    on file, sync pending
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">not yet ingested</span>
+                )}
+                <button
+                  onClick={() => syncDeckMutation.mutate(!!lead.pitch_deck_drive_id)}
+                  disabled={syncDeckMutation.isPending}
+                  className="text-[10px] text-info hover:underline disabled:opacity-50 whitespace-nowrap"
+                  data-testid="fetch-pitch-deck-btn"
                 >
-                  on file, sync pending
-                </span>
-              )
-            ) : (
-              <span className="text-muted-foreground">not yet ingested</span>
+                  {syncDeckMutation.isPending
+                    ? "Fetching…"
+                    : lead.pitch_deck_drive_id
+                      ? "Re-fetch"
+                      : "Fetch pitch deck"}
+                </button>
+              </div>
+            </div>
+            {syncDeckMutation.data && (
+              <p
+                className={`text-[10px] leading-snug ${
+                  syncDeckMutation.data.attached ? "text-muted-foreground" : "text-error"
+                }`}
+                data-testid="fetch-pitch-deck-reason"
+              >
+                {syncDeckMutation.data.reason}
+              </p>
+            )}
+            {syncDeckMutation.isError && (
+              <p className="text-[10px] text-error" data-testid="fetch-pitch-deck-reason">
+                Couldn't reach the fetch endpoint — please try again.
+              </p>
             )}
           </div>
 

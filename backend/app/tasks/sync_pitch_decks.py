@@ -92,10 +92,19 @@ def _download_pdf(service, file_id: str, dest: Path) -> None:
             _, done = downloader.next_chunk()
 
 
-async def _ingest_from_drive(db: AsyncSession, service, lead: Lead, drive_file: dict) -> bool:
+async def _ingest_from_drive(
+    db: AsyncSession, service, lead: Lead, drive_file: dict, *, require_existing_card: bool = True
+) -> bool:
     """Download, extract, and store a matched Drive file on its lead.
 
-    Returns True if a re-assessment was queued (lead already had a card).
+    Returns True if a re-assessment was queued. When `require_existing_card`
+    is True (the scheduled sweep's behavior), that only happens if the lead
+    already had an assessment card -- a brand-new lead gets its first
+    assessment (with the deck) via the normal sync_copper import flow, so
+    re-queuing here would just duplicate work. The on-demand per-lead endpoint
+    passes `require_existing_card=False` since a user explicitly asking to
+    fetch a deck always wants the resulting re-score, regardless of whether
+    an assessment already exists.
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         pdf_path = Path(tmp_dir) / drive_file["name"]
@@ -110,10 +119,13 @@ async def _ingest_from_drive(db: AsyncSession, service, lead: Lead, drive_file: 
         lead.pitch_deck_text = text
         lead.pitch_deck_ingested_at = datetime.now(timezone.utc)
 
-        existing_card = await db.execute(
-            select(AssessmentCard.id).where(AssessmentCard.lead_id == lead.id).limit(1)
-        )
-        should_requeue = existing_card.scalar_one_or_none() is not None
+        if require_existing_card:
+            existing_card = await db.execute(
+                select(AssessmentCard.id).where(AssessmentCard.lead_id == lead.id).limit(1)
+            )
+            should_requeue = existing_card.scalar_one_or_none() is not None
+        else:
+            should_requeue = True
 
     await db.commit()
 
@@ -197,6 +209,114 @@ async def _run() -> dict:
     }
     print(f"[sync_pitch_decks] {result}")
     return result
+
+
+_MAX_REPORTED_FILES = 5
+
+
+async def sync_lead_pitch_deck(db: AsyncSession, lead: Lead, *, force: bool = False) -> dict:
+    """On-demand Drive fetch+match+attach for a SINGLE lead.
+
+    Powers the "Fetch pitch deck" button (POST /leads/{id}/sync-pitch-deck):
+    unlike the scheduled sweep in _run(), this always runs synchronously
+    inside the request so the caller gets a structured diagnostic back
+    instead of having to guess why nothing happened. Every failure branch is
+    caught and turned into a `reason` string rather than propagating (the
+    caller must never see a bare 500 here).
+
+    Reuses _drive_service/_list_pdfs_in_folder/find_lead_match/
+    extract_text_from_pdf/_ingest_from_drive -- the exact same pieces the
+    scheduled sweep uses -- so the two paths can't drift apart.
+    """
+    diagnostic = {
+        "configured": bool(settings.google_service_account_json),
+        "folder_readable": False,
+        "files_in_folder": 0,
+        "matched_file": None,
+        "closest_candidates": [],
+        "attached": False,
+        "extracted_chars": 0,
+        "garbled": False,
+        "reassessment_queued": False,
+        "reason": "",
+    }
+
+    if lead.pitch_deck_drive_id and not force:
+        diagnostic.update(
+            attached=True,
+            matched_file=lead.pitch_deck_filename,
+            extracted_chars=len(lead.pitch_deck_text or ""),
+            reason=(
+                f"{lead.pitch_deck_filename!r} is already attached to this lead. "
+                "Pass force=true to re-fetch it from Drive."
+            ),
+        )
+        return diagnostic
+
+    if not diagnostic["configured"]:
+        diagnostic["reason"] = (
+            "Google service account isn't configured (GOOGLE_SERVICE_ACCOUNT_JSON is unset) "
+            "-- deck fetching is disabled until that secret is set."
+        )
+        return diagnostic
+
+    try:
+        service = _drive_service()
+        drive_files = _list_pdfs_in_folder(service, settings.drive_pitch_deck_folder_id)
+    except Exception as exc:
+        diagnostic["reason"] = f"Service account can't read the folder: {exc!r}"
+        return diagnostic
+
+    diagnostic["folder_readable"] = True
+    diagnostic["files_in_folder"] = len(drive_files)
+
+    # Invert the usual "one filename vs many leads" matching call into "one
+    # lead vs many filenames" by calling find_lead_match once per file with
+    # this single lead as the only candidate -- reuses the exact same
+    # normalization/threshold/exact-match logic the scheduled sweep relies on.
+    scored = []
+    for drive_file in drive_files:
+        match = find_lead_match(drive_file["name"], [lead])
+        score = match.candidates[0].score if match.candidates else 0.0
+        scored.append((drive_file, score, match.lead is not None))
+    scored.sort(key=lambda t: t[1], reverse=True)
+
+    matched_files = [f for f, _, is_match in scored if is_match]
+    if not matched_files:
+        diagnostic["closest_candidates"] = [f["name"] for f, _, _ in scored[:_MAX_REPORTED_FILES]]
+        folder_listing = ", ".join(diagnostic["closest_candidates"]) or "(the folder is empty)"
+        diagnostic["reason"] = (
+            f"No file matching {lead.company_name!r} found; folder has: {folder_listing}"
+        )
+        return diagnostic
+
+    # Multiple files independently clearing the bar against this one lead is
+    # rare and out of scope here (see issue #44) -- take the closest.
+    drive_file = matched_files[0]
+    diagnostic["matched_file"] = drive_file["name"]
+
+    try:
+        requeued = await _ingest_from_drive(db, service, lead, drive_file, require_existing_card=False)
+    except Exception as exc:
+        diagnostic["reason"] = f"Found {drive_file['name']!r} but failed to download/extract it: {exc!r}"
+        return diagnostic
+
+    diagnostic["attached"] = True
+    diagnostic["extracted_chars"] = len(lead.pitch_deck_text or "")
+    diagnostic["garbled"] = not lead.pitch_deck_text
+    diagnostic["reassessment_queued"] = requeued
+
+    if lead.pitch_deck_text:
+        diagnostic["reason"] = (
+            f"Attached {drive_file['name']!r} ({diagnostic['extracted_chars']} chars) "
+            "and queued a re-assessment."
+        )
+    else:
+        diagnostic["reason"] = (
+            f"Found and downloaded {drive_file['name']!r}, but text extraction was garbled "
+            "or empty -- not stored for scoring. The file is still viewable via Drive."
+        )
+    return diagnostic
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=120)

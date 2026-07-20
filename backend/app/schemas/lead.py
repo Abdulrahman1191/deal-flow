@@ -75,3 +75,20 @@ class PaginatedLeads(BaseModel):
     page: int
     page_size: int
     items: List[LeadWithAssessment]
+
+
+class PitchDeckSyncResult(BaseModel):
+    """Structured diagnostic returned by POST /leads/{id}/sync-pitch-deck --
+    never a bare 500, so the "Fetch pitch deck" button can always show the
+    user exactly why a deck did or didn't attach."""
+
+    configured: bool
+    folder_readable: bool
+    files_in_folder: int = 0
+    matched_file: Optional[str] = None
+    closest_candidates: List[str] = Field(default_factory=list)
+    attached: bool
+    extracted_chars: int = 0
+    garbled: bool = False
+    reassessment_queued: bool = False
+    reason: str
