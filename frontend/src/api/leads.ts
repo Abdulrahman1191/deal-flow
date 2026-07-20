@@ -64,3 +64,23 @@ export const findLinkedin = (id: string) =>
       `/leads/${id}/find-linkedin`,
     )
     .then((r) => r.data);
+
+export interface PitchDeckSyncResult {
+  configured: boolean;
+  folder_readable: boolean;
+  files_in_folder: number;
+  matched_file: string | null;
+  closest_candidates: string[];
+  attached: boolean;
+  extracted_chars: number;
+  garbled: boolean;
+  reassessment_queued: boolean;
+  reason: string;
+}
+
+export const syncPitchDeck = (id: string, force = false) =>
+  client
+    .post<PitchDeckSyncResult>(`/leads/${id}/sync-pitch-deck`, null, {
+      params: force ? { force: true } : undefined,
+    })
+    .then((r) => r.data);

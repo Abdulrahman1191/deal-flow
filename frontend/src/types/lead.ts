@@ -11,6 +11,7 @@ export interface Lead {
   company_linkedin_url: string | null;
   pitch_deck_filename: string | null;
   pitch_deck_ingested_at: string | null;
+  pitch_deck_drive_id: string | null;
   status: string;
   created_at: string;
   updated_at: string;
