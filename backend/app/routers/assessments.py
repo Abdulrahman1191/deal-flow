@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,7 +13,7 @@ from app.models.lead import Lead
 from app.models.user import User
 from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverride, DraftUpdate
 from app.services import claude_agent, copper_writer, email_sender
-from app.services.auth import get_current_user
+from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
 from app.services.override_capture import capture_override
 from app.services.events import (
     EVENT_ARCHIVED,
@@ -28,17 +28,20 @@ from app.tasks.assess_lead import assess_lead_task
 router = APIRouter(prefix="/assessments", tags=["assessments"])
 
 
-async def _get_card_and_lead(lead_id: str, db: AsyncSession, user: User) -> tuple[AssessmentCard, Lead]:
+async def _get_card_and_lead(
+    lead_id: str, request: Request, db: AsyncSession, user: User
+) -> tuple[AssessmentCard, Lead]:
     """Fetch the latest assessment card for lead_id, scoped to the caller's
-    own lead (join + `Lead.owner_email == user.email`), mirroring the pattern
-    already used throughout leads.py. Returns 404 — not 403 — when the lead
-    belongs to someone else, so a cross-user probe can't distinguish "doesn't
-    exist" from "not yours" (SECURITY_AUDIT.md F2: this router previously had
-    no ownership check at all)."""
+    own lead (join + `Lead.owner_email == effective_owner_email(...)`),
+    mirroring the pattern already used throughout leads.py. Returns 404 — not
+    403 — when the lead belongs to someone else, so a cross-user probe can't
+    distinguish "doesn't exist" from "not yours" (SECURITY_AUDIT.md F2: this
+    router previously had no ownership check at all). `effective_owner_email`
+    honors an admin's `?view_as=` for this read, same as leads.py."""
     result = await db.execute(
         select(AssessmentCard, Lead)
         .join(Lead, AssessmentCard.lead_id == Lead.id)
-        .where(AssessmentCard.lead_id == lead_id, Lead.owner_email == user.email)
+        .where(AssessmentCard.lead_id == lead_id, Lead.owner_email == effective_owner_email(request, user))
         .order_by(AssessmentCard.created_at.desc())
         .limit(1)
     )
@@ -62,14 +65,16 @@ def _require_rating(card: AssessmentCard) -> None:
 
 @router.get("/send-queue")
 async def get_send_queue(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """Returns the caller's own approved but unsent email drafts for Cowork to
-    action. Scoped to `Lead.owner_email == user.email` like every other
-    endpoint in this router (SECURITY_AUDIT.md F2) — the caller's Cowork
-    integration only ever mark-sents leads it owns, so an unscoped queue would
-    both leak cross-user draft content and list items `mark-sent` 404s on."""
+    action. Scoped to `Lead.owner_email == effective_owner_email(...)` like
+    every other endpoint in this router (SECURITY_AUDIT.md F2) — the caller's
+    Cowork integration only ever mark-sents leads it owns, so an unscoped
+    queue would both leak cross-user draft content and list items
+    `mark-sent` 404s on. Also honors an admin's `?view_as=` for QA reads."""
     result = await db.execute(
         select(AssessmentCard, Lead)
         .join(Lead, AssessmentCard.lead_id == Lead.id)
@@ -78,7 +83,7 @@ async def get_send_queue(
                 AssessmentCard.approved_at.is_not(None),
                 AssessmentCard.sent_at.is_(None),
                 AssessmentCard.draft_type.is_not(None),
-                Lead.owner_email == user.email,
+                Lead.owner_email == effective_owner_email(request, user),
             )
         )
         .order_by(AssessmentCard.approved_at.asc())
@@ -103,21 +108,24 @@ async def get_send_queue(
 @router.get("/{lead_id}", response_model=AssessmentOut)
 async def get_assessment(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    card, _lead = await _get_card_and_lead(lead_id, db, user)
+    card, _lead = await _get_card_and_lead(lead_id, request, db, user)
     return card
 
 
 @router.post("/{lead_id}/approve")
 async def approve_assessment(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Marks the draft as approved and queues it for sending."""
-    card, lead = await _get_card_and_lead(lead_id, db, user)
+    block_if_impersonating(request, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
     _require_rating(card)
 
     if card.approved_at:
@@ -197,12 +205,14 @@ async def _finalize_sent(db: AsyncSession, card: AssessmentCard, lead: Optional[
 @router.post("/{lead_id}/mark-sent")
 async def mark_sent(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Called by an EXTERNAL sender (e.g. Cowork) after it sends the email.
     Just records 'sent' + runs the terminal Copper transition — does NOT send."""
-    card, lead = await _get_card_and_lead(lead_id, db, user)
+    block_if_impersonating(request, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
     _require_rating(card)
     return await _finalize_sent(db, card, lead)
 
@@ -210,6 +220,7 @@ async def mark_sent(
 @router.post("/{lead_id}/send")
 async def send_assessment(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -219,7 +230,8 @@ async def send_assessment(
     so a lead is never marked sent / converted in Copper without a real email
     going out. On a send failure we abort (no state change) so it can be retried.
     """
-    card, lead = await _get_card_and_lead(lead_id, db, user)
+    block_if_impersonating(request, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
     _require_rating(card)
 
     if not email_sender.is_configured():
@@ -265,10 +277,12 @@ async def send_assessment(
 async def update_draft(
     lead_id: str,
     body: DraftUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    card, lead = await _get_card_and_lead(lead_id, db, user)
+    block_if_impersonating(request, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
     changed = body.model_dump(exclude_none=True)
     for field, value in changed.items():
         setattr(card, field, value)
@@ -292,12 +306,14 @@ async def update_draft(
 async def override_bucket(
     lead_id: str,
     body: BucketOverride,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    block_if_impersonating(request, user)
     if body.bucket not in ("YES", "MAYBE", "REJECT"):
         raise HTTPException(status_code=400, detail="bucket must be YES, MAYBE, or REJECT")
-    card, lead = await _get_card_and_lead(lead_id, db, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
     if card.bucket == body.bucket and not card.user_override:
         return card  # no-op
 
@@ -368,6 +384,7 @@ async def override_bucket(
 async def rate_assessment(
     lead_id: str,
     body: AssessmentRating,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -379,10 +396,11 @@ async def rate_assessment(
     model can later be tuned against the human's judgement — including the cases
     where the AI was *right*, which an override-only flow never captures.
     """
+    block_if_impersonating(request, user)
     if body.rating not in ("up", "down"):
         raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
 
-    card, lead = await _get_card_and_lead(lead_id, db, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
     effective_bucket = card.user_override or card.bucket
 
     card.user_rating = body.rating
@@ -407,12 +425,14 @@ async def rate_assessment(
 @router.post("/{lead_id}/regenerate-draft", response_model=AssessmentOut)
 async def regenerate_draft(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Force the LLM to write a fresh draft email matching the current effective bucket.
     Used when a draft is missing (silent regen failure) or the user wants a rewrite."""
-    card, lead = await _get_card_and_lead(lead_id, db, user)
+    block_if_impersonating(request, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
 
     effective_bucket = card.user_override or card.bucket
     if effective_bucket not in ("YES", "REJECT"):
@@ -441,9 +461,11 @@ async def regenerate_draft(
 @router.post("/{lead_id}/reassess", status_code=202)
 async def reassess(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    block_if_impersonating(request, user)
     lead_result = await db.execute(
         select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email)
     )
