@@ -16,7 +16,12 @@ from app.models.lead import Lead
 from app.models.user import User
 from app.routers.assessments import _require_rating
 from app.schemas.lead import LeadOut, LeadUpdate, LeadWithAssessment, PaginatedLeads, PitchDeckSyncResult
-from app.services.auth import get_current_user, verify_webhook_signature
+from app.services.auth import (
+    block_if_impersonating,
+    effective_owner_email,
+    get_current_user,
+    verify_webhook_signature,
+)
 from app.services import copper_writer
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
@@ -221,6 +226,7 @@ async def sync_my_leads(user: User = Depends(get_current_user)):
 
 @router.get("", response_model=PaginatedLeads)
 async def list_leads(
+    request: Request,
     bucket: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
@@ -231,7 +237,9 @@ async def list_leads(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = select(Lead).options(selectinload(Lead.assessment)).where(Lead.owner_email == user.email)
+    query = select(Lead).options(selectinload(Lead.assessment)).where(
+        Lead.owner_email == effective_owner_email(request, user)
+    )
     if status:
         query = query.where(Lead.status == status)
     else:
@@ -287,12 +295,13 @@ async def export_leads(
 @router.get("/{lead_id}", response_model=LeadWithAssessment)
 async def get_lead(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
         select(Lead).options(selectinload(Lead.assessment)).where(
-            Lead.id == lead_id, Lead.owner_email == user.email
+            Lead.id == lead_id, Lead.owner_email == effective_owner_email(request, user)
         )
     )
     lead = result.scalar_one_or_none()
@@ -349,6 +358,7 @@ async def delete_lead(
 
 @router.get("/archive/list")
 async def list_archive(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -359,7 +369,7 @@ async def list_archive(
     result = await db.execute(
         select(Lead)
         .options(selectinload(Lead.assessment))
-        .where(Lead.status == "archived", Lead.owner_email == user.email)
+        .where(Lead.status == "archived", Lead.owner_email == effective_owner_email(request, user))
         .order_by(Lead.updated_at.desc())
     )
     leads = result.scalars().all()
@@ -411,6 +421,7 @@ async def list_archive(
 @router.post("/{lead_id}/archive-no-reply")
 async def archive_no_reply(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -424,6 +435,7 @@ async def archive_no_reply(
     lead with no assessment card yet has no recommendation to rate, so that case
     is allowed through.
     """
+    block_if_impersonating(request, user)
     result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()
     if not lead:
@@ -558,6 +570,7 @@ async def list_lead_events(
 @router.get("/{lead_id}/pitch-deck")
 async def get_pitch_deck(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -572,6 +585,8 @@ async def get_pitch_deck(
     keep adding new decks.
     """
     from fastapi.responses import RedirectResponse
+
+    block_if_impersonating(request, user)
 
     result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
     lead = result.scalar_one_or_none()

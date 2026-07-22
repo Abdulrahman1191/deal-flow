@@ -17,6 +17,7 @@ login URL.
 from __future__ import annotations
 import hashlib
 import hmac
+import logging
 import os
 from typing import Optional
 
@@ -37,6 +38,8 @@ from app.models.user import User
 # form, or a typo like "production") must never enable identity impersonation
 # via a query string — see SECURITY_AUDIT.md finding F1.
 _LOCAL_DEV = os.getenv("ENV", "prod").lower() == "dev"
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_email(request: Request) -> Optional[str]:
@@ -105,6 +108,43 @@ def is_owner(user: User) -> bool:
     tabs. Add teammates to ADMIN_EMAILS to grant them admin.
     """
     return user.email.strip().lower() in settings.admin_email_set()
+
+
+def _requested_view_as(request: Request) -> str:
+    return (request.query_params.get("view_as") or "").strip().lower()
+
+
+def effective_owner_email(request: Request, user: User) -> str:
+    """The email whose board a scoped read should return.
+
+    Admin-only "view as" QA mode (issue #50): if the caller is an admin
+    (`is_owner`) and passes a non-empty `?view_as=`, scoped reads use that
+    email instead of the caller's own. A non-admin passing `view_as` is
+    silently ignored — falls back to their own email, never honored, never
+    leaks. Every honored view_as is audit-logged here since this is the
+    single choke point all scoped reads go through.
+    """
+    view_as = _requested_view_as(request)
+    if view_as and is_owner(user):
+        logger.info("view_as honored: admin=%s viewed=%s", user.email, view_as)
+        return view_as
+    return user.email
+
+
+def is_impersonating(request: Request, user: User) -> bool:
+    """True when a `view_as` query param is actually being honored (i.e. the
+    caller is an admin and passed a non-empty view_as)."""
+    return bool(_requested_view_as(request)) and is_owner(user)
+
+
+def block_if_impersonating(request: Request, user: User) -> None:
+    """Guard for mutating endpoints: the "view as" QA mode is read-only by
+    design, so any mutation attempted while impersonating is refused."""
+    if is_impersonating(request, user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Read-only while viewing another user's board",
+        )
 
 
 def verify_webhook_signature(payload: bytes, signature: str) -> bool:
