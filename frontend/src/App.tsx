@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useMe } from "./lib/auth";
 import Navbar from "./components/layout/Navbar";
 import LeadsPage from "./pages/LeadsPage";
@@ -13,10 +14,32 @@ import useAppStore from "./store/useAppStore";
 // the backend returns 401 and we show a friendly "not authenticated" panel.
 
 function Dashboard() {
-  const { activeTab } = useAppStore();
+  const { activeTab, viewAs, setViewAs } = useAppStore();
+  const qc = useQueryClient();
+
+  const clearViewAs = () => {
+    setViewAs(null);
+    qc.invalidateQueries({ queryKey: ["leads"] });
+    qc.invalidateQueries({ queryKey: ["archive"] });
+    qc.invalidateQueries({ queryKey: ["send-queue"] });
+  };
+
   return (
     <div className="h-screen flex flex-col bg-background">
       <Navbar />
+      {viewAs && (
+        <div className="flex items-center justify-center gap-3 bg-warning/90 text-white text-xs font-medium px-4 py-2">
+          <span>
+            Viewing <span className="font-semibold">{viewAs}</span>'s board — read-only
+          </span>
+          <button
+            onClick={clearViewAs}
+            className="rounded-md bg-white/20 hover:bg-white/30 px-2.5 py-1 transition-colors"
+          >
+            Back to my board
+          </button>
+        </div>
+      )}
       <div className="flex-1 overflow-hidden">
         <ErrorBoundary>
           {activeTab === "leads" && (
