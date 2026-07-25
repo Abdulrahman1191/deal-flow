@@ -87,18 +87,50 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
     copper_ids = {str(r.get("id", "")) for r in raw_leads if r.get("id")}
 
     new_count = 0
+    skipped_existing = 0
+    failed_count = 0
     for raw in raw_leads:
         copper_id = str(raw.get("id", ""))
         if not copper_id:
             continue
-        existing = await db.execute(select(Lead).where(Lead.copper_id == copper_id))
-        if existing.scalar_one_or_none():
+
+        # Per-lead isolation: a malformed Copper record, a DB constraint
+        # error, or anything else here must not abort the rest of this
+        # user's import -- log it and move on to the next lead. Previously
+        # an unguarded exception here propagated out of sync_one_user and
+        # left every not-yet-committed lead for this run rolled back, which
+        # is why a single bad record produced a stuck partial import that
+        # repeated on every subsequent run.
+        try:
+            existing = await db.execute(select(Lead).where(Lead.copper_id == copper_id))
+            if existing.scalar_one_or_none():
+                skipped_existing += 1
+                continue
+            lead = Lead(**map_copper_lead(raw), owner_email=user.email)
+            db.add(lead)
+            # Commit before enqueueing so the lead's durability never depends
+            # on the Celery/Redis enqueue succeeding -- a broker hiccup below
+            # just means it gets assessed on a later pass instead of losing
+            # the lead entirely. Committing per-lead (rather than once at the
+            # end) also means a later lead's failure can't roll back leads
+            # already imported earlier in this same run.
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            failed_count += 1
+            print(f"[sync_copper] failed to import copper_id={copper_id} for {user.email}: {exc!r}")
             continue
-        lead = Lead(**map_copper_lead(raw), owner_email=user.email)
-        db.add(lead)
-        await db.flush()
-        assess_lead_task.delay(str(lead.id))
+
         new_count += 1
+        try:
+            assess_lead_task.delay(str(lead.id))
+        except Exception as exc:
+            print(f"[sync_copper] enqueue failed for lead={lead.id} copper_id={copper_id} (will be picked up later): {exc!r}")
+
+    print(
+        f"[sync_copper] user={user.email} fetched={len(raw_leads)} imported={new_count} "
+        f"skipped_existing={skipped_existing} failed={failed_count}"
+    )
 
     # Archive this user's active leads no longer open-assigned to them in Copper.
     stale_count = 0
@@ -122,8 +154,15 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
             print(f"[sync_copper] event log skipped for {lead.id}: {exc!r}")
 
     await db.commit()
-    print(f"[sync_copper] user={user.email} imported={new_count} archived_stale={stale_count} copper_open={len(raw_leads)}")
-    return {"user": user.email, "synced": new_count, "archived_stale": stale_count, "checked": len(raw_leads)}
+    print(f"[sync_copper] user={user.email} archived_stale={stale_count} copper_open={len(raw_leads)}")
+    return {
+        "user": user.email,
+        "synced": new_count,
+        "archived_stale": stale_count,
+        "checked": len(raw_leads),
+        "skipped_existing": skipped_existing,
+        "failed": failed_count,
+    }
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -149,6 +188,11 @@ async def _run_all() -> dict:
             try:
                 results.append(await sync_one_user(db, user))
             except Exception as exc:
+                # sync_one_user isolates per-lead failures internally, so this
+                # only fires for something unexpected (e.g. the Copper fetch
+                # itself). Roll back so a dangling failed transaction on this
+                # shared session doesn't also break every user after this one.
+                await db.rollback()
                 print(f"[sync_copper] sync failed for {user.email}: {exc!r}")
                 results.append({"user": user.email, "error": repr(exc)[:200]})
     return {"users": len(results), "results": results}
