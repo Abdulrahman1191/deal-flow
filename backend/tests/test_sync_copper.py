@@ -12,6 +12,7 @@ Mirrors the queued-result AsyncSession fake used in test_copper_writebacks.py
 import asyncio
 from types import SimpleNamespace
 
+from app.models.event import LeadEvent
 from app.tasks import sync_copper as sc
 
 
@@ -114,35 +115,124 @@ def test_enqueue_failure_does_not_lose_the_committed_lead(monkeypatch):
 
 
 def test_existing_lead_is_skipped_not_recreated(monkeypatch):
+    """A copper_id already owned by this same user is left as-is -- in
+    particular, not reactivated (see the reassignment tests below for the
+    different-owner case)."""
     raw_leads = [{"id": "already-here"}]
     monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
     monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
     monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: None)
 
-    db = _FakeSyncSession([SimpleNamespace(id="existing-row"), []])
-    result = asyncio.run(sc.sync_one_user(db, _user()))
+    user = _user()
+    db = _FakeSyncSession([SimpleNamespace(id="existing-row", owner_email=user.email), []])
+    result = asyncio.run(sc.sync_one_user(db, user))
 
     assert result["synced"] == 0
+    assert result["reassigned"] == 0
     assert result["skipped_existing"] == 1
     assert db.added == []
 
 
 def test_second_run_with_nothing_new_imports_nothing(monkeypatch):
-    """A repeat run over the same Copper leads (now all pre-existing) must be
-    a no-op -- idempotency after the per-lead-commit fix."""
+    """A repeat run over the same Copper leads (now all pre-existing, owned by
+    this same user) must be a no-op -- idempotency after the per-lead-commit
+    fix."""
     raw_leads = [{"id": "a"}, {"id": "b"}]
     monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
     monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
     monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: None)
 
+    user = _user()
     db = _FakeSyncSession([
-        SimpleNamespace(id="a-row"),
-        SimpleNamespace(id="b-row"),
+        SimpleNamespace(id="a-row", owner_email=user.email),
+        SimpleNamespace(id="b-row", owner_email=user.email),
         [],
     ])
-    result = asyncio.run(sc.sync_one_user(db, _user()))
+    result = asyncio.run(sc.sync_one_user(db, user))
 
     assert result["synced"] == 0
+    assert result["reassigned"] == 0
     assert result["skipped_existing"] == 2
     assert result["failed"] == 0
     assert db.added == []
+
+
+def test_existing_lead_owned_by_different_user_is_reassigned(monkeypatch):
+    """Issue #61: the whole firm's pipeline was originally imported under one
+    owner. When Copper now shows a lead open-assigned to a different
+    teammate, the existing row must be reassigned (UPDATE), not skipped
+    forever and not duplicated (copper_id has a global unique index)."""
+    raw_leads = [{"id": "co-1", "company_name": "Fresh Co Name"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
+    queued = []
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    lead_id = "11111111-1111-1111-1111-111111111111"
+    existing_lead = SimpleNamespace(
+        id=lead_id, owner_email="old-owner@raed.vc", copper_id="co-1",
+        company_name="Stale Name", status="archived",
+    )
+    new_owner = _user(email="new-owner@raed.vc")
+    db = _FakeSyncSession([existing_lead, []])
+    result = asyncio.run(sc.sync_one_user(db, new_owner))
+
+    assert result["synced"] == 0
+    assert result["reassigned"] == 1
+    assert result["skipped_existing"] == 0
+    assert result["failed"] == 0
+    assert existing_lead.owner_email == "new-owner@raed.vc"
+    assert existing_lead.status == "pending"
+    assert existing_lead.company_name == "co-1"  # refreshed via map_copper_lead
+    # A LeadEvent recording the reassignment was logged.
+    assert len(db.added) == 1
+    event = db.added[0]
+    assert isinstance(event, LeadEvent)
+    assert event.event_type == "reassigned"
+    assert event.payload == {"from_owner": "old-owner@raed.vc", "to_owner": "new-owner@raed.vc"}
+    # Re-assessed so it lands on the new owner's board.
+    assert queued == [lead_id]
+
+
+def test_reassigned_lead_is_not_reassigned_again_on_next_sync(monkeypatch):
+    """Idempotency: once reassigned, the next sync sees the row already owned
+    by this user and takes the same-owner skip path -- no repeated
+    reassignment, no duplicate assessments every cycle."""
+    raw_leads = [{"id": "co-1"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: None)
+
+    user = _user(email="new-owner@raed.vc")
+    # Second run: the row is now owned by this same user (post-reassignment).
+    already_reassigned = SimpleNamespace(id="lead-1", owner_email=user.email, copper_id="co-1")
+    db = _FakeSyncSession([already_reassigned, []])
+    result = asyncio.run(sc.sync_one_user(db, user))
+
+    assert result["reassigned"] == 0
+    assert result["skipped_existing"] == 1
+    assert db.added == []
+
+
+def test_reassigned_lead_is_not_re_archived_by_stale_reconcile(monkeypatch):
+    """A lead just reassigned to this user in this same run is open-assigned
+    to them in Copper (its copper_id is in this run's fetch), so the
+    stale-archive reconcile scan right after must not archive it again."""
+    raw_leads = [{"id": "co-1"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: None)
+
+    user = _user(email="new-owner@raed.vc")
+    existing_lead = SimpleNamespace(
+        id="22222222-2222-2222-2222-222222222222",
+        owner_email="old-owner@raed.vc", copper_id="co-1", status="archived",
+    )
+    # Archive-reconcile scan (2nd execute()) returns the same row, now
+    # reassigned to `user` and still open (copper_id "co-1" is in copper_ids).
+    db = _FakeSyncSession([existing_lead, [existing_lead]])
+    result = asyncio.run(sc.sync_one_user(db, user))
+
+    assert result["reassigned"] == 1
+    assert result["archived_stale"] == 0
+    assert existing_lead.status == "pending"

@@ -88,6 +88,7 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
 
     new_count = 0
     skipped_existing = 0
+    reassigned_count = 0
     failed_count = 0
     for raw in raw_leads:
         copper_id = str(raw.get("id", ""))
@@ -103,25 +104,51 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
         # repeated on every subsequent run.
         try:
             existing = await db.execute(select(Lead).where(Lead.copper_id == copper_id))
-            if existing.scalar_one_or_none():
+            existing_lead = existing.scalar_one_or_none()
+            if existing_lead is not None and existing_lead.owner_email == user.email:
+                # This user's own row for this copper_id -- leave as-is. In
+                # particular, don't reactivate a lead they deliberately
+                # archived; that reverse-drift is issue #56's concern.
                 skipped_existing += 1
                 continue
-            lead = Lead(**map_copper_lead(raw), owner_email=user.email)
-            db.add(lead)
-            # Commit before enqueueing so the lead's durability never depends
-            # on the Celery/Redis enqueue succeeding -- a broker hiccup below
-            # just means it gets assessed on a later pass instead of losing
-            # the lead entirely. Committing per-lead (rather than once at the
-            # end) also means a later lead's failure can't roll back leads
-            # already imported earlier in this same run.
-            await db.commit()
+            if existing_lead is not None:
+                # copper_id already has a row, but owned by a different user
+                # -- the whole firm's pipeline was originally imported under
+                # one owner, and Copper now shows this lead assigned to
+                # someone else. Reassign the existing row (never insert a
+                # second one -- copper_id is globally unique) and reactivate
+                # it so it lands on the current owner's board.
+                from_owner = existing_lead.owner_email
+                for field, value in map_copper_lead(raw).items():
+                    setattr(existing_lead, field, value)
+                existing_lead.owner_email = user.email
+                existing_lead.status = "pending"
+                lead = existing_lead
+                try:
+                    from app.services.events import log_event, EVENT_REASSIGNED
+                    await log_event(db, lead.id, EVENT_REASSIGNED,
+                                    {"from_owner": from_owner, "to_owner": user.email})
+                except Exception as exc:
+                    print(f"[sync_copper] event log skipped for {copper_id}: {exc!r}")
+                await db.commit()
+                reassigned_count += 1
+            else:
+                lead = Lead(**map_copper_lead(raw), owner_email=user.email)
+                db.add(lead)
+                new_count += 1
+                # Commit before enqueueing so the lead's durability never depends
+                # on the Celery/Redis enqueue succeeding -- a broker hiccup below
+                # just means it gets assessed on a later pass instead of losing
+                # the lead entirely. Committing per-lead (rather than once at the
+                # end) also means a later lead's failure can't roll back leads
+                # already imported earlier in this same run.
+                await db.commit()
         except Exception as exc:
             await db.rollback()
             failed_count += 1
             print(f"[sync_copper] failed to import copper_id={copper_id} for {user.email}: {exc!r}")
             continue
 
-        new_count += 1
         try:
             assess_lead_task.delay(str(lead.id))
         except Exception as exc:
@@ -129,7 +156,7 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
 
     print(
         f"[sync_copper] user={user.email} fetched={len(raw_leads)} imported={new_count} "
-        f"skipped_existing={skipped_existing} failed={failed_count}"
+        f"reassigned={reassigned_count} skipped_existing={skipped_existing} failed={failed_count}"
     )
 
     # Archive this user's active leads no longer open-assigned to them in Copper.
@@ -158,6 +185,7 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
     return {
         "user": user.email,
         "synced": new_count,
+        "reassigned": reassigned_count,
         "archived_stale": stale_count,
         "checked": len(raw_leads),
         "skipped_existing": skipped_existing,
