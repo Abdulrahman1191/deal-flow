@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 interface ToastAction {
   label: string;
@@ -21,6 +21,15 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
+// Module-level escape hatch for non-component code (e.g. the axios response
+// interceptor in api/client.ts) that needs to surface a toast but can't call
+// useToast(). Set by the single ToastProvider mounted in main.tsx.
+let globalToast: ((message: string, opts?: ToastOpts) => void) | null = null;
+
+export function showToast(message: string, opts?: ToastOpts) {
+  globalToast?.(message, opts);
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
@@ -38,6 +47,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     },
     [remove],
   );
+
+  useEffect(() => {
+    globalToast = toast;
+    return () => {
+      globalToast = null;
+    };
+  }, [toast]);
 
   return (
     <ToastContext.Provider value={toast}>

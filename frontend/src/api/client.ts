@@ -1,4 +1,6 @@
 import axios from "axios";
+import useAppStore from "../store/useAppStore";
+import { showToast } from "../components/shared/Toast";
 
 // Same-origin in production (FastAPI serves both the SPA and the API), so a
 // relative baseURL is all we need. Local dev with `vite dev` also works
@@ -15,8 +17,17 @@ client.interceptors.request.use((config) => {
       config.params = { ...(config.params ?? {}), fake_email: fake };
     }
   }
+  // Admin "view as" QA mode (issue #52) — production feature, not gated on
+  // DEV. Non-admins can set this too, but the backend silently ignores
+  // view_as from non-admins (app.services.auth.effective_owner_email).
+  const viewAs = useAppStore.getState().viewAs;
+  if (viewAs) {
+    config.params = { ...(config.params ?? {}), view_as: viewAs };
+  }
   return config;
 });
+
+const READ_ONLY_DETAIL = "Read-only while viewing another user's board";
 
 client.interceptors.response.use(
   (r) => r,
@@ -31,6 +42,12 @@ client.interceptors.response.use(
           "didn't authenticate you. In dev, run: " +
           "localStorage.setItem('fake_email','you@raed.vc')",
       );
+    }
+    // The backend 403s any mutation while impersonating (#50). The UI
+    // already disables these controls, but surface a clear toast instead of
+    // a generic error for any that slip through (e.g. a stale click).
+    if (err.response?.status === 403 && err.response?.data?.detail === READ_ONLY_DETAIL) {
+      showToast("Read-only — you're viewing a teammate's board.");
     }
     return Promise.reject(err);
   },

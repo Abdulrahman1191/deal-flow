@@ -1,6 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import useAppStore from "../../store/useAppStore";
 import { fetchFeedback } from "../../api/feedback";
+import { fetchTeam } from "../../api/users";
 import { useMe } from "../../lib/auth";
 
 const baseTabs = [
@@ -10,9 +11,10 @@ const baseTabs = [
 ] as const;
 
 export default function Navbar() {
-  const { activeTab, setActiveTab } = useAppStore();
+  const { activeTab, setActiveTab, viewAs, setViewAs } = useAppStore();
   const me = useMe();
   const owner = !!me.data?.is_owner;
+  const qc = useQueryClient();
 
   const { data: feedback = [] } = useQuery({
     queryKey: ["feedback"],
@@ -22,6 +24,23 @@ export default function Navbar() {
     staleTime: 20_000,
   });
   const unresolved = feedback.filter((f) => !f.resolved_at).length;
+
+  // Admin "view as" QA mode (issue #52). The dropdown itself is owner-gated
+  // below; this query is too, so non-admins never hit /users/team (which
+  // 403s them anyway).
+  const { data: team = [] } = useQuery({
+    queryKey: ["team"],
+    queryFn: fetchTeam,
+    enabled: owner,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const handleViewAsChange = (email: string) => {
+    setViewAs(email || null);
+    qc.invalidateQueries({ queryKey: ["leads"] });
+    qc.invalidateQueries({ queryKey: ["archive"] });
+    qc.invalidateQueries({ queryKey: ["send-queue"] });
+  };
 
   const tabs = owner
     ? [...baseTabs, { id: "feedback" as const, label: "Feedback" }]
@@ -54,6 +73,24 @@ export default function Navbar() {
         ))}
       </div>
       <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">
+        {owner && (
+          <label className="flex items-center gap-1.5">
+            <span>Viewing:</span>
+            <select
+              value={viewAs ?? ""}
+              onChange={(e) => handleViewAsChange(e.target.value)}
+              className="bg-card border border-border rounded-md px-2 py-1 text-xs text-foreground focus:outline-none focus:border-ring"
+              data-testid="view-as-select"
+            >
+              <option value="">My board</option>
+              {team.map((email) => (
+                <option key={email} value={email}>
+                  {email}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {me.data && (
           <span>
             Signed in as <span className="text-foreground">{me.data.email}</span>

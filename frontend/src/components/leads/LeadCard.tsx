@@ -2,6 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Lead } from "../../types/lead";
+import useAppStore from "../../store/useAppStore";
 import Badge from "../shared/Badge";
 import ConfidenceBar from "../shared/ConfidenceBar";
 import ReasoningBox from "./ReasoningBox";
@@ -35,6 +36,10 @@ export default function LeadCard({ lead, index = 0 }: Props) {
   const [showFeedback, setShowFeedback] = useState<"up" | "down" | null>(null);
   const qc = useQueryClient();
   const toast = useToast();
+  // Admin "view as" QA mode (issue #52): the backend already 403s mutations
+  // while impersonating (block_if_impersonating) — this just disables the
+  // controls in the UI so they appear read-only instead of failing on click.
+  const readOnly = !!useAppStore((s) => s.viewAs);
 
   const { assessment } = lead;
 
@@ -277,10 +282,10 @@ export default function LeadCard({ lead, index = 0 }: Props) {
               <span className="text-[10px] text-muted-foreground mr-1">Rate:</span>
               <button
                 onClick={() => setShowFeedback("up")}
-                disabled={rateMutation.isPending}
-                title="The AI got this right"
+                disabled={rateMutation.isPending || readOnly}
+                title={readOnly ? "Read-only while viewing another user's board" : "The AI got this right"}
                 data-testid="rate-up"
-                className={`grid place-items-center h-6 w-6 rounded-md transition-colors ${
+                className={`grid place-items-center h-6 w-6 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   rating === "up" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
                 }`}
               >
@@ -288,10 +293,10 @@ export default function LeadCard({ lead, index = 0 }: Props) {
               </button>
               <button
                 onClick={() => setShowFeedback("down")}
-                disabled={rateMutation.isPending}
-                title="The AI got this wrong"
+                disabled={rateMutation.isPending || readOnly}
+                title={readOnly ? "Read-only while viewing another user's board" : "The AI got this wrong"}
                 data-testid="rate-down"
-                className={`grid place-items-center h-6 w-6 rounded-md transition-colors ${
+                className={`grid place-items-center h-6 w-6 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   rating === "down" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
                 }`}
               >
@@ -328,13 +333,14 @@ export default function LeadCard({ lead, index = 0 }: Props) {
               return (
                 <button
                   key={b}
-                  disabled={active || overrideMutation.isPending}
+                  disabled={active || overrideMutation.isPending || readOnly}
+                  title={readOnly ? "Read-only while viewing another user's board" : undefined}
                   onClick={() => setPendingBucket(b)}
                   className={`text-[10px] uppercase font-semibold tracking-wider px-3 py-1.5 rounded-full border transition-colors ${
                     active
                       ? "bg-foreground text-white border-foreground cursor-default"
                       : "bg-card text-muted-foreground border-border hover:text-foreground hover:border-foreground cursor-pointer"
-                  } disabled:opacity-100`}
+                  } disabled:opacity-100 disabled:cursor-not-allowed`}
                   data-testid={`override-${b.toLowerCase()}`}
                 >
                   {b}
@@ -363,6 +369,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
           onReassess={() => reassessMutation.mutate()}
           reassessing={reassessInFlight}
           archiving={archiveMutation.isPending}
+          readOnly={readOnly}
           onArchiveNoReply={() => {
             if (confirm(`Archive ${lead.company_name} without sending an email?`)) {
               archiveMutation.mutate();
@@ -489,8 +496,9 @@ export default function LeadCard({ lead, index = 0 }: Props) {
                 )}
                 <button
                   onClick={() => syncDeckMutation.mutate(!!lead.pitch_deck_drive_id)}
-                  disabled={syncDeckMutation.isPending}
-                  className="text-[10px] text-info hover:underline disabled:opacity-50 whitespace-nowrap"
+                  disabled={syncDeckMutation.isPending || readOnly}
+                  title={readOnly ? "Read-only while viewing another user's board" : undefined}
+                  className="text-[10px] text-info hover:underline disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                   data-testid="fetch-pitch-deck-btn"
                 >
                   {syncDeckMutation.isPending
