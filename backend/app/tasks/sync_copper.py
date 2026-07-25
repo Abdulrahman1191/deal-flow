@@ -135,7 +135,6 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
             else:
                 lead = Lead(**map_copper_lead(raw), owner_email=user.email)
                 db.add(lead)
-                new_count += 1
                 # Commit before enqueueing so the lead's durability never depends
                 # on the Celery/Redis enqueue succeeding -- a broker hiccup below
                 # just means it gets assessed on a later pass instead of losing
@@ -143,6 +142,7 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
                 # end) also means a later lead's failure can't roll back leads
                 # already imported earlier in this same run.
                 await db.commit()
+                new_count += 1
         except Exception as exc:
             await db.rollback()
             failed_count += 1

@@ -114,6 +114,38 @@ def test_enqueue_failure_does_not_lose_the_committed_lead(monkeypatch):
     assert db.rollbacks == 0
 
 
+def test_commit_failure_on_new_lead_counts_as_failed_only(monkeypatch):
+    """If db.commit() itself raises for a new lead (e.g. a DB constraint error
+    -- the exact failure class the #58 per-lead isolation guards against),
+    that lead must count only as `failed`, not also as `synced`. new_count
+    must only increment after the commit that creates the row has actually
+    succeeded -- the earlier bad-lead test doesn't catch this because that
+    failure fires in map_copper_lead, before new_count is ever touched."""
+    raw_leads = [{"id": "will-fail-commit"}, {"id": "good"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: None)
+
+    class _FailFirstCommitSession(_FakeSyncSession):
+        def __init__(self, results):
+            super().__init__(results)
+            self._commit_calls = 0
+
+        async def commit(self):
+            self._commit_calls += 1
+            if self._commit_calls == 1:
+                raise RuntimeError("db constraint violation")
+            self.commits += 1
+
+    # 2 dedup checks (neither pre-existing) + 1 archive scan.
+    db = _FailFirstCommitSession([None, None, []])
+    result = asyncio.run(sc.sync_one_user(db, _user()))
+
+    assert result["synced"] == 1
+    assert result["failed"] == 1
+    assert db.rollbacks == 1
+
+
 def test_existing_lead_is_skipped_not_recreated(monkeypatch):
     """A copper_id already owned by this same user is left as-is -- in
     particular, not reactivated (see the reassignment tests below for the
