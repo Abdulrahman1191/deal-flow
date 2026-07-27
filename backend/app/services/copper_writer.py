@@ -8,6 +8,7 @@ backoff, so a momentary Copper outage or rate-limit doesn't silently drop data.
 """
 from datetime import datetime, timezone
 from typing import Optional
+import logging
 
 import httpx
 
@@ -20,6 +21,17 @@ RAED_RESERVED_TAGS = {"raed:override", "raed:approved", "raed:sent", "raed:archi
 MAX_ATTEMPTS = 5
 # Backoff: 30s, 60s, 120s, 240s, 480s
 _BACKOFF_SECONDS = [30, 60, 120, 240, 480]
+
+logger = logging.getLogger(__name__)
+
+
+def _sync_engine():
+    """Sync engine derived from the async DATABASE_URL — callers here are
+    often invoked from sync code paths."""
+    from sqlalchemy import create_engine
+
+    sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+    return create_engine(sync_url, pool_pre_ping=True)
 
 
 def _strip_raed_state_tags(tags: Optional[list]) -> list:
@@ -36,13 +48,10 @@ def _strip_raed_state_tags(tags: Optional[list]) -> list:
 
 def _enqueue(copper_id: str, endpoint: str, body: dict, method: str = "PUT") -> None:
     """Insert a pending outbox row. Uses a sync session since callers are often sync."""
-    from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
     from app.models.copper_outbox import CopperOutbox
 
-    # Derive a sync URL from the async one (replace asyncpg driver with psycopg2).
-    sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
-    engine = create_engine(sync_url, pool_pre_ping=True)
+    engine = _sync_engine()
     with Session(engine) as session:
         row = CopperOutbox(
             copper_id=copper_id,
@@ -54,6 +63,32 @@ def _enqueue(copper_id: str, endpoint: str, body: dict, method: str = "PUT") -> 
         session.commit()
     engine.dispose()
     register_outbound_write(copper_id, body)
+
+
+def _record_skipped_write(copper_id: str, endpoint: str, method: str, reason: str) -> None:
+    """Record a write-back that was never attempted because a required config
+    id is unset (e.g. copper_unqualified_status_id == 0). Inserted directly as
+    status="failed" so it shows up in GET /leads/outbox-health next to
+    genuinely-exhausted retries, instead of vanishing as a bare print() (#65).
+    """
+    from sqlalchemy.orm import Session
+    from app.models.copper_outbox import CopperOutbox
+
+    logger.warning("[copper_writer][config_unset] %s %s: %s", method, endpoint, reason)
+
+    engine = _sync_engine()
+    with Session(engine) as session:
+        row = CopperOutbox(
+            copper_id=copper_id,
+            endpoint=endpoint,
+            method=method,
+            body_json={},
+            status="failed",
+            last_error=reason,
+        )
+        session.add(row)
+        session.commit()
+    engine.dispose()
 
 
 def execute_copper_request(endpoint: str, method: str, body: dict) -> Optional[dict]:
@@ -144,7 +179,10 @@ def archive_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
     if not copper_id:
         return
     if not settings.copper_unqualified_status_id:
-        print("[copper_writer] copper_unqualified_status_id is 0; skipping archive write")
+        _record_skipped_write(
+            copper_id, f"/leads/{copper_id}", "PUT",
+            "skipped archive_in_copper: copper_unqualified_status_id unset",
+        )
         return
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + ["raed:archived"]
@@ -156,7 +194,10 @@ def reject_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
     if not copper_id:
         return
     if not settings.copper_unqualified_status_id:
-        print("[copper_writer] copper_unqualified_status_id is 0; skipping reject write")
+        _record_skipped_write(
+            copper_id, f"/leads/{copper_id}", "PUT",
+            "skipped reject_in_copper: copper_unqualified_status_id unset",
+        )
         return
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + ["raed:bucket:reject", "raed:override", "raed:archived"]
