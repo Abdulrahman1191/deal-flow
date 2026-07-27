@@ -340,6 +340,81 @@ def test_admin_reads_colleagues_assessment_via_view_as():
     assert OWNER_EMAIL not in values
 
 
+def test_admin_reads_colleagues_pitch_deck_via_view_as():
+    lead_id = uuid.uuid4()
+    their_lead = _fake_lead_row(COLLEAGUE_EMAIL, lead_id=lead_id)
+    their_lead.pitch_deck_drive_id = "drive-file-123"
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([their_lead])
+    try:
+        response = client.get(
+            f"/api/v1/leads/{lead_id}/pitch-deck?view_as={COLLEAGUE_EMAIL}",
+            follow_redirects=False,
+        )
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://drive.google.com/file/d/drive-file-123/view"
+    values = _bound_values(session, 0)
+    assert COLLEAGUE_EMAIL in values
+    assert OWNER_EMAIL not in values
+
+
+def test_non_admin_view_as_ignored_for_pitch_deck():
+    lead_id = uuid.uuid4()
+    my_lead = _fake_lead_row(COLLEAGUE_EMAIL, lead_id=lead_id)
+    my_lead.pitch_deck_drive_id = "drive-file-456"
+    _auth_as(COLLEAGUE_EMAIL)
+    session = _use_db([my_lead])
+    try:
+        response = client.get(
+            f"/api/v1/leads/{lead_id}/pitch-deck?view_as={OWNER_EMAIL}",
+            follow_redirects=False,
+        )
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 307
+    values = _bound_values(session, 0)
+    assert COLLEAGUE_EMAIL in values
+    assert OWNER_EMAIL not in values
+
+
+def test_admin_reads_colleagues_events_via_view_as():
+    lead_id = uuid.uuid4()
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([lead_id, []])
+    try:
+        response = client.get(f"/api/v1/leads/{lead_id}/events?view_as={COLLEAGUE_EMAIL}")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    values = _bound_values(session, 0)
+    assert COLLEAGUE_EMAIL in values
+    assert OWNER_EMAIL not in values
+
+
+def test_non_admin_view_as_ignored_for_events():
+    lead_id = uuid.uuid4()
+    _auth_as(COLLEAGUE_EMAIL)
+    session = _use_db([lead_id, []])
+    try:
+        response = client.get(f"/api/v1/leads/{lead_id}/events?view_as={OWNER_EMAIL}")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    values = _bound_values(session, 0)
+    assert COLLEAGUE_EMAIL in values
+    assert OWNER_EMAIL not in values
+
+
 # ---------- mutations 403 while impersonating ----------
 
 
@@ -353,7 +428,6 @@ MUTATION_CASES = [
     ("PATCH", "/api/v1/assessments/{lead_id}/draft", {"draft_subject": "New subject"}),
     ("POST", "/api/v1/assessments/{lead_id}/regenerate-draft", None),
     ("POST", "/api/v1/leads/{lead_id}/archive-no-reply", None),
-    ("GET", "/api/v1/leads/{lead_id}/pitch-deck", None),
 ]
 
 
