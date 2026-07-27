@@ -15,6 +15,7 @@ from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverri
 from app.services import claude_agent, copper_writer, email_sender
 from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
 from app.services.override_capture import capture_override
+from app.tasks.sync_copper import resolve_copper_id
 from app.services.events import (
     EVENT_ARCHIVED,
     EVENT_BUCKET_OVERRIDDEN,
@@ -156,10 +157,13 @@ async def approve_assessment(
     return {"status": "approved", "draft_type": card.draft_type}
 
 
-async def _finalize_sent(db: AsyncSession, card: AssessmentCard, lead: Optional[Lead]) -> dict:
+async def _finalize_sent(
+    db: AsyncSession, card: AssessmentCard, lead: Optional[Lead], user: Optional[User] = None
+) -> dict:
     """Terminal transition once an email has actually been sent:
       - rejection draft  → app archived + Copper Lead → Unqualified
-      - meeting_request  → app archived + Copper Lead converted to Opportunity
+      - meeting_request  → app archived + Copper Lead converted to Opportunity,
+        assigned to `user` (the acting user) so it lands on their Kanban
     Shared by /mark-sent (external sender) and /send (in-app sender)."""
     card.sent_at = datetime.now(timezone.utc)
     if not lead:
@@ -175,8 +179,16 @@ async def _finalize_sent(db: AsyncSession, card: AssessmentCard, lead: Optional[
     try:
         if card.draft_type == "meeting_request" and effective_bucket == "YES" and lead.copper_id and not lead.copper_opportunity_id:
             founder_name = (lead.founder_names or [None])[0]
+            assignee_id = None
+            if user is not None:
+                try:
+                    assignee_id = await resolve_copper_id(db, user)
+                except Exception as exc:
+                    # No resolvable copper_user_id for the acting user — fall back
+                    # to unassigned rather than blocking the conversion.
+                    print(f"[finalize_sent] could not resolve copper_user_id for {getattr(user, 'email', '?')}: {exc!r}")
             converted_payload = copper_writer.convert_lead_to_opportunity(
-                lead.copper_id, lead.company_name, founder_name
+                lead.copper_id, lead.company_name, founder_name, assignee_id
             )
             if converted_payload:
                 lead.copper_person_id = converted_payload.get("person_id")
@@ -231,7 +243,7 @@ async def mark_sent(
     block_if_impersonating(request, user)
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     _require_rating(card)
-    return await _finalize_sent(db, card, lead)
+    return await _finalize_sent(db, card, lead, user)
 
 
 @router.post("/{lead_id}/send")
@@ -285,7 +297,7 @@ async def send_assessment(
             acted_by_email=user.email,
         )
 
-    result = await _finalize_sent(db, card, lead)
+    result = await _finalize_sent(db, card, lead, user)
     result["recipient"] = recipient
     return result
 

@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.database import get_db
 from app.main import app
+from app.routers import assessments
 from app.services import claude_agent, copper_writer, email_sender
 from app.services.auth import get_current_user
 from app.tasks import drain_outbox
@@ -102,12 +103,26 @@ def _fake_lead(copper_id=None, copper_opportunity_id=None):
 
 
 async def _fake_current_user():
-    return SimpleNamespace(email="reviewer@raed.vc", is_active=True)
+    return SimpleNamespace(email="reviewer@raed.vc", is_active=True, copper_user_id=None)
 
 
 @pytest.fixture
 def override_auth():
     app.dependency_overrides[get_current_user] = _fake_current_user
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture
+def override_auth_with_copper_id():
+    """Same as override_auth, but the acting user already has a cached
+    copper_user_id -- used to assert assignee routing on convert."""
+    async def _fake_user_with_copper_id():
+        return SimpleNamespace(email="reviewer@raed.vc", is_active=True, copper_user_id=777)
+
+    app.dependency_overrides[get_current_user] = _fake_user_with_copper_id
     try:
         yield
     finally:
@@ -139,11 +154,20 @@ def test_send_meeting_request_yes_converts_lead_to_opportunity(override_auth, mo
     # mark-approved also fires on first send; stub it out so it doesn't try
     # to hit a real outbox DB.
     monkeypatch.setattr(copper_writer, "mark_approved_in_copper", lambda *a, **k: None)
+    # override_auth's user has no cached copper_user_id, so _finalize_sent
+    # falls through to resolve_copper_id -> lookup_user_id, which would
+    # otherwise open a real httpx.Client against Copper's API. Stub the
+    # resolution seam so the fallback-to-unassigned path is exercised with
+    # no network call.
+    async def _fake_resolve_copper_id(_db, _user):
+        return None
+
+    monkeypatch.setattr(assessments, "resolve_copper_id", _fake_resolve_copper_id)
 
     calls = []
 
-    def fake_convert(copper_id, company_name, founder_name):
-        calls.append((copper_id, company_name, founder_name))
+    def fake_convert(copper_id, company_name, founder_name, assignee_id=None):
+        calls.append((copper_id, company_name, founder_name, assignee_id))
         return {"person_id": "p1", "company_id": "c1", "opportunity_id": "o1"}
 
     monkeypatch.setattr(copper_writer, "convert_lead_to_opportunity", fake_convert)
@@ -158,8 +182,38 @@ def test_send_meeting_request_yes_converts_lead_to_opportunity(override_auth, mo
 
     assert response.status_code == 200
     assert response.json()["converted"] is True
-    assert calls == [("12345", "Acme Deep Tech", "Jane Founder")]
+    # Acting user (override_auth) has no copper_user_id -- falls back to
+    # unassigned rather than blocking the conversion.
+    assert calls == [("12345", "Acme Deep Tech", "Jane Founder", None)]
     assert lead.copper_opportunity_id == "o1"
+
+
+def test_send_meeting_request_assigns_opportunity_to_acting_user(override_auth_with_copper_id, monkeypatch):
+    """When the acting user has a resolvable copper_user_id, it must be
+    passed through to convert_lead_to_opportunity as assignee_id so the new
+    opportunity lands on their Kanban (issue #64)."""
+    _configure_send(monkeypatch)
+    monkeypatch.setattr(copper_writer, "mark_approved_in_copper", lambda *a, **k: None)
+
+    calls = []
+
+    def fake_convert(copper_id, company_name, founder_name, assignee_id=None):
+        calls.append((copper_id, company_name, founder_name, assignee_id))
+        return {"person_id": "p1", "company_id": "c1", "opportunity_id": "o1"}
+
+    monkeypatch.setattr(copper_writer, "convert_lead_to_opportunity", fake_convert)
+
+    card = _fake_card(rated=True, bucket="YES", draft_type="meeting_request")
+    lead = _fake_lead(copper_id="12345")
+    _override_db([(card, lead)])
+    try:
+        response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert response.json()["converted"] is True
+    assert calls == [("12345", "Acme Deep Tech", "Jane Founder", 777)]
 
 
 def test_send_meeting_request_no_copper_id_skips_write_and_does_not_error(override_auth, monkeypatch):
@@ -516,6 +570,108 @@ def test_execute_copper_request_raises_on_http_error_no_swallowing(monkeypatch):
         copper_writer.execute_copper_request("/leads/42", "PUT", {"status_id": 999})
 
     assert len(calls) == 1  # the call was made -- it just failed downstream
+
+
+# ---------------------------------------------------------------------------
+# 4b. convert_lead_to_opportunity itself: assignee_id routing (issue #64)
+# ---------------------------------------------------------------------------
+
+class _FakeConvertClient:
+    """Mocks httpx.Client for convert_lead_to_opportunity, which calls
+    client.post (convert) and, when an assignee_id is given, client.put
+    (the follow-up assignee write) -- unlike _FakeHttpClient above, which only
+    covers the generic client.request() seam used by execute_copper_request."""
+
+    def __init__(self, calls, convert_response, put_response=None):
+        self._calls = calls
+        self._convert_response = convert_response
+        self._put_response = put_response or _FakeHttpResponse(json_data={})
+
+    def __call__(self, timeout=None):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, url, headers=None, json=None):
+        self._calls.append({"method": "POST", "url": url, "json": json})
+        return self._convert_response
+
+    def put(self, url, headers=None, json=None):
+        self._calls.append({"method": "PUT", "url": url, "json": json})
+        return self._put_response
+
+
+def _configure_pipeline(monkeypatch):
+    monkeypatch.setattr(copper_writer.settings, "copper_pipeline_id", 111)
+    monkeypatch.setattr(copper_writer.settings, "copper_pipeline_stage_id", 222)
+
+
+def test_convert_with_assignee_id_sets_it_inline_and_follows_up_with_put(monkeypatch):
+    _configure_pipeline(monkeypatch)
+    calls = []
+    convert_response = _FakeHttpResponse(
+        json_data={"person": {"id": 1}, "company": {"id": 2}, "opportunity": {"id": 3}}
+    )
+    fake_client = _FakeConvertClient(calls, convert_response)
+    monkeypatch.setattr(copper_writer.httpx, "Client", fake_client)
+
+    result = copper_writer.convert_lead_to_opportunity(
+        "12345", "Acme Deep Tech", "Jane Founder", assignee_id=777
+    )
+
+    assert result == {"person_id": "1", "company_id": "2", "opportunity_id": "3"}
+    assert len(calls) == 2
+    convert_call, put_call = calls
+    assert convert_call["method"] == "POST"
+    assert convert_call["json"]["details"]["opportunity"]["assignee_id"] == 777
+    assert put_call["method"] == "PUT"
+    assert put_call["url"] == f"{copper_writer.COPPER_BASE}/opportunities/3"
+    assert put_call["json"] == {"assignee_id": 777}
+
+
+def test_convert_without_assignee_id_skips_follow_up_put(monkeypatch):
+    """A user with no resolvable copper_user_id (assignee_id=None) still
+    converts without error and without the extra PUT -- matches prior
+    unassigned behavior."""
+    _configure_pipeline(monkeypatch)
+    calls = []
+    convert_response = _FakeHttpResponse(
+        json_data={"person": {"id": 1}, "company": {"id": 2}, "opportunity": {"id": 3}}
+    )
+    fake_client = _FakeConvertClient(calls, convert_response)
+    monkeypatch.setattr(copper_writer.httpx, "Client", fake_client)
+
+    result = copper_writer.convert_lead_to_opportunity("12345", "Acme Deep Tech", "Jane Founder")
+
+    assert result == {"person_id": "1", "company_id": "2", "opportunity_id": "3"}
+    assert len(calls) == 1
+    assert calls[0]["method"] == "POST"
+    assert "assignee_id" not in calls[0]["json"]["details"]["opportunity"]
+
+
+def test_convert_assignee_put_failure_does_not_lose_the_created_opportunity(monkeypatch):
+    """If the follow-up assignee PUT fails, the opportunity was still created
+    -- return the ids instead of surfacing None, so the lead row still gets
+    linked (falls back to unassigned in Copper, matching the acceptance
+    criteria's 'do not block the conversion')."""
+    _configure_pipeline(monkeypatch)
+    calls = []
+    convert_response = _FakeHttpResponse(
+        json_data={"person": {"id": 1}, "company": {"id": 2}, "opportunity": {"id": 3}}
+    )
+    put_response = _FakeHttpResponse(raise_exc=RuntimeError("copper 500"))
+    fake_client = _FakeConvertClient(calls, convert_response, put_response)
+    monkeypatch.setattr(copper_writer.httpx, "Client", fake_client)
+
+    result = copper_writer.convert_lead_to_opportunity(
+        "12345", "Acme Deep Tech", "Jane Founder", assignee_id=777
+    )
+
+    assert result == {"person_id": "1", "company_id": "2", "opportunity_id": "3"}
 
 
 # ---------------------------------------------------------------------------
