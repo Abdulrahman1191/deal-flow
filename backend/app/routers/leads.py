@@ -243,9 +243,12 @@ async def list_leads(
     if status:
         query = query.where(Lead.status == status)
     else:
-        # Default: hide archived and approved leads from the kanban.
-        # Once an email is approved it's queued for sending — nothing left to decide.
-        query = query.where(Lead.status.notin_(["archived", "approved"]))
+        # Default: hide archived, approved, and awaiting_deck leads from the
+        # kanban. Once an email is approved it's queued for sending — nothing
+        # left to decide. awaiting_deck leads have no usable context to judge
+        # yet — they rejoin the board once a deck is attached and
+        # re-assessment scores them (issue #67).
+        query = query.where(Lead.status.notin_(["archived", "approved", "awaiting_deck"]))
     if search:
         query = query.where(Lead.company_name.ilike(f"%{search}%"))
 

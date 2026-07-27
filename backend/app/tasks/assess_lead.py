@@ -11,7 +11,7 @@ from app.models.lead import Lead
 from app.models.assessment import AssessmentCard
 from app.services import claude_agent, research
 from app.services import copper_writer
-from app.services.events import EVENT_ASSESSED, log_event
+from app.services.events import EVENT_ASSESSED, EVENT_AWAITING_DECK, log_event
 from app.tasks.celery_app import celery
 
 
@@ -57,6 +57,16 @@ async def _run(lead_id: str) -> dict:
         lead = result.scalar_one_or_none()
         if not lead:
             return {"error": "Lead not found"}
+
+        # No deck yet: park it instead of scoring on thin context (description
+        # alone) and dumping it in REJECT. sync_pitch_decks_task / the
+        # per-lead sync endpoint re-queue this task once pitch_deck_text is
+        # set, at which point this gate passes and the lead scores normally.
+        if not lead.pitch_deck_text:
+            lead.status = "awaiting_deck"
+            await log_event(db, lead.id, EVENT_AWAITING_DECK)
+            await db.commit()
+            return {"lead_id": lead_id, "status": "awaiting_deck"}
 
         lead.status = "processing"
         await db.commit()

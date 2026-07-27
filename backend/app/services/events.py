@@ -19,6 +19,7 @@ EVENT_ARCHIVED_NO_REPLY = "archived_no_reply"
 EVENT_CONVERTED = "converted"
 EVENT_COPPER_UPDATED = "copper_updated"
 EVENT_REASSIGNED = "reassigned"
+EVENT_AWAITING_DECK = "awaiting_deck"
 
 
 async def log_event(
