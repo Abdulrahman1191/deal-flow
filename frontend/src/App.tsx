@@ -4,6 +4,7 @@ import Navbar from "./components/layout/Navbar";
 import LeadsPage from "./pages/LeadsPage";
 import FrameworkPage from "./pages/FrameworkPage";
 import ArchivePage from "./pages/ArchivePage";
+import AwaitingDeckPage from "./pages/AwaitingDeckPage";
 import FeedbackInboxPage from "./pages/FeedbackInboxPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
 import ErrorBoundary from "./components/shared/ErrorBoundary";
@@ -55,6 +56,11 @@ function Dashboard() {
           {activeTab === "archive" && (
             <div className="h-full overflow-y-auto animate-fade-in">
               <ArchivePage />
+            </div>
+          )}
+          {activeTab === "awaiting_deck" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <AwaitingDeckPage />
             </div>
           )}
           {activeTab === "feedback" && (
