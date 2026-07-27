@@ -47,5 +47,12 @@ celery.conf.update(
             "task": "app.tasks.sync_pitch_decks.sync_pitch_decks_task",
             "schedule": 1800.0,  # every 30 minutes
         },
+        # Sibling sweep: attach decks linked via Copper's own "Pitch Deck" URL
+        # custom field (see app/tasks/sync_pitch_decks.py). No-ops until a
+        # maintainer sets GOOGLE_SERVICE_ACCOUNT_JSON + COPPER_CF_PITCH_DECK_URL_ID.
+        "sync-copper-pitch-deck-links": {
+            "task": "app.tasks.sync_pitch_decks.sync_copper_pitch_deck_links_task",
+            "schedule": 1800.0,  # every 30 minutes, same cadence as the Drive-folder sweep
+        },
     },
 )
