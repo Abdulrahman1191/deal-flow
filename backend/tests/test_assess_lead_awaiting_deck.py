@@ -17,33 +17,28 @@ from types import SimpleNamespace
 
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
+from app.models.user import User
 from app.tasks import assess_lead
 
 
-class _FakeLeadResult:
-    def __init__(self, lead):
-        self._lead = lead
+class _FakeScalarResult:
+    def __init__(self, obj):
+        self._obj = obj
 
     def scalar_one_or_none(self):
-        return self._lead
-
-
-class _FakeCardResult:
-    def __init__(self, card):
-        self._card = card
-
-    def scalar_one_or_none(self):
-        return self._card
+        return self._obj
 
 
 class _FakeSession:
     """Stands in for CelerySessionLocal()'s async context manager. The first
-    execute() (select(Lead)) answers with `lead`; any later execute() (the
-    assessment-card upsert lookup) answers with `card`."""
+    execute() (select(Lead)) answers with `lead`; a select(User) (owner
+    lookup for draft Calendly/name, issue #84) answers with `owner`; any
+    later execute() (the assessment-card upsert lookup) answers with `card`."""
 
-    def __init__(self, lead, card=None):
+    def __init__(self, lead, card=None, owner=None):
         self.lead = lead
         self.card = card
+        self.owner = owner
         self.added: list = []
         self.committed = 0
 
@@ -56,9 +51,11 @@ class _FakeSession:
     async def execute(self, query):
         entity = query.column_descriptions[0]["entity"]
         if entity is Lead:
-            return _FakeLeadResult(self.lead)
+            return _FakeScalarResult(self.lead)
+        if entity is User:
+            return _FakeScalarResult(self.owner)
         assert entity is AssessmentCard
-        return _FakeCardResult(self.card)
+        return _FakeScalarResult(self.card)
 
     def add(self, obj):
         self.added.append(obj)
@@ -67,7 +64,7 @@ class _FakeSession:
         self.committed += 1
 
 
-def _fake_lead(pitch_deck_text=None, status="pending"):
+def _fake_lead(pitch_deck_text=None, status="pending", owner_email=None):
     return SimpleNamespace(
         id=uuid.uuid4(),
         status=status,
@@ -82,6 +79,7 @@ def _fake_lead(pitch_deck_text=None, status="pending"):
         linkedin_urls=None,
         copper_id=None,
         raw_copper_data=None,
+        owner_email=owner_email,
     )
 
 

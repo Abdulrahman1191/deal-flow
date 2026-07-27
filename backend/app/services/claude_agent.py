@@ -9,10 +9,15 @@ from app.config import settings
 
 _PLACEHOLDER = "[Associate Name]"
 
+# Fallback used when a lead's owner has no calendly_url set (see User.calendly_url,
+# issue #84) -- keeps the previous single hardcoded link as the default.
+DEFAULT_CALENDLY_URL = "https://calendly.com/abdulrahman-raed/30min"
 
-def _substitute_name(data: dict) -> None:
-    """Replace [Associate Name] placeholder in draft fields with the configured name."""
-    name = settings.associate_name
+
+def _substitute_name(data: dict, name: Optional[str] = None) -> None:
+    """Replace [Associate Name] placeholder in draft fields with the given name
+    (falls back to settings.associate_name -- the old global default)."""
+    name = name or settings.associate_name
     for key in ("draft_body", "draft_subject"):
         if isinstance(data.get(key), str):
             data[key] = data[key].replace(_PLACEHOLDER, name)
@@ -291,7 +296,7 @@ copy.
   the company does (drawn from the deck/description) — plain fact only, never
   flattery, and omit it entirely if it isn't clear from the materials. Ask if they'd
   like to book a short call and include this Calendly link:
-  https://calendly.com/abdulrahman-raed/30min. Sign off as {associate_name}, Raed
+  {calendly_url}. Sign off as {associate_name}, Raed
   Ventures. Follow this shape:
     Hi {{name}},
     Thank you for applying to Raed Ventures. We had a look at {{company}} and we're
@@ -362,6 +367,8 @@ def assess_lead(
     lead_data: dict,
     research_data: dict,
     team_calibration: list[dict] | None = None,
+    owner_calendly: Optional[str] = None,
+    owner_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """Assess a lead.
 
@@ -369,6 +376,12 @@ def assess_lead(
     (from app.services.feedback_patterns.retrieve_labeled_exemplars) — the
     feedback→pattern loop. Callers without a DB session (eval scripts) can omit
     it; the prompt then shows "(no recent team calibration yet)".
+
+    `owner_calendly` / `owner_name` are the lead owner's Calendly link and
+    full name (issue #84) — the draft's meeting link and sign-off should be
+    the owner's, not a single hardcoded associate's. Callers without an owner
+    on hand may omit them; generation falls back to the previous defaults
+    (DEFAULT_CALENDLY_URL / settings.associate_name) so it never breaks.
     """
     pitch_deck_text = lead_data.get("pitch_deck_text") or ""
     pitch_deck_excerpt = pitch_deck_text[:12_000] if pitch_deck_text else "(none provided)"
@@ -408,8 +421,12 @@ def assess_lead(
     from app.services import feedback_patterns as _fp
     team_calibration_block = _fp.format_for_prompt(team_calibration or [])
 
+    effective_name = owner_name or settings.associate_name
+    effective_calendly = owner_calendly or DEFAULT_CALENDLY_URL
+
     prompt = ASSESS_USER_TEMPLATE.format(
-        associate_name=settings.associate_name,
+        associate_name=effective_name,
+        calendly_url=effective_calendly,
         company_name=lead_data.get("company_name", ""),
         website=lead_data.get("website", "N/A"),
         company_linkedin_url=lead_data.get("company_linkedin_url") or "N/A",
@@ -442,7 +459,7 @@ def assess_lead(
 
     result = json.loads(response.choices[0].message.content)
     _enforce_bucket_consistency(result)
-    _substitute_name(result)
+    _substitute_name(result, effective_name)
     # Surface which precedents got cited so we can persist them on the
     # assessment_card and measure their influence later.
     result["precedents_cited"] = [
@@ -517,7 +534,7 @@ Rules per bucket — you MUST follow these exactly:
   ONE concrete, factual sentence about what the company does (plain fact only, never
   flattery — omit it entirely if it isn't clear from the context). Ask if they'd
   like to book a short call and include this Calendly link:
-  https://calendly.com/abdulrahman-raed/30min. Sign off as {associate_name}, Raed
+  {calendly_url}. Sign off as {associate_name}, Raed
   Ventures. Follow this shape:
     Hi {{name}},
     Thank you for applying to Raed Ventures. We had a look at {{company}} and we're
@@ -679,13 +696,28 @@ def generate_unqualification_reason(
     return {"reason_option_ids": reason_option_ids, "detail_text": detail_text}
 
 
-def regenerate_draft(lead_data: dict, bucket: str, summary: str = "") -> dict[str, Any]:
-    """Produces a fresh draft email for a manually-set bucket. No re-assessment."""
+def regenerate_draft(
+    lead_data: dict,
+    bucket: str,
+    summary: str = "",
+    owner_calendly: Optional[str] = None,
+    owner_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """Produces a fresh draft email for a manually-set bucket. No re-assessment.
+
+    `owner_calendly` / `owner_name` are the lead owner's Calendly link and full
+    name (issue #84); omit to fall back to DEFAULT_CALENDLY_URL /
+    settings.associate_name.
+    """
     if bucket not in ("YES", "MAYBE", "REJECT"):
         raise ValueError(f"bucket must be YES/MAYBE/REJECT, got {bucket!r}")
 
+    effective_name = owner_name or settings.associate_name
+    effective_calendly = owner_calendly or DEFAULT_CALENDLY_URL
+
     prompt = DRAFT_REGEN_USER_TEMPLATE.format(
-        associate_name=settings.associate_name,
+        associate_name=effective_name,
+        calendly_url=effective_calendly,
         bucket=bucket,
         company_name=lead_data.get("company_name", ""),
         founder_names=", ".join(lead_data.get("founder_names") or []) or "N/A",
@@ -710,7 +742,7 @@ def regenerate_draft(lead_data: dict, bucket: str, summary: str = "") -> dict[st
         result["draft_type"] = None
         result["draft_subject"] = None
         result["draft_body"] = None
-    _substitute_name(result)
+    _substitute_name(result, effective_name)
     return result
 
 
