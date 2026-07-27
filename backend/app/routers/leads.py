@@ -608,12 +608,13 @@ async def sync_pitch_deck(
 @router.get("/{lead_id}/events")
 async def list_lead_events(
     lead_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Returns the event timeline for a single lead, oldest first."""
     owns = await db.execute(
-        select(Lead.id).where(Lead.id == lead_id, Lead.owner_email == user.email)
+        select(Lead.id).where(Lead.id == lead_id, Lead.owner_email == effective_owner_email(request, user))
     )
     if not owns.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -653,9 +654,9 @@ async def get_pitch_deck(
     """
     from fastapi.responses import RedirectResponse
 
-    block_if_impersonating(request, user)
-
-    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
+    result = await db.execute(
+        select(Lead).where(Lead.id == lead_id, Lead.owner_email == effective_owner_email(request, user))
+    )
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
