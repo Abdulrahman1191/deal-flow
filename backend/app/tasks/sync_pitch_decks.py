@@ -32,6 +32,7 @@ import logging
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +41,12 @@ from app.config import settings
 from app.database import CelerySessionLocal
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
-from app.services.pitch_deck import MATCH_THRESHOLD, extract_text_from_pdf, find_lead_match
+from app.services.pitch_deck import (
+    MATCH_THRESHOLD,
+    extract_text_from_pdf,
+    find_lead_match,
+    verify_match_candidates,
+)
 from app.tasks.celery_app import celery
 
 logger = logging.getLogger(__name__)
@@ -92,8 +98,28 @@ def _download_pdf(service, file_id: str, dest: Path) -> None:
             _, done = downloader.next_chunk()
 
 
+def _download_and_extract(service, drive_file: dict) -> str:
+    """Download a Drive PDF to a temp file and extract its text.
+
+    Shared by the match-verification tier (which needs the deck's content
+    BEFORE deciding whether to attach) and _ingest_from_drive (which needs it
+    to store on the lead) -- so a deck is downloaded/extracted at most once
+    per file even when verification consumes it first.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        pdf_path = Path(tmp_dir) / drive_file["name"]
+        _download_pdf(service, drive_file["id"], pdf_path)
+        return extract_text_from_pdf(pdf_path)
+
+
 async def _ingest_from_drive(
-    db: AsyncSession, service, lead: Lead, drive_file: dict, *, require_existing_card: bool = True
+    db: AsyncSession,
+    service,
+    lead: Lead,
+    drive_file: dict,
+    *,
+    require_existing_card: bool = True,
+    deck_text: Optional[str] = None,
 ) -> bool:
     """Download, extract, and store a matched Drive file on its lead.
 
@@ -105,11 +131,12 @@ async def _ingest_from_drive(
     passes `require_existing_card=False` since a user explicitly asking to
     fetch a deck always wants the resulting re-score, regardless of whether
     an assessment already exists.
+
+    `deck_text` lets a caller that already downloaded+extracted this file for
+    match verification (issue #74) pass the text through instead of
+    re-downloading it here.
     """
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        pdf_path = Path(tmp_dir) / drive_file["name"]
-        _download_pdf(service, drive_file["id"], pdf_path)
-        text = extract_text_from_pdf(pdf_path)
+    text = _download_and_extract(service, drive_file) if deck_text is None else deck_text
 
     lead.pitch_deck_drive_id = drive_file["id"]
     lead.pitch_deck_filename = drive_file["name"]
@@ -162,7 +189,29 @@ async def _run() -> dict:
         unmatched_files: list[dict] = []
         for drive_file in drive_files:
             match = find_lead_match(drive_file["name"], remaining_leads)
-            if not match.lead:
+            lead = match.lead
+            # deck_text set here is reused by _ingest_from_drive below, so a
+            # verified file's content isn't downloaded/extracted twice.
+            deck_text: Optional[str] = None
+
+            if lead is None and settings.deck_match_verify_enabled and match.needs_verification:
+                try:
+                    deck_text = _download_and_extract(service, drive_file)
+                except Exception:
+                    # A download hiccup during verification must not abort the
+                    # sweep -- fall through and treat this file as unmatched;
+                    # the next run's DB-driven remaining_leads query retries it.
+                    logger.exception(
+                        "failed to download %r for match verification; leaving unmatched",
+                        drive_file["name"],
+                    )
+                    deck_text = None
+                if deck_text:
+                    lead = verify_match_candidates(match.needs_verification, deck_text)
+                if lead is None:
+                    deck_text = None  # nothing to reuse -- verification didn't resolve a lead
+
+            if lead is None:
                 unmatched += 1
                 candidates = [
                     {"company_name": c.company_name, "score": round(c.score, 2)}
@@ -182,10 +231,9 @@ async def _run() -> dict:
                     )
                 continue
 
-            lead = match.lead
             remaining_leads.remove(lead)
             try:
-                if await _ingest_from_drive(db, service, lead, drive_file):
+                if await _ingest_from_drive(db, service, lead, drive_file, deck_text=deck_text):
                     requeued += 1
                 matched += 1
             except Exception:
@@ -278,10 +326,32 @@ async def sync_lead_pitch_deck(db: AsyncSession, lead: Lead, *, force: bool = Fa
     for drive_file in drive_files:
         match = find_lead_match(drive_file["name"], [lead])
         score = match.candidates[0].score if match.candidates else 0.0
-        scored.append((drive_file, score, match.lead is not None))
+        scored.append((drive_file, score, match))
     scored.sort(key=lambda t: t[1], reverse=True)
 
-    matched_files = [f for f, _, is_match in scored if is_match]
+    matched_files = [f for f, _, match in scored if match.lead is not None]
+
+    # No high-confidence match -- try the verification tier (issue #74): for
+    # each near-miss candidate (best score first), download+extract its text
+    # and check it against this lead's description via one cheap LLM call.
+    # Since `[lead]` is the only candidate passed to find_lead_match above,
+    # `needs_verification` holds at most this one lead per file.
+    verified_deck_text: Optional[str] = None
+    if not matched_files and settings.deck_match_verify_enabled:
+        for drive_file, _score, match in scored:
+            if not match.needs_verification:
+                continue
+            try:
+                text = _download_and_extract(service, drive_file)
+            except Exception:
+                continue
+            if not text:
+                continue
+            if verify_match_candidates(match.needs_verification, text):
+                matched_files = [drive_file]
+                verified_deck_text = text
+                break
+
     if not matched_files:
         diagnostic["closest_candidates"] = [f["name"] for f, _, _ in scored[:_MAX_REPORTED_FILES]]
         folder_listing = ", ".join(diagnostic["closest_candidates"]) or "(the folder is empty)"
@@ -296,7 +366,9 @@ async def sync_lead_pitch_deck(db: AsyncSession, lead: Lead, *, force: bool = Fa
     diagnostic["matched_file"] = drive_file["name"]
 
     try:
-        requeued = await _ingest_from_drive(db, service, lead, drive_file, require_existing_card=False)
+        requeued = await _ingest_from_drive(
+            db, service, lead, drive_file, require_existing_card=False, deck_text=verified_deck_text
+        )
     except Exception as exc:
         diagnostic["reason"] = f"Found {drive_file['name']!r} but failed to download/extract it: {exc!r}"
         return diagnostic
