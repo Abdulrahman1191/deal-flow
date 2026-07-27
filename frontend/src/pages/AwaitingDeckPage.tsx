@@ -84,20 +84,25 @@ function AwaitingDeckCard({ lead }: { lead: Lead }) {
         No pitch deck yet — parked here instead of being scored on thin context.
         {lead.pitch_deck_filename && (
           <span className="block mt-1 text-foreground" title={lead.pitch_deck_filename}>
-            On file: {lead.pitch_deck_filename} (Drive sync hasn't matched it yet)
+            On file: {lead.pitch_deck_filename} (attached but no readable text was
+            extracted — re-fetch to retry)
           </span>
         )}
       </div>
 
       <div className="flex items-center gap-2 flex-wrap pt-1">
         <button
-          onClick={() => syncDeckMutation.mutate(false)}
+          onClick={() => syncDeckMutation.mutate(!!lead.pitch_deck_drive_id)}
           disabled={busy || readOnly}
           title={readOnly ? "Read-only while viewing another user's board" : undefined}
           data-testid="fetch-pitch-deck-btn"
           className="px-3 py-1.5 text-xs rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {syncDeckMutation.isPending ? "Fetching…" : "Fetch pitch deck"}
+          {syncDeckMutation.isPending
+            ? "Fetching…"
+            : lead.pitch_deck_drive_id
+              ? "Re-fetch"
+              : "Fetch pitch deck"}
         </button>
         <button
           onClick={() => reassessMutation.mutate()}
