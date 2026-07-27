@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from app.database import get_db
 from app.main import app
+from app.routers import assessments
 from app.services import copper_writer, email_sender
 from app.services.auth import get_current_user
 from app.tasks import drain_outbox
@@ -150,6 +151,15 @@ def test_send_meeting_request_yes_converts_lead_to_opportunity(override_auth, mo
     # mark-approved also fires on first send; stub it out so it doesn't try
     # to hit a real outbox DB.
     monkeypatch.setattr(copper_writer, "mark_approved_in_copper", lambda *a, **k: None)
+    # override_auth's user has no cached copper_user_id, so _finalize_sent
+    # falls through to resolve_copper_id -> lookup_user_id, which would
+    # otherwise open a real httpx.Client against Copper's API. Stub the
+    # resolution seam so the fallback-to-unassigned path is exercised with
+    # no network call.
+    async def _fake_resolve_copper_id(_db, _user):
+        return None
+
+    monkeypatch.setattr(assessments, "resolve_copper_id", _fake_resolve_copper_id)
 
     calls = []
 
