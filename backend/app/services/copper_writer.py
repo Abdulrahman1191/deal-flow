@@ -140,7 +140,34 @@ def mark_sent_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
     _enqueue(copper_id, f"/leads/{copper_id}", payload)
 
 
-def archive_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
+def _unqual_custom_fields(
+    reason_option_ids: Optional[list], detail_text: Optional[str]
+) -> list[dict]:
+    """Builds the `custom_fields` entries for the AI-generated 'Unqualification
+    Reasons' (MultiSelect) + 'Unqualified Details' (Text) Copper fields.
+    Each field is included only when its id is configured AND a value was
+    generated — so an unconfigured id (0) or a failed AI call (None/empty)
+    never breaks the existing archive/reject write."""
+    fields = []
+    if settings.copper_cf_unqual_reason_id and reason_option_ids:
+        fields.append({
+            "custom_field_definition_id": settings.copper_cf_unqual_reason_id,
+            "value": list(reason_option_ids),
+        })
+    if settings.copper_cf_unqual_detail_id and detail_text:
+        fields.append({
+            "custom_field_definition_id": settings.copper_cf_unqual_detail_id,
+            "value": detail_text,
+        })
+    return fields
+
+
+def archive_in_copper(
+    copper_id: str,
+    existing_tags: Optional[list],
+    reason_option_ids: Optional[list] = None,
+    detail_text: Optional[str] = None,
+) -> None:
     if not copper_id:
         return
     if not settings.copper_unqualified_status_id:
@@ -149,10 +176,18 @@ def archive_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + ["raed:archived"]
     payload = {"tags": new_tags, "status_id": settings.copper_unqualified_status_id}
+    custom_fields = _unqual_custom_fields(reason_option_ids, detail_text)
+    if custom_fields:
+        payload["custom_fields"] = custom_fields
     _enqueue(copper_id, f"/leads/{copper_id}", payload)
 
 
-def reject_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
+def reject_in_copper(
+    copper_id: str,
+    existing_tags: Optional[list],
+    reason_option_ids: Optional[list] = None,
+    detail_text: Optional[str] = None,
+) -> None:
     if not copper_id:
         return
     if not settings.copper_unqualified_status_id:
@@ -161,6 +196,9 @@ def reject_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + ["raed:bucket:reject", "raed:override", "raed:archived"]
     payload = {"tags": new_tags, "status_id": settings.copper_unqualified_status_id}
+    custom_fields = _unqual_custom_fields(reason_option_ids, detail_text)
+    if custom_fields:
+        payload["custom_fields"] = custom_fields
     _enqueue(copper_id, f"/leads/{copper_id}", payload)
 
 
