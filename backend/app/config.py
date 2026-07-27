@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # unqualified — written alongside status_id when a lead archives/rejects.
     copper_cf_unqual_reason_id: int = 0
     copper_cf_unqual_detail_id: int = 0
+    # [URL] "Pitch Deck" field (Copper CF id 757961 in prod) -- the sanctioned
+    # in-Copper channel for attaching a deck, since Copper's own file
+    # attachments aren't downloadable via its API. 0 = disabled/no-op.
+    copper_cf_pitch_deck_url_id: int = 0
 
     # --- Storage ---
     database_url: str                    # injected by platform/Khalid
