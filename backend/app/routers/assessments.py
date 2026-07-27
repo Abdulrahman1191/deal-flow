@@ -185,7 +185,24 @@ async def _finalize_sent(db: AsyncSession, card: AssessmentCard, lead: Optional[
                 lead.copper_id = None
                 await log_event(db, lead.id, EVENT_CONVERTED, converted_payload)
         elif card.draft_type == "rejection" and lead.copper_id:
-            copper_writer.archive_in_copper(lead.copper_id, existing_tags)
+            # AI-generated reason/detail are additive and best-effort: a failed
+            # AI call must never block the archive write (status=Unqualified).
+            reason_option_ids, detail_text = None, None
+            try:
+                unqual = claude_agent.generate_unqualification_reason(
+                    company_name=lead.company_name,
+                    bucket=effective_bucket,
+                    summary=card.summary,
+                    red_flags=card.red_flags,
+                )
+                reason_option_ids = unqual.get("reason_option_ids")
+                detail_text = unqual.get("detail_text")
+            except Exception as exc:
+                print(f"[finalize_sent] Unqualification-reason AI call failed (archiving anyway): {exc!r}")
+            copper_writer.archive_in_copper(
+                lead.copper_id, existing_tags,
+                reason_option_ids=reason_option_ids, detail_text=detail_text,
+            )
         elif lead.copper_id:
             copper_writer.mark_sent_in_copper(lead.copper_id, existing_tags)
     except Exception as exc:

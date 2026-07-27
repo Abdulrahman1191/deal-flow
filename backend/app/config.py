@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     copper_cf_draft_type_id: int = 0
     copper_cf_summary_id: int = 0
     copper_cf_app_status_id: int = 0
+    # AI-generated reason(s) (MultiSelect) + detail (Text) for why a lead was
+    # unqualified — written alongside status_id when a lead archives/rejects.
+    copper_cf_unqual_reason_id: int = 0
+    copper_cf_unqual_detail_id: int = 0
 
     # --- Storage ---
     database_url: str                    # injected by platform/Khalid

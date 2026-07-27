@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 from openai import OpenAI
 
@@ -596,6 +596,87 @@ def pick_linkedin_url(
     except Exception as e:
         print(f"[pick_linkedin_url] failed: {e!r}")
     return None
+
+
+# Fixed Copper "Unqualification Reasons" MultiSelect options (field id
+# 244358, see COPPER_CF_UNQUAL_REASON_ID). The LLM must choose labels
+# verbatim from this map — we map label -> id ourselves in
+# generate_unqualification_reason, so an id that isn't in this dict can
+# never reach Copper, however the model responds.
+UNQUAL_REASON_OPTIONS: dict[str, int] = {
+    "Founder(s)": 1529401,
+    "Out of our stage": 367300,
+    "Out of our region": 367301,
+    "Lack of traction": 367302,
+    "Dedication and focus": 367303,
+    "Ownership structure": 367304,
+    "Market size": 367305,
+    "Business Model": 367306,
+    "Regulations and Legislation": 367307,
+    "Technology and IP": 367308,
+    "Exit potential": 367309,
+    "Conflict of interest": 367310,
+    "Other": 367311,
+}
+
+UNQUAL_REASON_SYSTEM = """You are a senior investment analyst at Raed Ventures writing a short
+internal CRM note explaining why a lead was passed on. This is NOT an email to the
+founder — it is an internal record for the team's CRM, so be plain and factual.
+
+Pick 1-3 reasons that best explain the pass, chosen ONLY from this exact list (use the
+labels verbatim — never invent a new one): {labels}
+
+Return strict JSON: {{"reasons": ["<label>", ...], "detail": "<internal note, plain
+factual sentence(s), max ~300 characters, no greeting or sign-off>"}}"""
+
+UNQUAL_REASON_USER_TEMPLATE = """Company: {company_name}
+Decision: {bucket}
+Assessment summary: {summary}
+Red flags noted: {red_flags}
+
+Return the JSON object described in your instructions."""
+
+
+def generate_unqualification_reason(
+    company_name: str,
+    bucket: str,
+    summary: Optional[str] = None,
+    red_flags: Optional[list] = None,
+) -> dict[str, Any]:
+    """Best-effort: asks the LLM which fixed reason label(s) explain why a lead
+    was unqualified, plus a short internal detail note. Feeds Copper's
+    'Unqualification Reasons' (MultiSelect) + 'Unqualified Details' (Text)
+    custom fields at archive/reject time — see copper_writer.archive_in_copper
+    / reject_in_copper.
+
+    Raises on any failure (empty API key, malformed response, etc.) by
+    design — callers treat this as additive and must catch + swallow so a
+    failed AI call never blocks the archive/reject write itself.
+    """
+    labels = list(UNQUAL_REASON_OPTIONS.keys())
+    prompt = UNQUAL_REASON_USER_TEMPLATE.format(
+        company_name=company_name or "",
+        bucket=bucket,
+        summary=summary or "(no summary available)",
+        red_flags=", ".join(red_flags or []) or "(none noted)",
+    )
+    response = _get_client().chat.completions.create(
+        model=settings.deepseek_model,
+        max_tokens=300,
+        temperature=0.0,
+        messages=[
+            {"role": "system", "content": UNQUAL_REASON_SYSTEM.format(labels=", ".join(labels))},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+    )
+    data = json.loads(response.choices[0].message.content)
+    reason_labels = data.get("reasons") or []
+    reason_option_ids = [
+        UNQUAL_REASON_OPTIONS[label] for label in reason_labels if label in UNQUAL_REASON_OPTIONS
+    ]
+    detail_text = (data.get("detail") or "").strip()[:300]
+    return {"reason_option_ids": reason_option_ids, "detail_text": detail_text}
 
 
 def regenerate_draft(lead_data: dict, bucket: str, summary: str = "") -> dict[str, Any]:

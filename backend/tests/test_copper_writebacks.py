@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.database import get_db
 from app.main import app
-from app.services import copper_writer, email_sender
+from app.services import claude_agent, copper_writer, email_sender
 from app.services.auth import get_current_user
 from app.tasks import drain_outbox
 
@@ -74,6 +74,7 @@ def _fake_card(rated: bool, bucket: str = "YES", draft_type: str = "meeting_requ
         user_rating="up" if rated else None,
         confidence_score=80,
         summary="promising deep-tech team",
+        red_flags=[],
         scoring_breakdown={},
         research_data={},
         draft_type=draft_type,
@@ -191,12 +192,17 @@ def test_send_meeting_request_no_copper_id_skips_write_and_does_not_error(overri
 def test_send_rejection_calls_archive_in_copper(override_auth, monkeypatch):
     _configure_send(monkeypatch)
     monkeypatch.setattr(copper_writer, "mark_approved_in_copper", lambda *a, **k: None)
+    monkeypatch.setattr(
+        claude_agent,
+        "generate_unqualification_reason",
+        lambda **kwargs: {"reason_option_ids": [367302], "detail_text": "Lack of traction."},
+    )
 
     calls = []
     monkeypatch.setattr(
         copper_writer,
         "archive_in_copper",
-        lambda copper_id, existing_tags: calls.append((copper_id, existing_tags)),
+        lambda copper_id, existing_tags, **kwargs: calls.append((copper_id, existing_tags, kwargs)),
     )
 
     card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
@@ -208,7 +214,41 @@ def test_send_rejection_calls_archive_in_copper(override_auth, monkeypatch):
         _clear_db_override()
 
     assert response.status_code == 200
-    assert calls == [("98765", ["existing-tag"])]
+    assert calls == [(
+        "98765",
+        ["existing-tag"],
+        {"reason_option_ids": [367302], "detail_text": "Lack of traction."},
+    )]
+
+
+def test_send_rejection_still_archives_when_unqual_ai_call_fails(override_auth, monkeypatch):
+    """Best-effort: an AI failure must not block the archive write itself —
+    only the reason/detail are omitted."""
+    _configure_send(monkeypatch)
+    monkeypatch.setattr(copper_writer, "mark_approved_in_copper", lambda *a, **k: None)
+
+    def _boom(**kwargs):
+        raise RuntimeError("deepseek down")
+
+    monkeypatch.setattr(claude_agent, "generate_unqualification_reason", _boom)
+
+    calls = []
+    monkeypatch.setattr(
+        copper_writer,
+        "archive_in_copper",
+        lambda copper_id, existing_tags, **kwargs: calls.append((copper_id, existing_tags, kwargs)),
+    )
+
+    card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
+    lead = _fake_lead(copper_id="98765")
+    _override_db([(card, lead)])
+    try:
+        response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert calls == [("98765", ["existing-tag"], {"reason_option_ids": None, "detail_text": None})]
 
 
 def test_archive_in_copper_enqueues_unqualified_status_put(monkeypatch):
@@ -235,6 +275,51 @@ def test_archive_in_copper_enqueues_unqualified_status_put(monkeypatch):
     assert call["method"] == "PUT"
     assert call["body"]["status_id"] == 999
     assert "raed:archived" in call["body"]["tags"]
+    assert "custom_fields" not in call["body"]
+
+
+def test_archive_in_copper_omits_unqual_fields_when_ids_not_configured(monkeypatch):
+    """Field ids default to 0 — reason/detail must never be sent unless both
+    are explicitly configured, even when the caller passes values."""
+    monkeypatch.setattr(copper_writer.settings, "copper_unqualified_status_id", 999)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_reason_id", 0)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_detail_id", 0)
+
+    enqueued = []
+    monkeypatch.setattr(
+        copper_writer,
+        "_enqueue",
+        lambda copper_id, endpoint, body, method="PUT": enqueued.append(body),
+    )
+
+    copper_writer.archive_in_copper(
+        "55555", ["some-tag"], reason_option_ids=[367311], detail_text="Other."
+    )
+
+    assert "custom_fields" not in enqueued[0]
+
+
+def test_reject_in_copper_includes_unqual_custom_fields_when_configured(monkeypatch):
+    monkeypatch.setattr(copper_writer.settings, "copper_unqualified_status_id", 999)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_reason_id", 244358)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_detail_id", 244359)
+
+    enqueued = []
+    monkeypatch.setattr(
+        copper_writer,
+        "_enqueue",
+        lambda copper_id, endpoint, body, method="PUT": enqueued.append(body),
+    )
+
+    copper_writer.reject_in_copper(
+        "55555", ["some-tag"], reason_option_ids=[367300], detail_text="Out of our stage."
+    )
+
+    custom_fields = enqueued[0]["custom_fields"]
+    assert custom_fields == [
+        {"custom_field_definition_id": 244358, "value": [367300]},
+        {"custom_field_definition_id": 244359, "value": "Out of our stage."},
+    ]
 
 
 def test_send_rejection_no_copper_id_skips_write_and_does_not_error(override_auth, monkeypatch):
@@ -263,11 +348,17 @@ def test_send_rejection_no_copper_id_skips_write_and_does_not_error(override_aut
 # ---------------------------------------------------------------------------
 
 def test_archive_no_reply_enqueues_reject_copper_write(override_auth, monkeypatch):
+    monkeypatch.setattr(
+        claude_agent,
+        "generate_unqualification_reason",
+        lambda **kwargs: {"reason_option_ids": [367311], "detail_text": "Not a fit for now."},
+    )
+
     calls = []
     monkeypatch.setattr(
         copper_writer,
         "archive_in_copper",
-        lambda copper_id, existing_tags: calls.append((copper_id, existing_tags)),
+        lambda copper_id, existing_tags, **kwargs: calls.append((copper_id, existing_tags, kwargs)),
     )
 
     lead = _fake_lead(copper_id="11122")
@@ -279,7 +370,55 @@ def test_archive_no_reply_enqueues_reject_copper_write(override_auth, monkeypatc
         _clear_db_override()
 
     assert response.status_code == 200
-    assert calls == [("11122", ["existing-tag"])]
+    assert calls == [(
+        "11122",
+        ["existing-tag"],
+        {"reason_option_ids": [367311], "detail_text": "Not a fit for now."},
+    )]
+
+
+def test_archive_no_reply_enqueues_unqual_custom_fields_when_configured(override_auth, monkeypatch):
+    """Acceptance test (issue #63): archive-no-reply on a lead with an
+    assessment enqueues a Copper PUT whose body includes `custom_fields` for
+    both configured unqual-reason ids, with reason option ids drawn only
+    from the fixed allowed set."""
+    monkeypatch.setattr(copper_writer.settings, "copper_unqualified_status_id", 999)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_reason_id", 244358)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_detail_id", 244359)
+    monkeypatch.setattr(
+        claude_agent,
+        "generate_unqualification_reason",
+        lambda **kwargs: {
+            "reason_option_ids": [367302, 367305],
+            "detail_text": "Traction and market size don't fit our thesis right now.",
+        },
+    )
+
+    enqueued = []
+    monkeypatch.setattr(
+        copper_writer,
+        "_enqueue",
+        lambda copper_id, endpoint, body, method="PUT": enqueued.append(body),
+    )
+
+    lead = _fake_lead(copper_id="55555")
+    card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
+    _override_db([lead, card])
+    try:
+        response = client.post(f"/api/v1/leads/{lead.id}/archive-no-reply")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert len(enqueued) == 1
+    custom_fields = enqueued[0]["custom_fields"]
+    reason_field = next(f for f in custom_fields if f["custom_field_definition_id"] == 244358)
+    detail_field = next(f for f in custom_fields if f["custom_field_definition_id"] == 244359)
+
+    allowed_ids = set(claude_agent.UNQUAL_REASON_OPTIONS.values())
+    assert reason_field["value"] == [367302, 367305]
+    assert set(reason_field["value"]) <= allowed_ids
+    assert detail_field["value"] == "Traction and market size don't fit our thesis right now."
 
 
 def test_archive_no_reply_no_copper_id_skips_write(override_auth, monkeypatch):

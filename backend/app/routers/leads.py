@@ -23,7 +23,7 @@ from app.services.auth import (
     is_owner,
     verify_webhook_signature,
 )
-from app.services import copper_writer
+from app.services import claude_agent, copper_writer
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
 from app.services.events import EVENT_ARCHIVED, EVENT_ARCHIVED_NO_REPLY, EVENT_COPPER_UPDATED, log_event
@@ -503,9 +503,27 @@ async def archive_no_reply(
     await db.commit()
 
     if lead.copper_id and not lead.copper_opportunity_id:
+        # AI-generated reason/detail are additive and best-effort: a failed AI
+        # call must never block the archive write below (status=Unqualified).
+        reason_option_ids, detail_text = None, None
+        if card:
+            try:
+                unqual = claude_agent.generate_unqualification_reason(
+                    company_name=lead.company_name,
+                    bucket=card.user_override or card.bucket,
+                    summary=card.summary,
+                    red_flags=card.red_flags,
+                )
+                reason_option_ids = unqual.get("reason_option_ids")
+                detail_text = unqual.get("detail_text")
+            except Exception as exc:
+                print(f"[archive_no_reply] Unqualification-reason AI call failed (archiving anyway): {exc!r}")
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.archive_in_copper(lead.copper_id, existing_tags)
+            copper_writer.archive_in_copper(
+                lead.copper_id, existing_tags,
+                reason_option_ids=reason_option_ids, detail_text=detail_text,
+            )
         except Exception as exc:
             print(f"[archive_no_reply] Copper write failed (local commit succeeded): {exc!r}")
 
