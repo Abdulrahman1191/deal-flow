@@ -35,8 +35,9 @@ class _FakeSMTP:
     def login(self, username, password):
         pass
 
-    def send_message(self, msg):
+    def send_message(self, msg, from_addr=None):
         _FakeSMTP.sent.append(msg)
+        _FakeSMTP.from_addrs.append(from_addr)
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +50,7 @@ def _configure_smtp(monkeypatch):
     monkeypatch.setattr(settings, "mail_from_name", "Raed Ventures")
     monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
     _FakeSMTP.sent = []
+    _FakeSMTP.from_addrs = []
     yield
 
 
@@ -66,6 +68,7 @@ def test_send_email_with_owner_override_sets_from_and_reply_to():
     assert msg["From"] == "Waleed <waleed@raed.vc>"
     assert msg["Reply-To"] == "waleed@raed.vc"
     assert msg["To"] == "founder@acme.test"
+    assert _FakeSMTP.from_addrs[0] == "deals@raed.vc"
 
 
 def test_send_email_without_override_defaults_to_mail_from():
@@ -76,3 +79,4 @@ def test_send_email_without_override_defaults_to_mail_from():
     msg = _FakeSMTP.sent[0]
     assert msg["From"] == "Raed Ventures <deals@raed.vc>"
     assert msg["Reply-To"] is None
+    assert _FakeSMTP.from_addrs[0] == "deals@raed.vc"
