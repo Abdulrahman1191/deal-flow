@@ -174,7 +174,7 @@ def test_send_meeting_request_yes_converts_lead_to_opportunity(override_auth, mo
 
     card = _fake_card(rated=True, bucket="YES", draft_type="meeting_request")
     lead = _fake_lead(copper_id="12345")
-    _override_db([(card, lead)])
+    _override_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
     finally:
@@ -205,7 +205,7 @@ def test_send_meeting_request_assigns_opportunity_to_acting_user(override_auth_w
 
     card = _fake_card(rated=True, bucket="YES", draft_type="meeting_request")
     lead = _fake_lead(copper_id="12345")
-    _override_db([(card, lead)])
+    _override_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
     finally:
@@ -227,7 +227,7 @@ def test_send_meeting_request_no_copper_id_skips_write_and_does_not_error(overri
 
     card = _fake_card(rated=True, bucket="YES", draft_type="meeting_request")
     lead = _fake_lead(copper_id=None)
-    _override_db([(card, lead)])
+    _override_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
     finally:
@@ -261,7 +261,7 @@ def test_send_rejection_calls_archive_in_copper(override_auth, monkeypatch):
 
     card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
     lead = _fake_lead(copper_id="98765")
-    _override_db([(card, lead)])
+    _override_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
     finally:
@@ -295,7 +295,7 @@ def test_send_rejection_still_archives_when_unqual_ai_call_fails(override_auth, 
 
     card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
     lead = _fake_lead(copper_id="98765")
-    _override_db([(card, lead)])
+    _override_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
     finally:
@@ -387,7 +387,7 @@ def test_send_rejection_no_copper_id_skips_write_and_does_not_error(override_aut
 
     card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
     lead = _fake_lead(copper_id=None)
-    _override_db([(card, lead)])
+    _override_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
     finally:
