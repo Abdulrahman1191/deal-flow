@@ -185,14 +185,40 @@ def test_send_succeeds_once_rated(override_auth, monkeypatch):
         "from_addr": "reviewer@raed.vc",
         "from_name": "Reviewer Person",
         "reply_to": "reviewer@raed.vc",
+        "bcc": "reviewer@raed.vc",
     }
     assert card.approved_at is not None
     assert card.sent_at is not None
 
 
+def test_send_bccs_the_lead_owner(override_auth, monkeypatch):
+    """Issue #88: the lead owner is BCC'd on outreach sent as them, so they
+    keep a copy in their own inbox."""
+    monkeypatch.setattr(email_sender, "is_configured", lambda: True)
+    sent_calls = []
+    monkeypatch.setattr(
+        email_sender,
+        "send_email",
+        lambda to, subject, body, **kwargs: sent_calls.append((to, subject, body, kwargs)),
+    )
+
+    card = _fake_card(rated=True)
+    lead = _fake_lead()
+    owner = SimpleNamespace(email="waleed@raed.vc", full_name="Waleed")
+    _override_db([(card, lead), owner])
+    try:
+        response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    kwargs = sent_calls[0][3]
+    assert kwargs["bcc"] == "waleed@raed.vc"
+
+
 def test_send_falls_back_to_mail_from_when_owner_unresolvable(override_auth, monkeypatch):
     """If the lead's owner_email doesn't match any User row, send_email must
-    still be called (with no from_addr/from_name/reply_to override) rather
+    still be called (with no from_addr/from_name/reply_to/bcc override) rather
     than failing or dropping the send — email_sender falls back to
     settings.mail_from internally."""
     monkeypatch.setattr(email_sender, "is_configured", lambda: True)
@@ -214,4 +240,4 @@ def test_send_falls_back_to_mail_from_when_owner_unresolvable(override_auth, mon
     assert response.status_code == 200
     assert len(sent_calls) == 1
     kwargs = sent_calls[0][3]
-    assert kwargs == {"from_addr": None, "from_name": None, "reply_to": None}
+    assert kwargs == {"from_addr": None, "from_name": None, "reply_to": None, "bcc": None}

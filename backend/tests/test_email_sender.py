@@ -5,6 +5,7 @@ authentication and the envelope sender stay the shared SMTP account. No real
 network call is made -- smtplib.SMTP is replaced with a fake that just
 records the constructed EmailMessage.
 """
+import copy
 import smtplib
 
 import pytest
@@ -36,7 +37,14 @@ class _FakeSMTP:
         pass
 
     def send_message(self, msg, from_addr=None):
-        _FakeSMTP.sent.append(msg)
+        # Mirrors real smtplib.SMTP.send_message: it transmits a copy of the
+        # message with Bcc/Resent-Bcc stripped, so `sent` here reflects what
+        # the primary recipient actually receives (see cpython smtplib.py).
+        _FakeSMTP.bccs.append(msg["Bcc"])
+        msg_copy = copy.copy(msg)
+        del msg_copy["Bcc"]
+        del msg_copy["Resent-Bcc"]
+        _FakeSMTP.sent.append(msg_copy)
         _FakeSMTP.from_addrs.append(from_addr)
 
 
@@ -51,6 +59,7 @@ def _configure_smtp(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
     _FakeSMTP.sent = []
     _FakeSMTP.from_addrs = []
+    _FakeSMTP.bccs = []
     yield
 
 
@@ -80,3 +89,28 @@ def test_send_email_without_override_defaults_to_mail_from():
     assert msg["From"] == "Raed Ventures <deals@raed.vc>"
     assert msg["Reply-To"] is None
     assert _FakeSMTP.from_addrs[0] == "deals@raed.vc"
+
+
+def test_send_email_with_bcc_is_delivered_to_owner_but_hidden_from_founder():
+    """Issue #88: the lead owner is BCC'd so they keep a copy of outreach sent
+    on their behalf. `send_message` derives recipients from To/Cc/Bcc but
+    strips the Bcc header from what's actually transmitted, so the founder's
+    copy never reveals it was BCC'd."""
+    email_sender.send_email(
+        "founder@acme.test",
+        "Let's talk",
+        "Hi there",
+        bcc="waleed@raed.vc",
+    )
+
+    assert _FakeSMTP.bccs[0] == "waleed@raed.vc"
+    msg = _FakeSMTP.sent[0]
+    assert msg["Bcc"] is None
+    assert msg["To"] == "founder@acme.test"
+
+
+def test_send_email_without_bcc_omits_header():
+    """No bcc given -> unchanged back-compat behavior."""
+    email_sender.send_email("founder@acme.test", "Let's talk", "Hi there")
+
+    assert _FakeSMTP.bccs[0] is None

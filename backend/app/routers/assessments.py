@@ -312,6 +312,7 @@ async def send_assessment(
             from_addr=owner_addr,
             from_name=owner_name,
             reply_to=owner_addr,
+            bcc=owner_addr,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Email send failed: {exc}")

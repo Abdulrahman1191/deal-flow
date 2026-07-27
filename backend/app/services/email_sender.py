@@ -26,6 +26,7 @@ def send_email(
     from_addr: str | None = None,
     from_name: str | None = None,
     reply_to: str | None = None,
+    bcc: str | None = None,
 ) -> None:
     """Send a plain-text email. Raises on any failure (caller must handle).
 
@@ -34,6 +35,12 @@ def send_email(
     account — only the visible From/Reply-To change, not the envelope sender.
     Default to `settings.mail_from`/`mail_from_name` for back-compat with
     existing callers. `reply_to` is only set on the message when given.
+
+    `bcc`, when given, is set as a `Bcc` header so the lead owner keeps a copy
+    of outreach sent on their behalf (the shared-SMTP From spoofing above
+    doesn't write to their Gmail Sent folder). `server.send_message` derives
+    the envelope recipients from To/Cc/Bcc and strips the Bcc header before
+    transmission, so `to` never sees it.
     """
     if not is_configured():
         raise RuntimeError("Email not configured: set SMTP_HOST and MAIL_FROM (SES or SendGrid).")
@@ -48,6 +55,8 @@ def send_email(
     msg["To"] = to
     if reply_to:
         msg["Reply-To"] = reply_to
+    if bcc:
+        msg["Bcc"] = bcc
     msg["Subject"] = subject or ""
     msg.set_content(body or "")
 
