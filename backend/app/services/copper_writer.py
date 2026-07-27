@@ -247,10 +247,19 @@ def convert_lead_to_opportunity(
     copper_id: str,
     company_name: str,
     founder_name: Optional[str],
+    assignee_id: Optional[int] = None,
 ) -> Optional[dict]:
     """
     Kept synchronous because we need the returned opportunity_id immediately
     to store on the lead row. Not routed through the outbox.
+
+    `assignee_id` is the acting user's Copper user id (resolved by the caller
+    via resolve_copper_id) so the new opportunity lands on their Kanban instead
+    of pooling unassigned. Sent inline in the convert payload; Copper's convert
+    endpoint doesn't reliably apply assignee_id from that nested payload, so we
+    also follow up with a PUT on the created opportunity to guarantee it sticks.
+    A missing/unresolvable assignee_id (fallback) is a no-op on both — the
+    conversion still proceeds unassigned, matching prior behavior.
     """
     if not copper_id:
         return None
@@ -258,15 +267,19 @@ def convert_lead_to_opportunity(
         print("[copper_writer] pipeline_id or stage_id is 0; cannot convert lead")
         return None
 
+    opportunity: dict = {
+        "name": company_name,
+        "pipeline_id": settings.copper_pipeline_id,
+        "pipeline_stage_id": settings.copper_pipeline_stage_id,
+    }
+    if assignee_id:
+        opportunity["assignee_id"] = assignee_id
+
     payload = {
         "details": {
             "person": {"name": founder_name or company_name},
             "company": {"name": company_name},
-            "opportunity": {
-                "name": company_name,
-                "pipeline_id": settings.copper_pipeline_id,
-                "pipeline_stage_id": settings.copper_pipeline_stage_id,
-            },
+            "opportunity": opportunity,
         }
     }
     register_outbound_write(copper_id, payload)
@@ -279,11 +292,26 @@ def convert_lead_to_opportunity(
             )
             r.raise_for_status()
             data = r.json()
-            return {
+            result = {
                 "person_id": str((data.get("person") or {}).get("id", "")) or None,
                 "company_id": str((data.get("company") or {}).get("id", "")) or None,
                 "opportunity_id": str((data.get("opportunity") or {}).get("id", "")) or None,
             }
+            opportunity_id = result.get("opportunity_id")
+            if assignee_id and opportunity_id:
+                try:
+                    put_r = client.put(
+                        f"{COPPER_BASE}/opportunities/{opportunity_id}",
+                        headers=_headers(),
+                        json={"assignee_id": assignee_id},
+                    )
+                    put_r.raise_for_status()
+                except Exception as exc:
+                    print(
+                        f"[copper_writer] assignee PUT /opportunities/{opportunity_id} "
+                        f"failed (opportunity created, unassigned): {exc!r}"
+                    )
+            return result
     except Exception as exc:
         print(f"[copper_writer] convert /leads/{copper_id} failed: {exc!r}")
         return None
