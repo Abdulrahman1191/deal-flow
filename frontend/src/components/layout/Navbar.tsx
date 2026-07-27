@@ -2,12 +2,15 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import useAppStore from "../../store/useAppStore";
 import { fetchFeedback } from "../../api/feedback";
 import { fetchTeam } from "../../api/users";
+import { fetchLeads } from "../../api/leads";
+import { AWAITING_DECK_QUERY_KEY } from "../../pages/AwaitingDeckPage";
 import { useMe } from "../../lib/auth";
 
 const baseTabs = [
   { id: "leads", label: "Deal Flow" },
   { id: "framework", label: "Framework" },
   { id: "archive", label: "Archive" },
+  { id: "awaiting_deck", label: "Awaiting Deck" },
 ] as const;
 
 export default function Navbar() {
@@ -24,6 +27,16 @@ export default function Navbar() {
     staleTime: 20_000,
   });
   const unresolved = feedback.filter((f) => !f.resolved_at).length;
+
+  // Count badge for the "Awaiting Deck" tab — same query key as the page
+  // itself, so the two share one cache entry instead of double-fetching.
+  const { data: awaitingDeck } = useQuery({
+    queryKey: AWAITING_DECK_QUERY_KEY,
+    queryFn: () => fetchLeads({ status: "awaiting_deck", page_size: 1000 }),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+  const awaitingDeckCount = awaitingDeck?.total ?? 0;
 
   // Admin "view as" QA mode (issue #52). The dropdown itself is owner-gated
   // below; this query is too, so non-admins never hit /users/team (which
@@ -67,6 +80,11 @@ export default function Navbar() {
             {tab.id === "feedback" && unresolved > 0 && (
               <span className="absolute top-3 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-info text-[10px] font-bold text-white">
                 {unresolved}
+              </span>
+            )}
+            {tab.id === "awaiting_deck" && awaitingDeckCount > 0 && (
+              <span className="absolute top-3 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-warning text-[10px] font-bold text-white">
+                {awaitingDeckCount}
               </span>
             )}
           </button>
