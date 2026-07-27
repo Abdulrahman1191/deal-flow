@@ -27,6 +27,7 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.lead import Lead
 
 # Cap how much extracted text we persist in the DB. Pitch decks rarely run past
@@ -296,13 +297,22 @@ class MatchCandidate:
 class MatchResult:
     lead: Optional[Lead]
     candidates: list[MatchCandidate] = field(default_factory=list)
+    # Candidates that missed the high-confidence path (strict cutoff, or tied
+    # with another candidate) but still cleared `deck_match_fuzzy_floor` on
+    # filename similarity alone -- worth checking against the deck's actual
+    # content via verify_match_candidates() before giving up (issue #74).
+    # Empty whenever `.lead` is already resolved.
+    needs_verification: list[MatchCandidate] = field(default_factory=list)
 
 
 _MAX_REPORTED_CANDIDATES = 3
 
 
 def find_lead_match(
-    filename: str, leads: list[Lead], threshold: float = MATCH_THRESHOLD
+    filename: str,
+    leads: list[Lead],
+    threshold: float = MATCH_THRESHOLD,
+    fuzzy_floor: Optional[float] = None,
 ) -> MatchResult:
     """Match a PDF filename to one of the supplied leads, with diagnostics.
 
@@ -316,6 +326,13 @@ def find_lead_match(
     lead is worse than leaving a file unmatched). Always returns the top few
     candidates (whether or not one was chosen) so callers can log/report why
     a file didn't attach.
+
+    Whenever no lead is resolved with confidence, candidates that still clear
+    `fuzzy_floor` (default settings.deck_match_fuzzy_floor, ~0.6) are surfaced
+    on `.needs_verification` -- this includes both the "one near-miss" case
+    (transliteration, bilingual suffix) and the ambiguous "2+ plausible leads"
+    case (including exact-key ties). Callers may resolve these against the
+    deck's actual content via verify_match_candidates() instead of giving up.
     """
     stem = Path(filename).stem  # "Hadawi.pdf" -> "Hadawi"
     norm_stem = _normalize_company_key(stem)
@@ -342,13 +359,15 @@ def find_lead_match(
 
     if len(exact_matches) == 1:
         return MatchResult(lead=exact_matches[0].lead, candidates=top_candidates)
-    if len(exact_matches) > 1:
-        return MatchResult(lead=None, candidates=top_candidates)
 
-    strong = [c for c in scored if c.score >= threshold]
-    if len(strong) == 1:
-        return MatchResult(lead=strong[0].lead, candidates=top_candidates)
-    return MatchResult(lead=None, candidates=top_candidates)
+    if not exact_matches:
+        strong = [c for c in scored if c.score >= threshold]
+        if len(strong) == 1:
+            return MatchResult(lead=strong[0].lead, candidates=top_candidates)
+
+    floor = settings.deck_match_fuzzy_floor if fuzzy_floor is None else fuzzy_floor
+    fuzzy_candidates = [c for c in top_candidates if c.score >= floor]
+    return MatchResult(lead=None, candidates=top_candidates, needs_verification=fuzzy_candidates)
 
 
 def match_filename_to_lead(filename: str, leads: list[Lead]) -> Optional[Lead]:
@@ -358,6 +377,69 @@ def match_filename_to_lead(filename: str, leads: list[Lead]) -> Optional[Lead]:
     result, not the diagnostic candidate list.
     """
     return find_lead_match(filename, leads).lead
+
+
+# Copper "Company description" custom field (see COPPER_BIDIRECTIONAL_SYNC.md
+# §3 for the field-id convention). Read-only here -- raw_copper_data is the
+# untouched Copper lead payload synced by app.services.copper_service.
+_COPPER_CF_COMPANY_DESCRIPTION_ID = 536851
+
+
+def _copper_company_description(lead: Lead) -> str:
+    """The Copper "Company description" custom field value, if set."""
+    raw = getattr(lead, "raw_copper_data", None) or {}
+    for cf in raw.get("custom_fields") or []:
+        if cf.get("custom_field_definition_id") == _COPPER_CF_COMPANY_DESCRIPTION_ID:
+            value = cf.get("value")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _company_context(lead: Lead) -> str:
+    """Company-description text to verify a deck's content against.
+
+    Combines lead.description with Copper's "Company description" custom
+    field (raw_copper_data, field 536851) -- either can be empty, so the LLM
+    prompt must tolerate "(no company description on file)".
+    """
+    parts = [getattr(lead, "description", None) or "", _copper_company_description(lead)]
+    return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def verify_match_candidates(
+    candidates: list[MatchCandidate], deck_text: str
+) -> Optional[Lead]:
+    """Resolve a near-miss/ambiguous filename match against the deck's content.
+
+    For each candidate (already filtered to those clearing `fuzzy_floor` on
+    filename similarity -- see find_lead_match), makes ONE cheap LLM call
+    asking whether the deck's extracted text actually describes that
+    candidate's company, given its description. This is the only place the
+    LLM is invoked in the matcher -- the high-confidence exact/>=MATCH_THRESHOLD
+    path in find_lead_match never reaches here, so that path stays free.
+
+    Returns the single lead the deck content confirms. Never guesses: if zero
+    or 2+ candidates verify (or a verification call errors), returns None --
+    attaching to the wrong lead is worse than leaving the file unmatched.
+    """
+    if not deck_text or not candidates:
+        return None
+
+    from app.services.claude_agent import verify_pitch_deck_match
+
+    verified: list[Lead] = []
+    for candidate in candidates:
+        context = _company_context(candidate.lead)
+        try:
+            is_match = verify_pitch_deck_match(candidate.company_name, context, deck_text)
+        except Exception as exc:
+            print(f"[pitch_deck] deck verification failed for {candidate.company_name!r}: {exc!r}")
+            continue
+        if is_match:
+            verified.append(candidate.lead)
+
+    return verified[0] if len(verified) == 1 else None
 
 
 async def ingest_pdf(db: AsyncSession, lead: Lead, path: Path) -> bool:

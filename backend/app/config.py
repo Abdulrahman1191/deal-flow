@@ -69,6 +69,18 @@ class Settings(BaseSettings):
     # gracefully rather than crashing the worker when this is empty.
     google_service_account_json: str = ""
 
+    # --- Pitch-deck match verification (issue #74) ---
+    # Filenames scoring below MATCH_THRESHOLD (0.85) but at/above this floor
+    # are candidates for the LLM content-verification tier -- real matches
+    # lost to transliteration/bilingual naming live in this band (~0.6-0.85);
+    # genuinely different companies score below it. See
+    # app/services/pitch_deck.py find_lead_match / verify_match_candidates.
+    deck_match_fuzzy_floor: float = 0.6
+    # Gate for the whole verification tier. Off -> near-miss/ambiguous
+    # filenames stay unmatched exactly as before this feature (no LLM calls,
+    # no behavior change to the existing high-confidence auto-attach path).
+    deck_match_verify_enabled: bool = True
+
     # --- Daily briefing schedule ---
     briefing_cron_hour: int = 4
     briefing_cron_minute: int = 0

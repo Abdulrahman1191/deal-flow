@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from app.config import settings
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
+from app.services import claude_agent
 from app.services.pitch_deck import find_lead_match, match_filename_to_lead
 from app.tasks import sync_pitch_decks as spd
 from app.tasks.assess_lead import assess_lead_task
@@ -111,14 +112,18 @@ class TestMatchFilenameToLead:
         assert scores == sorted(scores, reverse=True)
 
 
-def _fake_lead():
-    return SimpleNamespace(
+def _fake_lead(**overrides):
+    base = dict(
         id=uuid.uuid4(),
         pitch_deck_drive_id=None,
         pitch_deck_filename=None,
         pitch_deck_text=None,
         pitch_deck_ingested_at=None,
+        description=None,
+        raw_copper_data=None,
     )
+    base.update(overrides)
+    return SimpleNamespace(**base)
 
 
 class _FakeCardResult:
@@ -370,3 +375,129 @@ def test_one_failed_download_does_not_abort_remaining_files(monkeypatch):
     assert lead_b.pitch_deck_text == "clean deck text"
     assert lead_a.pitch_deck_text is None
     assert lead_a.pitch_deck_drive_id is None
+
+
+# ---------- LLM content-verification tier (issue #74) ----------
+
+
+def test_real_transliteration_near_miss_verifies_and_attaches(monkeypatch):
+    """wathiq.pdf (0.83 filename similarity to lead 'Watieq') is a real match
+    lost to transliteration -- the verification tier should confirm it via
+    content against the lead's description and attach it, at the cost of
+    exactly one LLM call."""
+    lead = _fake_lead(
+        company_name="Watieq",
+        description="Digital notarization platform for MENA SMEs",
+    )
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd, "_list_pdfs_in_folder", lambda service, folder_id: [{"id": "file1", "name": "wathiq.pdf"}]
+    )
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "Watieq -- digital notarization for SMEs")
+    monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession([lead], has_card=True))
+
+    verify_calls = []
+
+    def _fake_verify(company_name, company_context, deck_text):
+        verify_calls.append((company_name, company_context, deck_text))
+        return True
+
+    monkeypatch.setattr(claude_agent, "verify_pitch_deck_match", _fake_verify)
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 1
+    assert result["unmatched"] == 0
+    assert lead.pitch_deck_text == "Watieq -- digital notarization for SMEs"
+    assert lead.pitch_deck_drive_id == "file1"
+    assert queued == [str(lead.id)]
+    assert len(verify_calls) == 1
+    assert verify_calls[0][0] == "Watieq"
+
+
+def test_coincidental_near_miss_rejected_by_content_mismatch(monkeypatch):
+    """Glow Therapeutics.pdf (0.79 filename similarity to lead 'Lifesome
+    Therapeutics') is a coincidental match between two different companies --
+    the verification tier must check content and reject it rather than
+    attach the wrong deck."""
+    lead = _fake_lead(
+        company_name="Lifesome Therapeutics",
+        description="Longevity supplements brand",
+    )
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd,
+        "_list_pdfs_in_folder",
+        lambda service, folder_id: [{"id": "file1", "name": "Glow Therapeutics.pdf"}],
+    )
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "Glow Therapeutics skincare serum deck")
+    monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession([lead], has_card=True))
+    monkeypatch.setattr(claude_agent, "verify_pitch_deck_match", lambda *a, **k: False)
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 0
+    assert result["unmatched"] == 1
+    assert lead.pitch_deck_text is None
+    assert lead.pitch_deck_drive_id is None
+    assert queued == []
+
+
+def test_high_confidence_match_never_calls_verification_llm(monkeypatch):
+    """The existing high-confidence exact/>=MATCH_THRESHOLD path must stay
+    free -- it should never reach the LLM verification tier."""
+    lead = _fake_lead(company_name="Ailoo")
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd, "_list_pdfs_in_folder", lambda service, folder_id: [{"id": "file1", "name": "Ailoo.pdf"}]
+    )
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "clean deck text")
+    monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession([lead], has_card=True))
+
+    def _boom(*_a, **_k):
+        raise AssertionError("high-confidence match must not call the verification LLM")
+
+    monkeypatch.setattr(claude_agent, "verify_pitch_deck_match", _boom)
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 1
+    assert lead.pitch_deck_text == "clean deck text"
+    assert queued == [str(lead.id)]
+
+
+def test_verify_disabled_flag_skips_llm_tier_and_leaves_near_miss_unmatched(monkeypatch):
+    monkeypatch.setattr(settings, "deck_match_verify_enabled", False)
+    lead = _fake_lead(company_name="Watieq", description="Digital notarization platform")
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd, "_list_pdfs_in_folder", lambda service, folder_id: [{"id": "file1", "name": "wathiq.pdf"}]
+    )
+
+    def _boom(*_a, **_k):
+        raise AssertionError("must not download a file for verification when the flag is off")
+
+    monkeypatch.setattr(spd, "_download_pdf", _boom)
+    monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession([lead], has_card=True))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 0
+    assert result["unmatched"] == 1
+    assert lead.pitch_deck_drive_id is None

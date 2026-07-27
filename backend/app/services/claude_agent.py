@@ -714,6 +714,56 @@ def regenerate_draft(lead_data: dict, bucket: str, summary: str = "") -> dict[st
     return result
 
 
+VERIFY_DECK_MATCH_SYSTEM = """You are verifying whether a pitch deck belongs to a specific company, before it is
+auto-attached to that company's CRM lead. Attaching the wrong deck to the wrong lead is worse than not
+attaching at all -- be conservative. Only say yes when the deck's actual content (company name, product,
+sector, founders) clearly describes the named company, not merely because a filename looked similar. Two
+different companies can have similar-sounding names (e.g. "Roboost" vs "Turbo Boost") -- treat those as a
+mismatch unless the deck content itself confirms the named company.
+
+Return strict JSON: {"is_match": true|false, "reasoning": "one short sentence"}"""
+
+VERIFY_DECK_MATCH_USER_TEMPLATE = """Candidate company: {company_name}
+Company description (from our CRM):
+{company_context}
+
+Pitch deck excerpt (extracted text from the candidate file):
+{deck_excerpt}
+
+Does this pitch deck belong to "{company_name}"? Judge strictly from whether the deck's content matches the
+company description above -- ignore filename similarity entirely.
+
+Return the JSON object described in your instructions."""
+
+
+def verify_pitch_deck_match(company_name: str, company_context: str, deck_text: str) -> bool:
+    """Cheap LLM check: does this deck's content actually belong to this company?
+
+    Used only by app.services.pitch_deck.verify_match_candidates for the
+    near-miss/ambiguous filename-match tier (issue #74) -- never for the
+    high-confidence exact/>=MATCH_THRESHOLD path, which stays LLM-free.
+    Raises on failure (empty API key, malformed response, etc.) by design;
+    callers must treat a failed verification as "not confirmed", never as a match.
+    """
+    prompt = VERIFY_DECK_MATCH_USER_TEMPLATE.format(
+        company_name=company_name,
+        company_context=company_context.strip() or "(no company description on file)",
+        deck_excerpt=(deck_text or "")[:8_000],
+    )
+    response = _get_client().chat.completions.create(
+        model=settings.deepseek_model,
+        max_tokens=200,
+        temperature=0.0,
+        messages=[
+            {"role": "system", "content": VERIFY_DECK_MATCH_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+    )
+    data = json.loads(response.choices[0].message.content)
+    return data.get("is_match") is True
+
+
 def generate_briefing(date_str: str, research_data: dict) -> dict[str, Any]:
     prompt = BRIEFING_USER_TEMPLATE.format(
         date=date_str,
