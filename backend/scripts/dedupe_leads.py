@@ -29,9 +29,24 @@ async def main():
         print(f"== Lead de-dup ({'COMMIT' if COMMIT else 'DRY RUN'}) ==")
         print(f"{report['active']} active leads | {report['groups']} duplicate-name groups "
               f"| {report['to_archive']} leads to archive\n")
+
+        print("Per-owner duplicate counts:")
+        for owner, count in sorted(report["per_owner"].items(), key=lambda kv: kv[0]):
+            print(f"  {owner}: {count}")
+        print()
+
         for g in report["detail"]:
-            print(f"[{g['name']}]  keep {g['keep'][:8]} — archive {len(g['archive'])}: "
-                  + ", ".join(s[:8] for s in g["archive"]))
+            inherited = []
+            if g["deck_inherited"]:
+                inherited.append("deck")
+            if g["assessment_inherited"]:
+                inherited.append("assessment")
+            inherited_note = f" [inherited: {', '.join(inherited)}]" if inherited else ""
+            print(f"[{g['owner_email']} / {g['name']}]  "
+                  f"keep copper_id={g['keep_copper_id']} ({g['keep'][:8]}) — "
+                  f"archive copper_ids={g['archive_copper_ids']}: "
+                  + ", ".join(s[:8] for s in g["archive"])
+                  + inherited_note)
         if COMMIT:
             print(f"\nCOMMITTED — archived {report['archived']} duplicate(s).")
         else:

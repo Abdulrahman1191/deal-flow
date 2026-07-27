@@ -330,16 +330,26 @@ async def _run() -> dict:
     drive_files = _list_pdfs_in_folder(service, settings.drive_pitch_deck_folder_id)
 
     async with CelerySessionLocal() as db:
-        all_leads = (await db.execute(select(Lead))).scalars().all()
+        all_leads = (
+            (await db.execute(select(Lead).where(Lead.status != "archived"))).scalars().all()
+        )
         # Idempotency: a lead that already has a Drive-matched deck is never
         # re-matched, so a re-run with no new files changes nothing. Leads
         # ingested via the local scripts/ingest_pitch_decks.py flow have
         # pitch_deck_text set but no pitch_deck_drive_id ("on file, sync
         # pending" — see LeadCard.tsx) — exclude those too, since they
         # already have a deck and re-ingesting would overwrite it and queue
-        # a spurious re-assessment.
+        # a spurious re-assessment. Archived leads (e.g. dedup losers) are
+        # excluded up front too: they're deckless duplicates of an active
+        # lead, and letting them into the candidate pool alongside their
+        # active twin makes every match ambiguous, permanently blocking
+        # auto-attach for that company (see dedup.py). Filtered again here
+        # (not just in the query above) so callers that hand _run() an
+        # already-fetched lead list -- e.g. tests -- get the same guarantee.
         remaining_leads = [
-            l for l in all_leads if not l.pitch_deck_drive_id and not l.pitch_deck_text
+            l
+            for l in all_leads
+            if not l.pitch_deck_drive_id and not l.pitch_deck_text and l.status != "archived"
         ]
 
         matched, unmatched, failed, requeued = 0, 0, 0, 0
