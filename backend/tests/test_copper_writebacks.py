@@ -14,11 +14,13 @@ Postgres needed.
 """
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.services import copper_writer, email_sender
@@ -484,3 +486,170 @@ def test_drain_outbox_no_network_call_made_directly(monkeypatch):
     result, _session = _run_drain(monkeypatch, [row], lambda *a, **k: {"ok": True})
 
     assert result == {"done": 1, "retried": 0, "failed": 0}
+
+
+# ---------------------------------------------------------------------------
+# 6. Config-unset skips (issue #65): archive/reject must leave a visible
+#    marker instead of a bare print()+return.
+# ---------------------------------------------------------------------------
+
+def test_archive_in_copper_records_skip_marker_when_status_id_unset(monkeypatch):
+    monkeypatch.setattr(copper_writer.settings, "copper_unqualified_status_id", 0)
+
+    recorded = []
+    monkeypatch.setattr(
+        copper_writer,
+        "_record_skipped_write",
+        lambda copper_id, endpoint, method, reason: recorded.append(
+            {"copper_id": copper_id, "endpoint": endpoint, "method": method, "reason": reason}
+        ),
+    )
+    enqueued = []
+    monkeypatch.setattr(copper_writer, "_enqueue", lambda *a, **k: enqueued.append(a))
+
+    copper_writer.archive_in_copper("55555", ["some-tag"])
+
+    assert enqueued == []  # no real write attempted
+    assert len(recorded) == 1
+    assert recorded[0]["copper_id"] == "55555"
+    assert recorded[0]["endpoint"] == "/leads/55555"
+    assert "copper_unqualified_status_id unset" in recorded[0]["reason"]
+
+
+def test_reject_in_copper_records_skip_marker_when_status_id_unset(monkeypatch):
+    monkeypatch.setattr(copper_writer.settings, "copper_unqualified_status_id", 0)
+
+    recorded = []
+    monkeypatch.setattr(
+        copper_writer,
+        "_record_skipped_write",
+        lambda copper_id, endpoint, method, reason: recorded.append(
+            {"copper_id": copper_id, "endpoint": endpoint, "method": method, "reason": reason}
+        ),
+    )
+
+    copper_writer.reject_in_copper("55555", ["some-tag"])
+
+    assert len(recorded) == 1
+    assert "copper_unqualified_status_id unset" in recorded[0]["reason"]
+
+
+def test_record_skipped_write_inserts_failed_outbox_row_and_logs_warning(monkeypatch, caplog):
+    """Unit test of _record_skipped_write itself: confirms it inserts a row
+    already marked status="failed" with a clear last_error, and emits a
+    WARNING-level log with a distinct tag -- so a missing config id shows up
+    in outbox-health / logs instead of vanishing as a stdout print()."""
+    inserted = []
+
+    class _FakeSyncSession:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def add(self, row):
+            inserted.append(row)
+
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(copper_writer, "_sync_engine", lambda: SimpleNamespace(dispose=lambda: None))
+    monkeypatch.setattr("sqlalchemy.orm.Session", _FakeSyncSession)
+
+    with caplog.at_level("WARNING"):
+        copper_writer._record_skipped_write(
+            "999", "/leads/999", "PUT", "skipped archive_in_copper: copper_unqualified_status_id unset"
+        )
+
+    assert len(inserted) == 1
+    row = inserted[0]
+    assert row.status == "failed"
+    assert row.last_error == "skipped archive_in_copper: copper_unqualified_status_id unset"
+    assert any("config_unset" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# 7. GET /leads/outbox-health (issue #65): admin-only counts + recent failures
+# ---------------------------------------------------------------------------
+
+class _FakeOutboxHealthSession:
+    """Returns the group-by counts on the first execute() and the recent
+    failed rows on the second, mirroring the two queries the endpoint runs."""
+
+    def __init__(self, count_rows, failed_rows):
+        self._count_rows = count_rows
+        self._failed_rows = failed_rows
+        self._call = 0
+
+    async def execute(self, _query):
+        self._call += 1
+        if self._call == 1:
+            return SimpleNamespace(all=lambda: self._count_rows)
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: self._failed_rows))
+
+
+def _fake_admin_user():
+    return SimpleNamespace(email=settings.owner_email, is_active=True)
+
+
+def _fake_non_admin_user():
+    return SimpleNamespace(email="not-an-admin@raed.vc", is_active=True)
+
+
+def _failed_outbox_row(**overrides):
+    row = SimpleNamespace(
+        endpoint="/leads/55555",
+        copper_id="55555",
+        method="PUT",
+        attempts=5,
+        last_error="skipped archive_in_copper: copper_unqualified_status_id unset",
+        created_at=datetime.now(timezone.utc),
+    )
+    for k, v in overrides.items():
+        setattr(row, k, v)
+    return row
+
+
+def test_outbox_health_returns_counts_and_recent_failures_for_admin():
+    async def _fake_get_db():
+        yield _FakeOutboxHealthSession(
+            count_rows=[("pending", 3), ("done", 10), ("failed", 2)],
+            failed_rows=[_failed_outbox_row()],
+        )
+
+    app.dependency_overrides[get_current_user] = _fake_admin_user
+    app.dependency_overrides[get_db] = _fake_get_db
+    try:
+        response = client.get("/api/v1/leads/outbox-health")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["counts"] == {"pending": 3, "done": 10, "failed": 2}
+    assert len(body["recent_failed"]) == 1
+    failure = body["recent_failed"][0]
+    assert failure["copper_id"] == "55555"
+    assert failure["endpoint"] == "/leads/55555"
+    assert failure["attempts"] == 5
+    assert "copper_unqualified_status_id unset" in failure["last_error"]
+
+
+def test_outbox_health_403s_for_non_admin():
+    async def _fake_get_db():
+        yield _FakeOutboxHealthSession(count_rows=[], failed_rows=[])
+
+    app.dependency_overrides[get_current_user] = _fake_non_admin_user
+    app.dependency_overrides[get_db] = _fake_get_db
+    try:
+        response = client.get("/api/v1/leads/outbox-health")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 403

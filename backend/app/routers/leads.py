@@ -20,6 +20,7 @@ from app.services.auth import (
     block_if_impersonating,
     effective_owner_email,
     get_current_user,
+    is_owner,
     verify_webhook_signature,
 )
 from app.services import copper_writer
@@ -290,6 +291,51 @@ async def export_leads(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=leads_export.csv"},
     )
+
+
+@router.get("/outbox-health")
+async def outbox_health(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only visibility into the copper_outbox drain (issue #65): counts
+    of rows by status, plus the most recent `failed` rows -- including
+    write-backs that were skipped outright because a required config id
+    (e.g. copper_unqualified_status_id) was unset. A missing config id used
+    to fail silently via a bare print(); it now lands here as a failed row."""
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from app.models.copper_outbox import CopperOutbox
+
+    counts_result = await db.execute(
+        select(CopperOutbox.status, func.count()).group_by(CopperOutbox.status)
+    )
+    counts = {row_status: count for row_status, count in counts_result.all()}
+
+    recent_result = await db.execute(
+        select(CopperOutbox)
+        .where(CopperOutbox.status == "failed")
+        .order_by(CopperOutbox.created_at.desc())
+        .limit(limit)
+    )
+    recent_failed = recent_result.scalars().all()
+
+    return {
+        "counts": counts,
+        "recent_failed": [
+            {
+                "endpoint": row.endpoint,
+                "copper_id": row.copper_id,
+                "method": row.method,
+                "attempts": row.attempts,
+                "last_error": row.last_error,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in recent_failed
+        ],
+    }
 
 
 @router.get("/{lead_id}", response_model=LeadWithAssessment)
