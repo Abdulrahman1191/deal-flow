@@ -111,14 +111,17 @@ class TestMatchFilenameToLead:
         assert scores == sorted(scores, reverse=True)
 
 
-def _fake_lead():
-    return SimpleNamespace(
+def _fake_lead(**overrides):
+    base = dict(
         id=uuid.uuid4(),
         pitch_deck_drive_id=None,
         pitch_deck_filename=None,
         pitch_deck_text=None,
         pitch_deck_ingested_at=None,
+        status="pending",
     )
+    base.update(overrides)
+    return SimpleNamespace(**base)
 
 
 class _FakeCardResult:
@@ -265,6 +268,7 @@ def test_run_does_not_reingest_lead_with_deck_text_but_no_drive_id(monkeypatch):
         pitch_deck_text="existing local deck text",
         pitch_deck_ingested_at=None,
         company_name="Acme Deep Tech",
+        status="pending",
     )
 
     monkeypatch.setattr(spd, "_drive_service", lambda: None)
@@ -304,6 +308,7 @@ def test_run_second_pass_with_no_new_files_is_idempotent(monkeypatch):
         pitch_deck_text="existing synced text",
         pitch_deck_ingested_at="already-set",
         company_name="Acme Deep Tech",
+        status="pending",
     )
 
     monkeypatch.setattr(spd, "_drive_service", lambda: None)
@@ -328,6 +333,59 @@ def test_run_second_pass_with_no_new_files_is_idempotent(monkeypatch):
     assert result["reassessments_queued"] == 0
     assert queued == []
     assert already_synced.pitch_deck_text == "existing synced text"
+
+
+def test_run_excludes_archived_leads_so_deck_attaches_to_the_active_survivor(monkeypatch):
+    """Dedup (backend/app/services/dedup.py) leaves a company with one active
+    lead and N archived (deckless) duplicates. Without excluding archived
+    leads from the sweep's candidate pool, every duplicate would tie for an
+    exact normalized-name match and the ambiguity guard would leave the file
+    permanently unmatched -- the exact regression this test guards against."""
+    active = SimpleNamespace(
+        id=uuid.uuid4(),
+        pitch_deck_drive_id=None,
+        pitch_deck_filename=None,
+        pitch_deck_text=None,
+        pitch_deck_ingested_at=None,
+        company_name="Bailee",
+        status="pending",
+    )
+    archived_duplicates = [
+        SimpleNamespace(
+            id=uuid.uuid4(),
+            pitch_deck_drive_id=None,
+            pitch_deck_filename=None,
+            pitch_deck_text=None,
+            pitch_deck_ingested_at=None,
+            company_name="Bailee",
+            status="archived",
+        )
+        for _ in range(5)
+    ]
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd, "_list_pdfs_in_folder", lambda service, folder_id: [{"id": "file123", "name": "bailee.pdf"}]
+    )
+    monkeypatch.setattr(
+        spd, "CelerySessionLocal", lambda: _FakeRunSession([active, *archived_duplicates], has_card=True)
+    )
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "clean deck text")
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 1
+    assert result["unmatched"] == 0
+    assert result["reassessments_queued"] == 1
+    assert queued == [str(active.id)]
+    assert active.pitch_deck_text == "clean deck text"
+    for dup in archived_duplicates:
+        assert dup.pitch_deck_text is None
+        assert dup.pitch_deck_drive_id is None
 
 
 def test_one_failed_download_does_not_abort_remaining_files(monkeypatch):
