@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from app.database import CelerySessionLocal
 from app.models.lead import Lead
 from app.models.assessment import AssessmentCard
+from app.models.user import User
 from app.services import claude_agent, research
 from app.services import copper_writer
 from app.services.events import EVENT_ASSESSED, EVENT_AWAITING_DECK, log_event
@@ -117,8 +118,21 @@ async def _run(lead_id: str) -> dict:
             print(f"[assess_lead] exemplar retrieval failed (continuing): {exc!r}")
             team_calibration = []
 
+        # Draft generation should carry the lead owner's own Calendly link +
+        # name (issue #84), not a single hardcoded associate's. Best-effort:
+        # an owner not (yet) provisioned as a User just falls back to the
+        # defaults inside claude_agent.assess_lead.
+        owner = None
+        if lead.owner_email:
+            owner_result = await db.execute(select(User).where(User.email == lead.owner_email))
+            owner = owner_result.scalar_one_or_none()
+
         assessment_result = claude_agent.assess_lead(
-            lead_data, research_data, team_calibration=team_calibration
+            lead_data,
+            research_data,
+            team_calibration=team_calibration,
+            owner_calendly=owner.calendly_url if owner else None,
+            owner_name=owner.full_name if owner else None,
         )
 
         # Upsert: update existing card if present, otherwise create one.

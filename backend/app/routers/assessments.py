@@ -52,6 +52,21 @@ async def _get_card_and_lead(
     return row
 
 
+async def _load_owner_draft_fields(db: AsyncSession, lead: Lead) -> dict:
+    """Resolve the lead owner's Calendly link + name (issue #84) to pass into
+    claude_agent.regenerate_draft. Falls back to None/None (which the
+    generator itself maps to its defaults) when there's no owner_email or no
+    matching User yet."""
+    if not lead.owner_email:
+        return {"owner_calendly": None, "owner_name": None}
+    result = await db.execute(select(User).where(User.email == lead.owner_email))
+    owner = result.scalar_one_or_none()
+    return {
+        "owner_calendly": owner.calendly_url if owner else None,
+        "owner_name": owner.full_name if owner else None,
+    }
+
+
 def _require_rating(card: AssessmentCard) -> None:
     """Enforced learning: a human 👍/👎 on the AI recommendation is MANDATORY
     before a lead can be approved or sent (meeting request or rejection). Raises
@@ -368,10 +383,12 @@ async def override_bucket(
         {"from": prior_bucket, "to": body.bucket},
     )
     try:
+        owner_fields = await _load_owner_draft_fields(db, lead)
         new_draft = claude_agent.regenerate_draft(
             {"company_name": lead.company_name, "founder_names": lead.founder_names},
             body.bucket,
             card.summary or "",
+            **owner_fields,
         )
         card.draft_type = new_draft.get("draft_type")
         card.draft_subject = new_draft.get("draft_subject")
@@ -471,10 +488,12 @@ async def regenerate_draft(
         )
 
     try:
+        owner_fields = await _load_owner_draft_fields(db, lead)
         new_draft = claude_agent.regenerate_draft(
             {"company_name": lead.company_name, "founder_names": lead.founder_names},
             effective_bucket,
             card.summary or "",
+            **owner_fields,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc!r}")

@@ -20,6 +20,9 @@ class User(Base):
     # Cached Copper user id (resolved from email via copper_service.lookup_user_id)
     # so per-user sync doesn't re-hit the Copper users API every cycle.
     copper_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Personal Calendly booking link, used in outreach drafts generated for
+    # leads this user owns (falls back to a default link when unset).
+    calendly_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Set when the user finishes the first-run onboarding/welcome flow.
     onboarded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
