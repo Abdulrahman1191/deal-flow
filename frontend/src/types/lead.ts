@@ -12,6 +12,9 @@ export interface Lead {
   pitch_deck_filename: string | null;
   pitch_deck_ingested_at: string | null;
   pitch_deck_drive_id: string | null;
+  prior_contact: boolean | null;
+  prior_contact_count: number | null;
+  prior_contact_last_at: string | null;
   status: string;
   created_at: string;
   updated_at: string;

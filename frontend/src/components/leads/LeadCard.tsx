@@ -5,6 +5,7 @@ import type { Lead } from "../../types/lead";
 import useAppStore from "../../store/useAppStore";
 import Badge from "../shared/Badge";
 import ConfidenceBar from "../shared/ConfidenceBar";
+import PriorContactChip from "../shared/PriorContactChip";
 import ReasoningBox from "./ReasoningBox";
 import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
@@ -223,6 +224,11 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
+          <PriorContactChip
+            priorContact={lead.prior_contact}
+            priorContactCount={lead.prior_contact_count}
+            priorContactLastAt={lead.prior_contact_last_at}
+          />
           <p className="text-xs text-muted-foreground mt-0.5">
             {displayStage ? `${displayStage} · ` : ""}
             {lead.region ?? "—"}

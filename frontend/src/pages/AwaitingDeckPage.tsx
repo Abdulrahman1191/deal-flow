@@ -3,6 +3,7 @@ import { fetchLeads, syncPitchDeck } from "../api/leads";
 import { reassess } from "../api/assessments";
 import useAppStore from "../store/useAppStore";
 import Badge from "../components/shared/Badge";
+import PriorContactChip from "../components/shared/PriorContactChip";
 import type { Lead } from "../types/lead";
 
 // Shared with Navbar's count badge so both stay on the same cache entry.
@@ -49,6 +50,11 @@ function AwaitingDeckCard({ lead }: { lead: Lead }) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
+          <PriorContactChip
+            priorContact={lead.prior_contact}
+            priorContactCount={lead.prior_contact_count}
+            priorContactLastAt={lead.prior_contact_last_at}
+          />
           <p className="text-xs text-muted-foreground mt-0.5">
             {lead.stage ?? "—"} · {lead.region ?? "—"}
           </p>
