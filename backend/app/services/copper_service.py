@@ -4,6 +4,7 @@ Copper CRM API client.
 Fetches "My Open Leads" (leads with status=Open AND assignee=our user) and maps them.
 Auth: API key + user email in headers (Copper developer API format).
 """
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -12,6 +13,17 @@ from app.config import settings
 
 COPPER_BASE = "https://api.copper.com/developer_api/v1"
 PAGE_SIZE = 200
+
+# Copper activity `type` values (confirmed live against our account -- see
+# issue #90). Email logs under either the "user"-logged or "system"-logged
+# (e.g. synced-mailbox) variant depending on how it was captured.
+EMAIL_ACTIVITY_TYPES = (
+    {"category": "user", "id": 637593},
+    {"category": "system", "id": 6},
+)
+# The activity Copper logs when our webform brings in a new lead -- used to
+# pin down the lead's true application date (see resolve_application_epoch).
+FORM_SUBMITTED_ACTIVITY_TYPE = {"category": "system", "id": 48}
 
 
 def _headers() -> dict:
@@ -79,6 +91,103 @@ def fetch_lead_by_id(copper_id: str) -> Optional[dict]:
             return None
         response.raise_for_status()
         return response.json()
+
+
+def fetch_activities_for_parent(parent_type: str, parent_id: int) -> list[dict]:
+    """Fetch every activity for a single Copper parent record (a lead or a
+    person), paginating until exhausted."""
+    all_activities: list[dict] = []
+    page = 1
+    with httpx.Client(timeout=30) as client:
+        while True:
+            body = {
+                "page_size": PAGE_SIZE,
+                "page_number": page,
+                "parent": {"type": parent_type, "id": parent_id},
+            }
+            response = client.post(
+                f"{COPPER_BASE}/activities/search",
+                headers=_headers(),
+                json=body,
+            )
+            response.raise_for_status()
+            batch = response.json() or []
+            all_activities.extend(batch)
+            if len(batch) < PAGE_SIZE:
+                break
+            page += 1
+    return all_activities
+
+
+def fetch_lead_activities(copper_id: str, copper_person_id: Optional[str] = None) -> list[dict]:
+    """Fetch all activities tied to a lead, plus its linked person's
+    activities when `copper_person_id` is set -- inbound email from a founder
+    is often logged against the person record rather than the lead."""
+    activities = fetch_activities_for_parent("lead", int(copper_id))
+    if copper_person_id:
+        activities += fetch_activities_for_parent("person", int(copper_person_id))
+    return activities
+
+
+def _matches_activity_type(activity: dict, activity_type: dict) -> bool:
+    t = activity.get("type") or {}
+    return t.get("category") == activity_type["category"] and t.get("id") == activity_type["id"]
+
+
+def filter_email_activities(activities: list[dict]) -> list[dict]:
+    """Narrow a raw activity list down to Email activities only (issue #90 --
+    non-email activities like calls/meetings are explicitly out of scope)."""
+    return [
+        a for a in activities
+        if any(_matches_activity_type(a, et) for et in EMAIL_ACTIVITY_TYPES)
+    ]
+
+
+def resolve_application_epoch(activities: list[dict], lead_date_created: Optional[int]) -> Optional[int]:
+    """The lead's application date, as an epoch-seconds int.
+
+    Prefers the `Form Submitted` activity's own timestamp over the lead's
+    `date_created` -- it's the ground-truth moment the application came in,
+    whereas `date_created` reflects when the Copper *record* was created,
+    which can lag behind (backfills, manual entry). Falls back to
+    `lead_date_created` when no Form Submitted activity is present.
+    """
+    form_dates = [
+        a.get("activity_date") for a in activities
+        if _matches_activity_type(a, FORM_SUBMITTED_ACTIVITY_TYPE) and a.get("activity_date")
+    ]
+    if form_dates:
+        return min(form_dates)
+    return lead_date_created
+
+
+def compute_prior_contact(activities: list[dict], lead_date_created: Optional[int]) -> dict:
+    """Determine whether we had genuine prior email contact with this lead --
+    i.e. an Email activity dated *before* the application -- as opposed to
+    our own automated outreach, which is always sent after the lead exists.
+
+    Returns a dict with `prior_contact` (bool), `prior_contact_count` (int,
+    the number of pre-application Email activities), and
+    `prior_contact_last_at` (datetime | None, the most recent of those).
+    """
+    application_epoch = resolve_application_epoch(activities, lead_date_created)
+    if application_epoch is None:
+        # No reference date to compare against -- can't classify anything as
+        # "prior", so default to no signal rather than guessing.
+        return {"prior_contact": False, "prior_contact_count": 0, "prior_contact_last_at": None}
+
+    prior_epochs = [
+        a["activity_date"] for a in filter_email_activities(activities)
+        if a.get("activity_date") and a["activity_date"] < application_epoch
+    ]
+    if not prior_epochs:
+        return {"prior_contact": False, "prior_contact_count": 0, "prior_contact_last_at": None}
+
+    return {
+        "prior_contact": True,
+        "prior_contact_count": len(prior_epochs),
+        "prior_contact_last_at": datetime.fromtimestamp(max(prior_epochs), tz=timezone.utc),
+    }
 
 
 def lookup_user_id(email: str) -> int:

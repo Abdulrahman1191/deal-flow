@@ -12,8 +12,23 @@ Mirrors the queued-result AsyncSession fake used in test_copper_writebacks.py
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.event import LeadEvent
 from app.tasks import sync_copper as sc
+
+
+@pytest.fixture(autouse=True)
+def _stub_prior_contact_refresh(monkeypatch):
+    """This file's tests exercise the import/reconcile loop itself. Prior-
+    contact refresh (issue #90) is covered separately in
+    test_sync_copper_prior_contact.py -- stub it to a no-op here so it
+    doesn't perturb these tests' commit-count assertions or (for tests that
+    build a real Lead() row) attempt a live Copper network call."""
+    async def _noop(_db, _lead, _raw):
+        return None
+
+    monkeypatch.setattr(sc, "maybe_refresh_prior_contact", _noop)
 
 
 class _FakeResult:
