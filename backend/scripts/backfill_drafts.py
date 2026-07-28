@@ -42,7 +42,12 @@ async def run() -> None:
         for card, lead, bucket in targets:
             try:
                 new_draft = claude_agent.regenerate_draft(
-                    {"company_name": lead.company_name, "founder_names": lead.founder_names},
+                    {
+                        "company_name": lead.company_name,
+                        "founder_names": lead.founder_names,
+                        "description": lead.description,
+                        "pitch_deck_text": lead.pitch_deck_text,
+                    },
                     bucket,
                     card.summary or "",
                 )
