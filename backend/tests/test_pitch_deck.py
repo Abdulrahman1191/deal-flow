@@ -7,12 +7,14 @@ OCR rather than stored as-is.
 """
 from types import SimpleNamespace
 
-from app.services import claude_agent
+from app.config import settings
+from app.services import claude_agent, pitch_deck
 from app.services.pitch_deck import (
     MatchCandidate,
     _company_context,
     _garble_ratio,
     _looks_garbled,
+    extract_text_from_pdf,
     find_lead_match,
     verify_match_candidates,
 )
@@ -175,3 +177,62 @@ class TestCompanyContext:
 
     def test_missing_description_and_copper_field_yields_empty_string(self):
         assert _company_context(_lead("Watieq")) == ""
+
+
+class TestOcrFallback:
+    """extract_text_from_pdf falls back to OCR only when the text layer is
+    absent/garbled (issue #97); a real text layer never pays the OCR cost."""
+
+    def _boom(self, _path):
+        raise AssertionError("OCR must not run when a text layer already produced clean text")
+
+    def test_ocr_used_when_text_layer_is_empty(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: "")
+        monkeypatch.setattr(pitch_deck, "_extract_pypdf", lambda path: "")
+        monkeypatch.setattr(pitch_deck, "_extract_ocr", lambda path: CLEAN_ENGLISH)
+        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", True)
+
+        result = extract_text_from_pdf(tmp_path / "scanned.pdf")
+
+        assert result == CLEAN_ENGLISH
+
+    def test_ocr_used_when_text_layer_is_garbled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: PROD_MOJIBAKE)
+        monkeypatch.setattr(pitch_deck, "_extract_pypdf", lambda path: PROD_MOJIBAKE)
+        monkeypatch.setattr(pitch_deck, "_extract_ocr", lambda path: CLEAN_ARABIC)
+        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", True)
+
+        result = extract_text_from_pdf(tmp_path / "scanned.pdf")
+
+        assert result == CLEAN_ARABIC
+
+    def test_text_layer_pdf_never_invokes_ocr(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: CLEAN_ENGLISH)
+        monkeypatch.setattr(pitch_deck, "_extract_pypdf", self._boom)
+        monkeypatch.setattr(pitch_deck, "_extract_ocr", self._boom)
+
+        result = extract_text_from_pdf(tmp_path / "text-layer.pdf")
+
+        assert result == CLEAN_ENGLISH
+
+    def test_ocr_disabled_by_config_flag_short_circuits_before_any_ocr_deps(
+        self, monkeypatch, tmp_path
+    ):
+        # Gate lives inside _extract_ocr itself, ahead of the fitz/pytesseract/
+        # PIL imports -- so disabling it works even on a box without tesseract.
+        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", False)
+
+        result = pitch_deck._extract_ocr(tmp_path / "scanned.pdf")
+
+        assert result == ""
+
+    def test_ocr_disabled_by_config_flag_leaves_deck_empty_not_garbage(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: "")
+        monkeypatch.setattr(pitch_deck, "_extract_pypdf", lambda path: "")
+        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", False)
+
+        result = extract_text_from_pdf(tmp_path / "scanned.pdf")
+
+        assert result == ""

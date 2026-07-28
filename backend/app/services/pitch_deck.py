@@ -147,8 +147,13 @@ def _extract_ocr(path: Path) -> str:
     garbled. Renders each page to a bitmap via PyMuPDF, then runs Tesseract.
     Degrades gracefully (returns "") if PyMuPDF/pytesseract/the tesseract binary
     or Arabic traineddata are unavailable, so a deployment without OCR support
-    simply skips the deck rather than crashing.
+    simply skips the deck rather than crashing. Also gated behind
+    settings.pitch_deck_ocr_enabled so OCR can be switched off firm-wide (e.g.
+    an image missing tesseract) without touching code.
     """
+    if not settings.pitch_deck_ocr_enabled:
+        return ""
+
     try:
         import fitz
         import pytesseract

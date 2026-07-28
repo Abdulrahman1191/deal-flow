@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     # no behavior change to the existing high-confidence auto-attach path).
     deck_match_verify_enabled: bool = True
 
+    # --- Pitch-deck OCR fallback (issue #97) ---
+    # Gate for the whole OCR fallback tier in extract_text_from_pdf. Off ->
+    # scanned/image-only decks are left ungarbled-but-empty exactly as before
+    # this feature (no Tesseract calls), useful if a deploy image is missing
+    # the tesseract binary/traineddata and OCR attempts would just spam logs.
+    pitch_deck_ocr_enabled: bool = True
+
     # --- Daily briefing schedule ---
     briefing_cron_hour: int = 4
     briefing_cron_minute: int = 0
