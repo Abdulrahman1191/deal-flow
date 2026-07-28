@@ -5,6 +5,7 @@ import type { Lead } from "../../types/lead";
 import useAppStore from "../../store/useAppStore";
 import Badge from "../shared/Badge";
 import ConfidenceBar from "../shared/ConfidenceBar";
+import PriorContactChip from "../shared/PriorContactChip";
 import ReasoningBox from "./ReasoningBox";
 import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
@@ -223,22 +224,11 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
-          {lead.prior_contact === true ? (
-            <span
-              className="inline-flex items-center gap-1 text-[10px] font-medium text-info bg-info/10 border border-info/30 rounded px-1.5 py-0.5 mt-0.5 w-fit"
-              title={priorContactTooltip(lead.prior_contact_count, lead.prior_contact_last_at)}
-              data-testid="prior-contact-badge"
-            >
-              ✉ Prior contact
-            </span>
-          ) : lead.prior_contact === false ? (
-            <span
-              className="inline-block text-[10px] text-muted-foreground/70 mt-0.5"
-              data-testid="prior-contact-badge"
-            >
-              No prior contact
-            </span>
-          ) : null}
+          <PriorContactChip
+            priorContact={lead.prior_contact}
+            priorContactCount={lead.prior_contact_count}
+            priorContactLastAt={lead.prior_contact_last_at}
+          />
           <p className="text-xs text-muted-foreground mt-0.5">
             {displayStage ? `${displayStage} · ` : ""}
             {lead.region ?? "—"}
@@ -562,25 +552,6 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       )}
     </div>
   );
-}
-
-function priorContactTooltip(
-  count: number | null | undefined,
-  lastAt: string | null | undefined,
-): string | undefined {
-  if (!count && !lastAt) return undefined;
-  const parts: string[] = [];
-  if (count) parts.push(`${count} prior email${count === 1 ? "" : "s"}`);
-  if (lastAt) {
-    parts.push(
-      `last on ${new Date(lastAt).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })}`,
-    );
-  }
-  return parts.join(" · ");
 }
 
 function ThumbIcon({ up = false }: { up?: boolean }) {
