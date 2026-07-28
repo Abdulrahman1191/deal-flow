@@ -172,7 +172,10 @@ def map_copper_lead(p: dict) -> dict:
     company = p.get("company_name") or (p.get("company") or {}).get("name") or p.get("name", "Unknown")
 
     tags = p.get("tags") or []
-    stage = tags[0] if tags else None
+    # Internal raed:* tags (bucket, override, archived, ...) are written back
+    # to Copper by copper_writer.py but must never be stored as the lead's
+    # displayed stage -- pick the first genuine Copper tag instead.
+    stage = next((t for t in tags if not str(t).startswith("raed:")), None)
 
     socials = p.get("social_profiles") or []
     company_linkedin_url: Optional[str] = None
