@@ -407,7 +407,12 @@ async def override_bucket(
     try:
         owner_fields = await _load_owner_draft_fields(db, lead)
         new_draft = claude_agent.regenerate_draft(
-            {"company_name": lead.company_name, "founder_names": lead.founder_names},
+            {
+                "company_name": lead.company_name,
+                "founder_names": lead.founder_names,
+                "description": lead.description,
+                "pitch_deck_text": lead.pitch_deck_text,
+            },
             body.bucket,
             card.summary or "",
             **owner_fields,
@@ -512,7 +517,12 @@ async def regenerate_draft(
     try:
         owner_fields = await _load_owner_draft_fields(db, lead)
         new_draft = claude_agent.regenerate_draft(
-            {"company_name": lead.company_name, "founder_names": lead.founder_names},
+            {
+                "company_name": lead.company_name,
+                "founder_names": lead.founder_names,
+                "description": lead.description,
+                "pitch_deck_text": lead.pitch_deck_text,
+            },
             effective_bucket,
             card.summary or "",
             **owner_fields,

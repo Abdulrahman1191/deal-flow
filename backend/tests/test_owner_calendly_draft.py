@@ -358,6 +358,8 @@ def _fake_lead_row(owner_email):
         owner_email=owner_email,
         company_name="Acme Deep Tech",
         founder_names=["Founder One"],
+        description="An English-language description.",
+        pitch_deck_text="deck text",
     )
 
 

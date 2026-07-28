@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 from openai import OpenAI
@@ -12,6 +13,58 @@ _PLACEHOLDER = "[Associate Name]"
 # Fallback used when a lead's owner has no calendly_url set (see User.calendly_url,
 # issue #84) -- keeps the previous single hardcoded link as the default.
 DEFAULT_CALENDLY_URL = "https://calendly.com/abdulrahman-raed/30min"
+
+# Arabic-script Unicode blocks (Arabic, Supplement, Extended-A, Presentation
+# Forms A/B) vs. Latin letters -- used to deterministically detect which of
+# the two application-form languages (issue #92) the applicant's ORIGINAL
+# submission was written in, so outreach drafts reply in kind.
+_ARABIC_CHAR_RE = re.compile(
+    "[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]"
+)
+_LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
+
+_LANGUAGE_INSTRUCTIONS = {
+    "ar": (
+        "Language: the applicant's original submission is in ARABIC. Write the "
+        "ENTIRE email -- subject, greeting, body, and sign-off -- in natural, "
+        'professional Arabic, with an appropriate Arabic greeting and closing. Never '
+        'translate or alter the Calendly URL itself, and keep "Raed Ventures" and the '
+        "associate's name exactly as given, untransliterated."
+    ),
+    "en": (
+        "Language: the applicant's original submission is in English. Write the "
+        "ENTIRE email -- subject, greeting, body, and sign-off -- in English."
+    ),
+}
+
+
+def detect_applicant_language(lead_data: dict) -> str:
+    """Deterministically detect whether the applicant's ORIGINAL submission is
+    primarily Arabic or English (the two application-form languages), from
+    company name + raw description + pitch deck text -- never from an
+    enriched/translated field. Mixed or unclear signal defaults to "en".
+    """
+    text = " ".join(
+        filter(
+            None,
+            [
+                lead_data.get("company_name") or "",
+                lead_data.get("description") or "",
+                (lead_data.get("pitch_deck_text") or "")[:3000],
+            ],
+        )
+    )
+    arabic_chars = len(_ARABIC_CHAR_RE.findall(text))
+    if arabic_chars == 0:
+        return "en"
+    latin_chars = len(_LATIN_CHAR_RE.findall(text))
+    # Require Arabic to clearly dominate so a stray Arabic word/name in an
+    # otherwise-English submission doesn't flip the whole email.
+    return "ar" if arabic_chars > latin_chars else "en"
+
+
+def _language_instruction(lead_data: dict) -> str:
+    return _LANGUAGE_INSTRUCTIONS[detect_applicant_language(lead_data)]
 
 
 def _substitute_name(data: dict, name: Optional[str] = None) -> None:
@@ -280,6 +333,8 @@ seek them out. The email is a reply to their application, written by a person, n
 an AI doing cold outreach. Never imply we came across, discovered, sought out, or
 were introduced to them.
 
+{language_instruction}
+
 BANNED phrasing — never use these or close variants:
 "I came across", "came across your company", "caught my eye", "caught our attention",
 "I've been following", "we discovered", "reaching out because we noticed",
@@ -427,6 +482,7 @@ def assess_lead(
     prompt = ASSESS_USER_TEMPLATE.format(
         associate_name=effective_name,
         calendly_url=effective_calendly,
+        language_instruction=_language_instruction(lead_data),
         company_name=lead_data.get("company_name", ""),
         website=lead_data.get("website", "N/A"),
         company_linkedin_url=lead_data.get("company_linkedin_url") or "N/A",
@@ -527,6 +583,8 @@ Do NOT re-evaluate the company. Do NOT switch the decision based on the context 
 Company: {company_name}
 Contact (email recipient — not necessarily the founder; greet by name, no assumed title): {founder_names}
 Background context (for tone only, not for re-deciding): {summary}
+
+{language_instruction}
 
 Rules per bucket — you MUST follow these exactly:
 - YES: draft_type MUST be "meeting_request". Short, plain, warm email, MAX 50 WORDS,
@@ -708,6 +766,10 @@ def regenerate_draft(
     `owner_calendly` / `owner_name` are the lead owner's Calendly link and full
     name (issue #84); omit to fall back to DEFAULT_CALENDLY_URL /
     settings.associate_name.
+
+    `lead_data`'s `description` / `pitch_deck_text` (the applicant's original
+    submission, not the AI-written `summary`) drive language detection — see
+    `detect_applicant_language` (issue #92).
     """
     if bucket not in ("YES", "MAYBE", "REJECT"):
         raise ValueError(f"bucket must be YES/MAYBE/REJECT, got {bucket!r}")
@@ -718,6 +780,7 @@ def regenerate_draft(
     prompt = DRAFT_REGEN_USER_TEMPLATE.format(
         associate_name=effective_name,
         calendly_url=effective_calendly,
+        language_instruction=_language_instruction(lead_data),
         bucket=bucket,
         company_name=lead_data.get("company_name", ""),
         founder_names=", ".join(lead_data.get("founder_names") or []) or "N/A",
