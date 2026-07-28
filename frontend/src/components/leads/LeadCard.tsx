@@ -209,6 +209,10 @@ export default function LeadCard({ lead, index = 0 }: Props) {
   const bucket = assessment?.user_override ?? assessment?.bucket; // effective
   const isOverridden = !!assessment?.user_override_at;
   const rating = assessment?.user_rating ?? null;
+  // Internal raed:* tags (raed:bucket:maybe, raed:override, ...) are stored
+  // in lead.stage by older syncs; they duplicate the bucket badge above and
+  // can disagree with it, so never surface them here.
+  const displayStage = lead.stage && !lead.stage.startsWith("raed:") ? lead.stage : null;
 
   return (
     <div
@@ -220,7 +224,8 @@ export default function LeadCard({ lead, index = 0 }: Props) {
         <div className="min-w-0">
           <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {lead.stage ?? "—"} · {lead.region ?? "—"}
+            {displayStage ? `${displayStage} · ` : ""}
+            {lead.region ?? "—"}
           </p>
           {lead.applied_at && (
             <p className="text-[10px] text-muted-foreground mt-0.5">
