@@ -39,6 +39,11 @@ class LeadOut(BaseModel):
     pitch_deck_filename: Optional[str] = None
     pitch_deck_ingested_at: Optional[datetime] = None
     pitch_deck_drive_id: Optional[str] = None
+    # Prior-contact signal from Copper's activity feed (issue #90) -- null
+    # until the first successful sync computes it.
+    prior_contact: Optional[bool] = None
+    prior_contact_count: Optional[int] = None
+    prior_contact_last_at: Optional[datetime] = None
     status: str
     created_at: datetime
     updated_at: datetime

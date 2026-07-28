@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,8 @@ from app.database import CelerySessionLocal
 from app.models.lead import Lead
 from app.models.user import User
 from app.services.copper_service import (
+    compute_prior_contact,
+    fetch_lead_activities,
     fetch_open_leads_for_user,
     lookup_user_id,
     map_copper_lead,
@@ -20,6 +23,40 @@ from app.tasks.assess_lead import assess_lead_task
 
 def _disabled() -> bool:
     return os.getenv("DISABLE_COPPER_SYNC", "").lower() in ("1", "true", "yes")
+
+
+def _needs_prior_contact_refresh(lead: Lead) -> bool:
+    """Null -> never computed, always refresh. Otherwise only refresh once
+    the cached value is older than PRIOR_CONTACT_REFRESH_DAYS -- activity
+    history rarely changes, so we don't hit Copper's activities API for
+    every lead on every 5-min sync cycle."""
+    if lead.prior_contact_checked_at is None:
+        return True
+    age = datetime.now(timezone.utc) - lead.prior_contact_checked_at
+    return age > timedelta(days=settings.prior_contact_refresh_days)
+
+
+async def maybe_refresh_prior_contact(db: AsyncSession, lead: Lead, raw: dict) -> None:
+    """Best-effort: populate prior_contact/_count/_last_at from Copper's
+    activity feed. Never raises -- an activities-fetch failure must not break
+    the surrounding sync (per-lead isolation, issue #90); it just leaves
+    whatever was already stored (possibly still null) for a later sync pass
+    to retry.
+    """
+    try:
+        if not lead.copper_id or not _needs_prior_contact_refresh(lead):
+            return
+        activities = fetch_lead_activities(lead.copper_id, lead.copper_person_id)
+        date_created = raw.get("date_created") if isinstance(raw, dict) else None
+        result = compute_prior_contact(activities, date_created)
+        lead.prior_contact = result["prior_contact"]
+        lead.prior_contact_count = result["prior_contact_count"]
+        lead.prior_contact_last_at = result["prior_contact_last_at"]
+        lead.prior_contact_checked_at = datetime.now(timezone.utc)
+        await db.commit()
+    except Exception as exc:
+        copper_id = getattr(lead, "copper_id", None)
+        print(f"[sync_copper] prior_contact refresh failed for copper_id={copper_id}: {exc!r}")
 
 
 async def provision_team_users(db: AsyncSession) -> list[User]:
@@ -110,6 +147,7 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
                 # particular, don't reactivate a lead they deliberately
                 # archived; that reverse-drift is issue #56's concern.
                 skipped_existing += 1
+                await maybe_refresh_prior_contact(db, existing_lead, raw)
                 continue
             if existing_lead is not None:
                 # copper_id already has a row, but owned by a different user
@@ -148,6 +186,8 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
             failed_count += 1
             print(f"[sync_copper] failed to import copper_id={copper_id} for {user.email}: {exc!r}")
             continue
+
+        await maybe_refresh_prior_contact(db, lead, raw)
 
         try:
             assess_lead_task.delay(str(lead.id))

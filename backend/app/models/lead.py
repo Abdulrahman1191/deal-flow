@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from sqlalchemy import String, Text, ARRAY, DateTime, func
+from sqlalchemy import String, Text, ARRAY, Boolean, Integer, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +39,19 @@ class Lead(Base):
     # https://drive.google.com/file/d/<id>/view.
     pitch_deck_drive_id: Mapped[Optional[str]] = mapped_column(String(64))
     raw_copper_data: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Prior-contact signal from Copper's activity feed (issue #90): did the
+    # company email us / did we correspond before this application, as
+    # opposed to only our own post-application automated outreach? Left
+    # null until the first successful sync computes it, and on any
+    # activities-fetch failure (best-effort -- see sync_copper.py).
+    prior_contact: Mapped[Optional[bool]] = mapped_column(Boolean)
+    prior_contact_count: Mapped[Optional[int]] = mapped_column(Integer)
+    prior_contact_last_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # When prior_contact was last (re)computed -- drives the refresh-window
+    # cache in sync_copper.py so we don't hit the activities API for every
+    # lead on every sync cycle. Internal bookkeeping only, not exposed in the
+    # API response.
+    prior_contact_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

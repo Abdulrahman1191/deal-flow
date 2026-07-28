@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # attachments aren't downloadable via its API. 0 = disabled/no-op.
     copper_cf_pitch_deck_url_id: int = 0
 
+    # Prior-contact detection (issue #90): how often (in days) to re-fetch a
+    # lead's Copper activity feed to refresh prior_contact/_count/_last_at.
+    # Activity history rarely changes once set, so we don't hit the
+    # activities API on every 5-min sync cycle for every lead.
+    prior_contact_refresh_days: int = 7
+
     # --- Storage ---
     database_url: str                    # injected by platform/Khalid
     redis_url: str = "redis://redis:6379/0"
