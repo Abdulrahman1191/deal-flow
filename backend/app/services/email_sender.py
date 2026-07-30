@@ -26,21 +26,25 @@ def send_email(
     from_addr: str | None = None,
     from_name: str | None = None,
     reply_to: str | None = None,
+    cc: str | None = None,
     bcc: str | None = None,
 ) -> None:
     """Send a plain-text email. Raises on any failure (caller must handle).
 
-    `from_addr`/`from_name` let a caller send as a specific person (e.g. the
-    lead owner) while still authenticating and sending over the shared SMTP
-    account — only the visible From/Reply-To change, not the envelope sender.
-    Default to `settings.mail_from`/`mail_from_name` for back-compat with
-    existing callers. `reply_to` is only set on the message when given.
+    `from_addr`/`from_name` let a caller override the visible From (default
+    `settings.mail_from`/`mail_from_name`) while still authenticating and
+    sending over the shared SMTP account — only the visible From changes, not
+    the envelope sender. `reply_to`/`cc`/`bcc` are only set on the message
+    when given.
 
-    `bcc`, when given, is set as a `Bcc` header so the lead owner keeps a copy
-    of outreach sent on their behalf (the shared-SMTP From spoofing above
-    doesn't write to their Gmail Sent folder). `server.send_message` derives
-    the envelope recipients from To/Cc/Bcc and strips the Bcc header before
-    transmission, so `to` never sees it.
+    `cc`, when given, is set as a visible `Cc` header (e.g. the lead owner,
+    issue #107) so they're CC'd on outreach sent from the unified sender and
+    keep a copy + are able to see who else is on the thread.
+
+    `bcc`, when given, is set as a `Bcc` header so a recipient gets a copy
+    without being visible to `to`. `server.send_message` derives the envelope
+    recipients from To/Cc/Bcc and strips the Bcc header before transmission,
+    so `to` never sees it.
     """
     if not is_configured():
         raise RuntimeError("Email not configured: set SMTP_HOST and MAIL_FROM (SES or SendGrid).")
@@ -55,6 +59,8 @@ def send_email(
     msg["To"] = to
     if reply_to:
         msg["Reply-To"] = reply_to
+    if cc:
+        msg["Cc"] = cc
     if bcc:
         msg["Bcc"] = bcc
     msg["Subject"] = subject or ""

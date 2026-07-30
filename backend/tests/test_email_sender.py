@@ -40,6 +40,7 @@ class _FakeSMTP:
         # Mirrors real smtplib.SMTP.send_message: it transmits a copy of the
         # message with Bcc/Resent-Bcc stripped, so `sent` here reflects what
         # the primary recipient actually receives (see cpython smtplib.py).
+        # Cc, unlike Bcc, stays on the transmitted message -- it's visible.
         _FakeSMTP.bccs.append(msg["Bcc"])
         msg_copy = copy.copy(msg)
         del msg_copy["Bcc"]
@@ -114,3 +115,27 @@ def test_send_email_without_bcc_omits_header():
     email_sender.send_email("founder@acme.test", "Let's talk", "Hi there")
 
     assert _FakeSMTP.bccs[0] is None
+
+
+def test_send_email_with_cc_sets_visible_cc_header():
+    """Issue #107: the lead owner is CC'd (visibly, unlike Bcc) on outreach
+    sent from the unified mail_from address, so they keep a copy and the
+    founder can see who else is on the thread."""
+    email_sender.send_email(
+        "founder@acme.test",
+        "Let's talk",
+        "Hi there",
+        cc="uday@raed.vc",
+    )
+
+    msg = _FakeSMTP.sent[0]
+    assert msg["Cc"] == "uday@raed.vc"
+    assert msg["To"] == "founder@acme.test"
+
+
+def test_send_email_without_cc_omits_header():
+    """No cc given -> header absent."""
+    email_sender.send_email("founder@acme.test", "Let's talk", "Hi there")
+
+    msg = _FakeSMTP.sent[0]
+    assert msg["Cc"] is None

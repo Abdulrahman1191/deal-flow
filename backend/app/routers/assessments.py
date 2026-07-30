@@ -7,7 +7,6 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.database import get_db
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
@@ -290,18 +289,18 @@ async def send_assessment(
     if not card.draft_body:
         raise HTTPException(status_code=400, detail="There's no draft to send for this lead.")
 
-    # From/Reply-To as the lead owner (not the global mail_from) so recipients
-    # see — and reply to — the teammate who owns the deal. Still sent over the
-    # shared SMTP account; falls back to settings.mail_from if the owner is
-    # unresolvable, so a lookup miss never blocks the send.
+    # Sent from the unified applications@raed.vc address (settings.mail_from)
+    # for every lead — per-owner Gmail send-as was rejected by Gmail with a
+    # 535 auth error (issue #107). The lead owner is CC'd + set as Reply-To
+    # instead, so replies reach them and they keep a visible copy. Falls back
+    # to no Cc/Reply-To if the owner is unresolvable, so a lookup miss never
+    # blocks the send.
     owner_addr = None
-    owner_name = None
     if lead.owner_email:
         owner_result = await db.execute(select(User).where(User.email == lead.owner_email))
         owner = owner_result.scalar_one_or_none()
         if owner and owner.email:
             owner_addr = owner.email
-            owner_name = owner.full_name or settings.mail_from_name
 
     # Send first — if it fails, nothing changes and the user can retry.
     try:
@@ -309,10 +308,8 @@ async def send_assessment(
             recipient,
             card.draft_subject or "",
             card.draft_body,
-            from_addr=owner_addr,
-            from_name=owner_name,
             reply_to=owner_addr,
-            bcc=owner_addr,
+            cc=owner_addr,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Email send failed: {exc}")
