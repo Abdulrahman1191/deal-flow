@@ -231,6 +231,7 @@ async def list_leads(
     bucket: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    sort: str = Query(default="newest", pattern="^(newest|oldest)$"),
     page: int = Query(default=1, ge=1),
     # Cap raised to 1000 so the dashboard can load the full pipeline in one page
     # (it groups all leads into YES/MAYBE/REJECT columns; there's no "load more").
@@ -256,7 +257,8 @@ async def list_leads(
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = total_result.scalar()
 
-    query = query.order_by(Lead.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    order = Lead.created_at.asc() if sort == "oldest" else Lead.created_at.desc()
+    query = query.order_by(order).offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     leads = result.scalars().all()
 
@@ -408,6 +410,7 @@ async def delete_lead(
 @router.get("/archive/list")
 async def list_archive(
     request: Request,
+    sort: str = Query(default="newest", pattern="^(newest|oldest)$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -415,11 +418,12 @@ async def list_archive(
     Returns archived leads grouped by the action that archived them.
     Outcomes: sent_meeting_request, sent_rejection, sent_other, no_reply, manual.
     """
+    order = Lead.updated_at.asc() if sort == "oldest" else Lead.updated_at.desc()
     result = await db.execute(
         select(Lead)
         .options(selectinload(Lead.assessment))
         .where(Lead.status == "archived", Lead.owner_email == effective_owner_email(request, user))
-        .order_by(Lead.updated_at.desc())
+        .order_by(order)
     )
     leads = result.scalars().all()
 

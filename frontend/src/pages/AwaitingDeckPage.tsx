@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { fetchLeads, syncPitchDeck } from "../api/leads";
 import { reassess } from "../api/assessments";
 import useAppStore from "../store/useAppStore";
 import Badge from "../components/shared/Badge";
 import PriorContactChip from "../components/shared/PriorContactChip";
+import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 import type { Lead } from "../types/lead";
 
 // Shared with Navbar's count badge so both stay on the same cache entry.
@@ -140,9 +142,15 @@ function AwaitingDeckCard({ lead }: { lead: Lead }) {
 }
 
 export default function AwaitingDeckPage() {
+  const [sort, setSort] = useState<SortOrder>("newest");
+
+  // Sharing AWAITING_DECK_QUERY_KEY as-is (rather than appending sort) keeps
+  // this on the same cache entry as Navbar's count badge in the common case
+  // (default "newest"); it only splits into a second cache entry while the
+  // user has explicitly picked "oldest" here.
   const { data, isLoading } = useQuery({
-    queryKey: AWAITING_DECK_QUERY_KEY,
-    queryFn: () => fetchLeads({ status: "awaiting_deck", page_size: 1000 }),
+    queryKey: sort === "newest" ? AWAITING_DECK_QUERY_KEY : [...AWAITING_DECK_QUERY_KEY, sort],
+    queryFn: () => fetchLeads({ status: "awaiting_deck", page_size: 1000, sort }),
     refetchInterval: 15_000,
   });
 
@@ -150,13 +158,16 @@ export default function AwaitingDeckPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">Awaiting Pitch Deck</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Leads parked here have no usable pitch deck yet, so they haven't been scored.
-          They rejoin the Deal Flow board automatically once a deck attaches and
-          re-assessment completes.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Awaiting Pitch Deck</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Leads parked here have no usable pitch deck yet, so they haven't been scored.
+            They rejoin the Deal Flow board automatically once a deck attaches and
+            re-assessment completes.
+          </p>
+        </div>
+        <SortToggle value={sort} onChange={setSort} />
       </div>
 
       {isLoading ? (

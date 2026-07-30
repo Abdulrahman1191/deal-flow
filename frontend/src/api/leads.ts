@@ -48,9 +48,11 @@ export type ArchiveOutcomes =
   | "no_reply"
   | "manual";
 
-export const fetchArchive = () =>
+export const fetchArchive = (sort?: "newest" | "oldest") =>
   client
-    .get<Record<ArchiveOutcomes, ArchiveItem[]>>("/leads/archive/list")
+    .get<Record<ArchiveOutcomes, ArchiveItem[]>>("/leads/archive/list", {
+      params: sort ? { sort } : undefined,
+    })
     .then((r) => r.data);
 
 export const exportLeadsCsv = (bucket: string) =>
