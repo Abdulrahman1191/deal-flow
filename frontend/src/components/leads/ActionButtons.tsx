@@ -46,54 +46,64 @@ export default function ActionButtons({
   // /archive-no-reply. A bucket override alone does NOT satisfy this.
   const rated = !!assessment?.user_rating;
   const needsRating = !rated;
+  const gateTitle = readOnly
+    ? "Read-only while viewing another user's board"
+    : needsRating
+      ? "Rate the AI's call (👍/👎) above first"
+      : undefined;
+  // Once rated, the primary action is the one obvious next click — give it
+  // a stronger visual pull than the secondary buttons next to it.
+  const primaryClasses = needsRating
+    ? "bg-primary hover:bg-primary/90 text-white disabled:opacity-40 disabled:cursor-not-allowed"
+    : "bg-primary hover:bg-primary/90 text-white shadow-sm ring-2 ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed disabled:ring-0 disabled:shadow-none";
 
   return (
-    <div className="flex gap-2 flex-wrap items-center">
-      {effectiveBucket === "REJECT" && (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {needsRating ? "2. Approve / Send / Archive" : "Next step"}
+      </span>
+      <div className="flex gap-2 flex-wrap items-center">
+        {effectiveBucket === "REJECT" && (
+          <button
+            onClick={onApprove}
+            disabled={!rated || readOnly}
+            title={gateTitle}
+            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${primaryClasses}`}
+          >
+            Approve Email
+          </button>
+        )}
+        {effectiveBucket === "YES" && (
+          <button
+            onClick={onApprove}
+            disabled={!rated || readOnly}
+            title={gateTitle}
+            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${primaryClasses}`}
+          >
+            Approve Meeting Request
+          </button>
+        )}
+        {effectiveBucket === "MAYBE" && (
+          <span className="text-xs text-warning py-1.5">Flagged for review</span>
+        )}
         <button
-          onClick={onApprove}
-          disabled={!rated || readOnly}
-          title={readOnly ? "Read-only while viewing another user's board" : rated ? undefined : "Rate the recommendation (👍/👎) first"}
-          className="px-3 py-1.5 text-xs rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={onArchiveNoReply}
+          disabled={!rated || archiving || readOnly}
+          title={gateTitle}
+          data-testid="archive-no-reply-btn"
+          className="px-3 py-1.5 text-xs rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          Approve Email
+          {archiving ? "Archiving…" : "Archive (no email)"}
         </button>
-      )}
-      {effectiveBucket === "YES" && (
         <button
-          onClick={onApprove}
-          disabled={!rated || readOnly}
-          title={readOnly ? "Read-only while viewing another user's board" : rated ? undefined : "Rate the recommendation (👍/👎) first"}
-          className="px-3 py-1.5 text-xs rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={onReassess}
+          disabled={reassessing || readOnly}
+          title={readOnly ? "Read-only while viewing another user's board" : undefined}
+          className="px-3 py-1.5 text-xs rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Approve Meeting Request
+          {reassessing ? "Reassessing…" : "Reassess"}
         </button>
-      )}
-      {effectiveBucket === "MAYBE" && (
-        <span className="text-xs text-warning py-1.5">Flagged for review</span>
-      )}
-      <button
-        onClick={onArchiveNoReply}
-        disabled={!rated || archiving || readOnly}
-        title={readOnly ? "Read-only while viewing another user's board" : rated ? undefined : "Rate the recommendation (👍/👎) first"}
-        data-testid="archive-no-reply-btn"
-        className="px-3 py-1.5 text-xs rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-      >
-        {archiving ? "Archiving…" : "Archive (no email)"}
-      </button>
-      {needsRating && (
-        <span className="text-[10px] text-muted-foreground" data-testid="rating-required-hint">
-          Rate 👍/👎 to enable
-        </span>
-      )}
-      <button
-        onClick={onReassess}
-        disabled={reassessing || readOnly}
-        title={readOnly ? "Read-only while viewing another user's board" : undefined}
-        className="px-3 py-1.5 text-xs rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {reassessing ? "Reassessing…" : "Reassess"}
-      </button>
+      </div>
     </div>
   );
 }
