@@ -56,7 +56,11 @@ export default function Navbar() {
   };
 
   const tabs = owner
-    ? [...baseTabs, { id: "feedback" as const, label: "Feedback" }]
+    ? [
+        ...baseTabs,
+        { id: "feedback" as const, label: "Feedback" },
+        { id: "calibration" as const, label: "Calibration" },
+      ]
     : baseTabs;
 
   return (

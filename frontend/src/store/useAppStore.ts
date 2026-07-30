@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Lead } from "../types/lead";
 
-type Tab = "leads" | "framework" | "archive" | "awaiting_deck" | "feedback";
+type Tab = "leads" | "framework" | "archive" | "awaiting_deck" | "feedback" | "calibration";
 
 interface AppState {
   leads: Lead[];
