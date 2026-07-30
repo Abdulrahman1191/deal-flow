@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads"],
 )
 
 celery.conf.update(
@@ -53,6 +53,14 @@ celery.conf.update(
         "sync-copper-pitch-deck-links": {
             "task": "app.tasks.sync_pitch_decks.sync_copper_pitch_deck_links_task",
             "schedule": 1800.0,  # every 30 minutes, same cadence as the Drive-folder sweep
+        },
+        # Self-healing backstop for leads orphaned by a worker crash mid-assessment
+        # (issue #100): re-enqueues any 'processing'/'pending' lead whose updated_at
+        # is older than settings.assessment_reap_after_minutes. See
+        # app/tasks/reap_stuck_leads.py for why this is safe to run repeatedly.
+        "reap-stuck-leads": {
+            "task": "app.tasks.reap_stuck_leads.reap_stuck_leads_task",
+            "schedule": 600.0,  # every 10 minutes
         },
     },
 )

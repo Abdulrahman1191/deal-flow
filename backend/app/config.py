@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     briefing_cron_hour: int = 4
     briefing_cron_minute: int = 0
 
+    # --- Orphaned-assessment reaper (issue #100) ---
+    # A lead stuck in 'processing' or 'pending' with updated_at older than this
+    # many minutes is treated as orphaned (worker crash/restart/OOM lost the
+    # task) and re-enqueued by reap_stuck_leads_task. Must stay comfortably
+    # above a normal assessment's runtime so an in-flight lead is never reaped.
+    assessment_reap_after_minutes: int = 20
+
     # --- Owner / identity ---
     # Email that gets owner-level access to Portfolio + Feedback tabs.
     # On the platform, this is the @raed.vc identity. Falls back to legacy
