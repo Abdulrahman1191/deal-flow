@@ -50,8 +50,8 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     // shows "Reassessing…" without waiting for the next 15s poll.
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: ["leads"] });
-      const snapshot = qc.getQueryData(["leads"]);
-      qc.setQueryData(["leads"], (prev: { items?: Lead[] } | undefined) =>
+      const snapshot = qc.getQueriesData({ queryKey: ["leads"] });
+      qc.setQueriesData({ queryKey: ["leads"] }, (prev: { items?: Lead[] } | undefined) =>
         prev?.items
           ? {
               ...prev,
@@ -64,7 +64,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       return { snapshot };
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.snapshot) qc.setQueryData(["leads"], ctx.snapshot);
+      ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
@@ -87,8 +87,8 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     onMutate: async ({ bucket: newBucket }) => {
       const prevBucket = assessment?.user_override ?? assessment?.bucket;
       await qc.cancelQueries({ queryKey: ["leads"] });
-      const snapshot = qc.getQueryData(["leads"]);
-      qc.setQueryData(["leads"], (prev: { items?: Lead[] } | undefined) =>
+      const snapshot = qc.getQueriesData({ queryKey: ["leads"] });
+      qc.setQueriesData({ queryKey: ["leads"] }, (prev: { items?: Lead[] } | undefined) =>
         prev?.items
           ? {
               ...prev,
@@ -111,7 +111,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       return { snapshot, prevBucket };
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.snapshot) qc.setQueryData(["leads"], ctx.snapshot);
+      ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
     },
     onSuccess: (_data, vars, ctx) => {
       if (vars.silent) return;
@@ -136,8 +136,8 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     // Optimistic: light up the chosen thumb immediately.
     onMutate: async ({ rating }) => {
       await qc.cancelQueries({ queryKey: ["leads"] });
-      const snapshot = qc.getQueryData(["leads"]);
-      qc.setQueryData(["leads"], (prev: { items?: Lead[] } | undefined) =>
+      const snapshot = qc.getQueriesData({ queryKey: ["leads"] });
+      qc.setQueriesData({ queryKey: ["leads"] }, (prev: { items?: Lead[] } | undefined) =>
         prev?.items
           ? {
               ...prev,
@@ -159,7 +159,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       return { snapshot };
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.snapshot) qc.setQueryData(["leads"], ctx.snapshot);
+      ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
     },
     onSuccess: () => toast("Thanks — your feedback was recorded"),
     onSettled: () => {

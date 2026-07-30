@@ -7,6 +7,7 @@ import {
   type ArchiveOutcomes,
   type LeadEvent,
 } from "../api/leads";
+import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 
 const SECTIONS: { key: ArchiveOutcomes; label: string; tone: string }[] = [
   { key: "sent_meeting_request", label: "Sent: Meeting Request", tone: "text-success" },
@@ -115,9 +116,10 @@ function ArchiveRow({ item }: { item: ArchiveItem }) {
 }
 
 export default function ArchivePage() {
+  const [sort, setSort] = useState<SortOrder>("newest");
   const { data, isLoading } = useQuery({
-    queryKey: ["archive"],
-    queryFn: fetchArchive,
+    queryKey: ["archive", sort],
+    queryFn: () => fetchArchive(sort),
     refetchInterval: 60_000,
   });
 
@@ -130,11 +132,14 @@ export default function ArchivePage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-5xl mx-auto">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Archive</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {total} archived {total === 1 ? "company" : "companies"}. Click a row to see its full activity timeline.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">Archive</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {total} archived {total === 1 ? "company" : "companies"}. Click a row to see its full activity timeline.
+          </p>
+        </div>
+        <SortToggle value={sort} onChange={setSort} />
       </div>
 
       {SECTIONS.map((section) => {

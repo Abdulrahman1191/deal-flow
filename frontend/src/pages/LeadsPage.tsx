@@ -5,6 +5,7 @@ import useAppStore from "../store/useAppStore";
 import StatsRow from "../components/leads/StatsRow";
 import LeadBucket from "../components/leads/LeadBucket";
 import LeadCard from "../components/leads/LeadCard";
+import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 import type { Lead } from "../types/lead";
 
 function LeadCardPending({ lead }: { lead: Lead }) {
@@ -35,10 +36,11 @@ export default function LeadsPage() {
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [sort, setSort] = useState<SortOrder>("newest");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["leads"],
-    queryFn: () => fetchLeads({ page_size: 1000 }),
+    queryKey: ["leads", sort],
+    queryFn: () => fetchLeads({ page_size: 1000, sort }),
     refetchInterval: 15_000,
   });
 
@@ -125,6 +127,7 @@ export default function LeadsPage() {
             ))}
           </select>
         )}
+        <SortToggle value={sort} onChange={setSort} />
         <button
           onClick={handleExportYes}
           disabled={exporting}
