@@ -6,6 +6,7 @@ import FrameworkPage from "./pages/FrameworkPage";
 import ArchivePage from "./pages/ArchivePage";
 import AwaitingDeckPage from "./pages/AwaitingDeckPage";
 import FeedbackInboxPage from "./pages/FeedbackInboxPage";
+import CalibrationPage from "./pages/CalibrationPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
 import ErrorBoundary from "./components/shared/ErrorBoundary";
 import useAppStore from "./store/useAppStore";
@@ -66,6 +67,11 @@ function Dashboard() {
           {activeTab === "feedback" && (
             <div className="h-full overflow-y-auto animate-fade-in">
               <FeedbackInboxPage />
+            </div>
+          )}
+          {activeTab === "calibration" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <CalibrationPage />
             </div>
           )}
         </ErrorBoundary>
