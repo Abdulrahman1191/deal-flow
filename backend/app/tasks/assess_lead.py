@@ -32,7 +32,13 @@ def _mark_failed(lead_id: str, error: str) -> None:
     print(f"[assess_lead] marked lead {lead_id} as failed: {error}")
 
 
-@celery.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    acks_late=True,
+    task_reject_on_worker_lost=True,
+)
 def assess_lead_task(self, lead_id: str) -> dict:
     try:
         loop = asyncio.new_event_loop()
