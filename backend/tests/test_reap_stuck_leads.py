@@ -49,6 +49,9 @@ class _FakeRunSession:
         assert entity is Lead
         return _FakeLeadsResult(self._leads)
 
+    async def commit(self):
+        pass
+
 
 def _fake_lead(status, age_minutes, lead_id=None):
     now = datetime.now(timezone.utc)
@@ -124,6 +127,26 @@ def test_threshold_is_configurable(monkeypatch):
 
     assert queued == []
     assert result["reaped"] == 0
+
+
+def test_reaped_lead_is_not_reenqueued_by_an_immediately_following_run(monkeypatch):
+    """Regression: a lead re-enqueued in one reaper pass must not still look
+    stale to the very next pass, or every not-yet-started lead gets
+    re-enqueued on every beat cycle until a worker catches up."""
+    stale = _fake_lead("processing", age_minutes=25)
+
+    monkeypatch.setattr(reap_stuck_leads.settings, "assessment_reap_after_minutes", 20)
+    monkeypatch.setattr(reap_stuck_leads, "CelerySessionLocal", lambda: _FakeRunSession([stale]))
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    first_result = asyncio.run(reap_stuck_leads._run())
+    assert first_result["reaped"] == 1
+    assert queued == [str(stale.id)]
+
+    second_result = asyncio.run(reap_stuck_leads._run())
+    assert second_result == {"checked": 1, "reaped": 0, "processing": 0, "pending": 0}
+    assert queued == [str(stale.id)]
 
 
 def test_lead_with_no_updated_at_is_treated_as_stale(monkeypatch):

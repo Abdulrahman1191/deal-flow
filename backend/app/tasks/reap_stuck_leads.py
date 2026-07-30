@@ -18,6 +18,16 @@ AssessmentCard rather than duplicating it, so a duplicate run is safe either
 way, just wasted work. assess_lead_task itself is also acks_late (crash-safety
 backstop): this reaper exists for the cases that slip past redelivery, e.g. a
 broker restart that drops an unacked task outright.
+
+Each reaped lead's updated_at is bumped to now() and committed in the same
+pass, so it isn't stale again -- and therefore isn't re-enqueued -- until a
+full reap window has elapsed. Without this, a lead still sitting unstarted in
+the broker queue at the next beat looks exactly as stale as before and gets
+re-enqueued again every cycle: with hundreds of leads and multi-minute
+assessments, the queue can't drain within one beat interval, so every
+subsequent beat would pile on another full round of duplicate tasks. If the
+re-enqueued task itself is lost, the bumped updated_at still ages past the
+window and the lead is reaped again, so self-healing is preserved.
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -54,7 +64,11 @@ async def _run() -> dict:
         for lead in stale:
             counts[lead.status] = counts.get(lead.status, 0) + 1
             assess_lead_task.delay(str(lead.id))
+            lead.updated_at = datetime.now(timezone.utc)
             print(f"[reap_stuck_leads] re-enqueued lead={lead.id} status={lead.status}")
+
+        if stale:
+            await db.commit()
 
     result_summary = {"checked": len(leads), "reaped": len(stale), **counts}
     print(f"[reap_stuck_leads] {result_summary}")
