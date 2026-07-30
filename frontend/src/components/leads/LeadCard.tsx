@@ -285,34 +285,38 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       {/* AI recommendation */}
       {assessment && (
         <div className="rounded-xl bg-muted/40 border border-border p-3 space-y-2.5">
-          <div className="flex items-center justify-between" data-testid="rating-controls">
+          <div className="space-y-1.5" data-testid="rating-controls">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               AI recommendation
             </span>
-            <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground mr-1">Rate:</span>
-              <button
-                onClick={() => setShowFeedback("up")}
-                disabled={rateMutation.isPending || readOnly}
-                title={readOnly ? "Read-only while viewing another user's board" : "The AI got this right"}
-                data-testid="rate-up"
-                className={`grid place-items-center h-6 w-6 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                  rating === "up" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                <ThumbIcon up />
-              </button>
-              <button
-                onClick={() => setShowFeedback("down")}
-                disabled={rateMutation.isPending || readOnly}
-                title={readOnly ? "Read-only while viewing another user's board" : "The AI got this wrong"}
-                data-testid="rate-down"
-                className={`grid place-items-center h-6 w-6 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                  rating === "down" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                <ThumbIcon />
-              </button>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-foreground">
+                The AI called this a <strong>{aiBucket ?? "—"}</strong> — was that the right call?
+              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => setShowFeedback("up")}
+                  disabled={rateMutation.isPending || readOnly}
+                  title={readOnly ? "Read-only while viewing another user's board" : "Agree — the AI got this right"}
+                  data-testid="rate-up"
+                  className={`flex items-center gap-1 h-6 px-2 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-[10px] font-medium ${
+                    rating === "up" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  <ThumbIcon up /> Agree
+                </button>
+                <button
+                  onClick={() => setShowFeedback("down")}
+                  disabled={rateMutation.isPending || readOnly}
+                  title={readOnly ? "Read-only while viewing another user's board" : "Disagree — the AI got this wrong"}
+                  data-testid="rate-down"
+                  className={`flex items-center gap-1 h-6 px-2 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-[10px] font-medium ${
+                    rating === "down" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  <ThumbIcon /> Disagree
+                </button>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -416,7 +420,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
       {showFeedback && assessment && (
         <FeedbackModal
           companyName={lead.company_name}
-          aiBucket={bucket ?? ""}
+          aiBucket={aiBucket ?? ""}
           rating={showFeedback}
           onSubmit={(reasonData) => {
             rateMutation.mutate({ rating: showFeedback, reasonData });

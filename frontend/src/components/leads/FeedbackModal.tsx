@@ -13,7 +13,6 @@ interface Props {
 // wrong" (correct it). A REJECT lead's 👍 reasons must not read like a YES
 // lead's 👍 reasons, since agreeing with a rejection means the opposite signals.
 const TAGS_YES_UP = [
-  "Right bucket",
   "Strong founder–market fit",
   "Real tech moat / IP",
   "Big or growing market",
@@ -31,7 +30,6 @@ const TAGS_YES_DOWN = [
   "Other",
 ];
 const TAGS_REJECT_UP = [
-  "Right bucket",
   "Poor founder–market fit",
   "Not deep tech / wrong model",
   "Market too small / niche",
@@ -49,7 +47,7 @@ const TAGS_REJECT_DOWN = [
   "Other",
 ];
 const TAGS_MAYBE_UP = [
-  "Right bucket — genuinely borderline",
+  "Genuinely borderline",
   "Unclear moat",
   "Needs more diligence",
   "Interesting but too early",
@@ -60,13 +58,12 @@ const TAGS_MAYBE_DOWN = [
   "Should be a clear YES",
   "Should be a clear REJECT",
   "Enough signal to decide",
-  "Wrong bucket",
   "Other",
 ];
 
 // Fallback for an empty/unrecognized bucket, so the modal never renders empty.
-const TAGS_GENERIC_UP = ["Right bucket", "Other"];
-const TAGS_GENERIC_DOWN = ["Wrong bucket", "Other"];
+const TAGS_GENERIC_UP = ["Other"];
+const TAGS_GENERIC_DOWN = ["Other"];
 
 function getTags(aiBucket: string, rating: "up" | "down"): string[] {
   const bucket = aiBucket.trim().toLowerCase();
@@ -90,7 +87,12 @@ export default function FeedbackModal({
   const isUp = rating === "up";
   const tags = getTags(aiBucket, rating);
   const accent = isUp ? "green" : "orange";
-  const hasFeedback = selected.size > 0 || note.trim().length > 0;
+  // "Other" alone isn't a real reason — it's a placeholder for one written in
+  // the note. Any other tag already states a substantive "why" on its own.
+  const hasSubstantiveTag = Array.from(selected).some((tag) => tag !== "Other");
+  const hasNote = note.trim().length > 0;
+  const hasFeedback = hasSubstantiveTag || hasNote;
+  const onlyOtherSelected = selected.has("Other") && !hasSubstantiveTag;
 
   const toggle = (tag: string) =>
     setSelected((prev) => {
@@ -106,10 +108,13 @@ export default function FeedbackModal({
         {/* Header */}
         <div className="px-5 py-4 border-b border-border">
           <p className="text-foreground font-semibold">{companyName}</p>
-          <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${isUp ? "text-success" : "text-warning"}`}>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            You're rating the AI's judgment, not the company.
+          </p>
+          <p className={`text-xs font-medium uppercase tracking-wider mt-1.5 ${isUp ? "text-success" : "text-warning"}`}>
             {isUp
-              ? `👍 AI said ${aiBucket} — what made it right?`
-              : `👎 AI said ${aiBucket} — what's off?`}
+              ? `👍 Why was the AI's ${aiBucket} call right?`
+              : `👎 Why was the AI's ${aiBucket} call wrong?`}
           </p>
           <p className="text-[11px] text-muted-foreground mt-2">
             Your feedback trains the AI to match your judgement.
@@ -153,7 +158,7 @@ export default function FeedbackModal({
 
           <div>
             <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
-              Optional note
+              {onlyOtherSelected ? "Note (required to explain \"Other\")" : "Optional note"}
             </label>
             <textarea
               value={note}
@@ -175,7 +180,9 @@ export default function FeedbackModal({
           </button>
           <div className="flex items-center gap-2">
             {!hasFeedback && (
-              <span className="text-[11px] text-muted-foreground">Pick a tag or add a note</span>
+              <span className="text-[11px] text-muted-foreground">
+                {onlyOtherSelected ? "Add a note to explain \"Other\"" : "Pick a tag or add a note"}
+              </span>
             )}
             <button
               onClick={() => onSubmit({ reason_tags: Array.from(selected), reason: note })}
