@@ -79,6 +79,39 @@ def fetch_open_leads_for_user(copper_user_id: Optional[int] = None) -> list[dict
     return all_leads
 
 
+def fetch_all_leads() -> list[dict]:
+    """
+    Fetches every Lead in the Copper account, paginating until exhausted, with
+    no assignee/status filter. Used for firm-wide reports (e.g.
+    reconcile_ownership.py) that need every lead's *current* assignee_id --
+    one paginated sweep is far cheaper than a fetch_lead_by_id call per lead.
+    """
+    all_leads: list[dict] = []
+    page = 1
+
+    with httpx.Client(timeout=30) as client:
+        while True:
+            body = {
+                "page_size": PAGE_SIZE,
+                "page_number": page,
+                "sort_by": "date_created",
+                "sort_direction": "desc",
+            }
+            response = client.post(
+                f"{COPPER_BASE}/leads/search",
+                headers=_headers(),
+                json=body,
+            )
+            response.raise_for_status()
+            batch = response.json()
+            all_leads.extend(batch)
+            if len(batch) < PAGE_SIZE:
+                break
+            page += 1
+
+    return all_leads
+
+
 def fetch_lead_by_id(copper_id: str) -> Optional[dict]:
     """Fetch a single Copper Lead by its ID. Returns None if not found (404).
 
