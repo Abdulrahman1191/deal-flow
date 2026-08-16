@@ -160,3 +160,45 @@ def test_lead_with_no_updated_at_is_treated_as_stale(monkeypatch):
 
     assert queued == [str(lead.id)]
     assert result["reaped"] == 1
+
+
+def test_batch_is_capped_and_prioritizes_oldest(monkeypatch):
+    """A backlog bigger than REAP_BATCH_LIMIT must not all fire at once --
+    only the cap's worth goes out, oldest (most orphaned) leads first, so a
+    thundering herd of re-enqueues can't hit the workers in one beat."""
+    extra = 7
+    total = reap_stuck_leads.REAP_BATCH_LIMIT + extra
+    # All ages comfortably exceed the (default 20-minute) threshold, so every
+    # lead is stale and only the batch cap decides how many get re-enqueued.
+    leads = [_fake_lead("pending", age_minutes=1000 - i) for i in range(total)]
+    # Oldest `REAP_BATCH_LIMIT` leads are the first ones in the list (highest age_minutes).
+    expected_ids = {str(lead.id) for lead in leads[:reap_stuck_leads.REAP_BATCH_LIMIT]}
+
+    result, queued = _run_reaper(monkeypatch, leads)
+
+    assert result["reaped"] == reap_stuck_leads.REAP_BATCH_LIMIT
+    assert len(queued) == reap_stuck_leads.REAP_BATCH_LIMIT
+    assert set(queued) == expected_ids
+
+
+def test_zero_reap_after_minutes_falls_back_to_default(monkeypatch):
+    """A misconfigured 0 (or falsy) assessment_reap_after_minutes must not
+    turn into 'reap everything that's pending/processing' -- it should fall
+    back to DEFAULT_REAP_AFTER_MINUTES instead."""
+    just_queued = _fake_lead("pending", age_minutes=1)
+
+    result, queued = _run_reaper(monkeypatch, [just_queued], reap_after_minutes=0)
+
+    assert queued == []
+    assert result["reaped"] == 0
+
+
+def test_zero_reap_after_minutes_still_reaps_leads_older_than_default(monkeypatch):
+    """Complement to the above: with the 0 -> default(30) fallback applied,
+    a lead older than the default threshold is still reaped."""
+    old_enough = _fake_lead("processing", age_minutes=reap_stuck_leads.DEFAULT_REAP_AFTER_MINUTES + 5)
+
+    result, queued = _run_reaper(monkeypatch, [old_enough], reap_after_minutes=0)
+
+    assert queued == [str(old_enough.id)]
+    assert result["reaped"] == 1

@@ -28,6 +28,16 @@ assessments, the queue can't drain within one beat interval, so every
 subsequent beat would pile on another full round of duplicate tasks. If the
 re-enqueued task itself is lost, the bumped updated_at still ages past the
 window and the lead is reaped again, so self-healing is preserved.
+
+Two guards keep a single run from doing something silly:
+- REAP_BATCH_LIMIT caps how many leads one pass re-enqueues, oldest-first, so
+  a large backlog (e.g. after an extended outage) doesn't dump a thundering
+  herd on the workers all at once -- the remainder just waits for the next
+  beat.
+- A misconfigured assessment_reap_after_minutes of 0 (or unset, which
+  pydantic would coerce from an empty env var) would otherwise make *every*
+  pending/processing lead -- including ones queued a second ago -- look
+  stale. Falls back to DEFAULT_REAP_AFTER_MINUTES instead.
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -41,6 +51,8 @@ from app.tasks.assess_lead import assess_lead_task
 from app.tasks.celery_app import celery
 
 REAP_STATUSES = ("processing", "pending")
+REAP_BATCH_LIMIT = 100
+DEFAULT_REAP_AFTER_MINUTES = 30
 
 
 def _is_stale(updated_at: datetime | None, cutoff: datetime) -> bool:
@@ -52,25 +64,34 @@ def _is_stale(updated_at: datetime | None, cutoff: datetime) -> bool:
 
 
 async def _run() -> dict:
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.assessment_reap_after_minutes)
+    configured = settings.assessment_reap_after_minutes
+    reap_after_minutes = configured if configured and configured > 0 else DEFAULT_REAP_AFTER_MINUTES
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=reap_after_minutes)
 
     async with CelerySessionLocal() as db:
         result = await db.execute(select(Lead).where(Lead.status.in_(REAP_STATUSES)))
         leads = result.scalars().all()
 
         stale = [lead for lead in leads if _is_stale(lead.updated_at, cutoff)]
+        # Oldest (and null, treated as oldest) first, so a capped run always
+        # clears the longest-orphaned leads before newer arrivals.
+        stale.sort(key=lambda lead: lead.updated_at or datetime.min.replace(tzinfo=timezone.utc))
+        capped = stale[:REAP_BATCH_LIMIT]
 
         counts = {"processing": 0, "pending": 0}
-        for lead in stale:
+        for lead in capped:
             counts[lead.status] = counts.get(lead.status, 0) + 1
             assess_lead_task.delay(str(lead.id))
             lead.updated_at = datetime.now(timezone.utc)
             print(f"[reap_stuck_leads] re-enqueued lead={lead.id} status={lead.status}")
 
-        if stale:
+        if capped:
             await db.commit()
 
-    result_summary = {"checked": len(leads), "reaped": len(stale), **counts}
+    if len(stale) > len(capped):
+        print(f"[reap_stuck_leads] batch cap reached: {len(stale)} stale, only {len(capped)} re-enqueued this run")
+
+    result_summary = {"checked": len(leads), "reaped": len(capped), **counts}
     print(f"[reap_stuck_leads] {result_summary}")
     return result_summary
 
