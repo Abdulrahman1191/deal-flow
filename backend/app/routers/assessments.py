@@ -291,10 +291,11 @@ async def send_assessment(
 
     # Sent from the unified applications@raed.vc address (settings.mail_from)
     # for every lead — per-owner Gmail send-as was rejected by Gmail with a
-    # 535 auth error (issue #107). The lead owner is CC'd + set as Reply-To
-    # instead, so replies reach them and they keep a visible copy. Falls back
-    # to no Cc/Reply-To if the owner is unresolvable, so a lookup miss never
-    # blocks the send.
+    # 535 auth error (issue #107). The lead owner is BCC'd (hidden from the
+    # founder — issue #116) + set as Reply-To, so replies reach them and they
+    # keep a silent copy without exposing internal @raed.vc addresses. Falls
+    # back to no Bcc/Reply-To if the owner is unresolvable, so a lookup miss
+    # never blocks the send.
     owner_addr = None
     if lead.owner_email:
         owner_result = await db.execute(select(User).where(User.email == lead.owner_email))
@@ -309,7 +310,7 @@ async def send_assessment(
             card.draft_subject or "",
             card.draft_body,
             reply_to=owner_addr,
-            cc=owner_addr,
+            bcc=owner_addr,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Email send failed: {exc}")
