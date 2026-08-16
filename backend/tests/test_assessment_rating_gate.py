@@ -158,10 +158,11 @@ def test_mark_sent_succeeds_once_rated(override_auth):
     assert card.sent_at is not None
 
 
-def test_send_uses_unified_sender_and_ccs_reply_tos_the_owner(override_auth, monkeypatch):
-    """Issue #107: outreach is sent from the unified mail_from address (never
-    as the owner — Gmail send-as fails with 535), with the lead owner CC'd and
-    set as Reply-To so replies reach them and they keep a visible copy."""
+def test_send_uses_unified_sender_and_bccs_reply_tos_the_owner(override_auth, monkeypatch):
+    """Issue #116: outreach is sent from the unified mail_from address (never
+    as the owner — Gmail send-as fails with 535, issue #107), with the lead
+    owner BCC'd (hidden from the founder) and set as Reply-To so replies
+    reach them and they keep a silent copy."""
     monkeypatch.setattr(email_sender, "is_configured", lambda: True)
     sent_calls = []
     monkeypatch.setattr(
@@ -186,17 +187,18 @@ def test_send_uses_unified_sender_and_ccs_reply_tos_the_owner(override_auth, mon
     assert (to, subject, body) == ("founder@acme.test", "Let's talk", "Hi there")
     assert kwargs == {
         "reply_to": "uday@raed.vc",
-        "cc": "uday@raed.vc",
+        "bcc": "uday@raed.vc",
     }
+    assert "cc" not in kwargs
     assert card.approved_at is not None
     assert card.sent_at is not None
 
 
 def test_send_falls_back_to_mail_from_when_owner_unresolvable(override_auth, monkeypatch):
     """If the lead's owner_email doesn't match any User row, send_email must
-    still be called (with no reply_to/cc override) rather than failing or
+    still be called (with no reply_to/bcc override) rather than failing or
     dropping the send — email_sender falls back to settings.mail_from
-    internally with no Cc/Reply-To in that case."""
+    internally with no Bcc/Reply-To in that case."""
     monkeypatch.setattr(email_sender, "is_configured", lambda: True)
     sent_calls = []
     monkeypatch.setattr(
@@ -216,4 +218,4 @@ def test_send_falls_back_to_mail_from_when_owner_unresolvable(override_auth, mon
     assert response.status_code == 200
     assert len(sent_calls) == 1
     kwargs = sent_calls[0][3]
-    assert kwargs == {"reply_to": None, "cc": None}
+    assert kwargs == {"reply_to": None, "bcc": None}
