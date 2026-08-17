@@ -25,13 +25,47 @@ _BACKOFF_SECONDS = [30, 60, 120, 240, 480]
 logger = logging.getLogger(__name__)
 
 
+# asyncpg accepts an `ssl=` query param (require/allow/verify-full/true/false/...);
+# psycopg2 has no such option at all and raises `invalid connection option "ssl"`
+# if it's passed straight through (issue #120). These are the values psycopg2's
+# own `sslmode` accepts.
+_PSYCOPG2_SSLMODE_VALUES = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+_SSL_TRUE_VALUES = {"true", "1", "yes", "on"}
+_SSL_FALSE_VALUES = {"false", "0", "no", "off"}
+
+
+def _psycopg2_url_and_connect_args(database_url: str):
+    """Derive a psycopg2-compatible (sync) URL + connect_args from the async
+    DATABASE_URL. Translates asyncpg-style `ssl=require`/`ssl=true`/... into
+    the `sslmode` connect arg psycopg2 expects, and drops the bare `ssl`
+    param so it never reaches psycopg2. A URL with no ssl param, or one that
+    already uses `sslmode`, passes through unchanged."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(database_url).set(drivername="postgresql")
+    query = dict(url.query)
+    connect_args = {}
+
+    ssl_value = query.pop("ssl", None)
+    if "sslmode" not in query and ssl_value is not None:
+        ssl_value = str(ssl_value).lower()
+        if ssl_value in _PSYCOPG2_SSLMODE_VALUES:
+            connect_args["sslmode"] = ssl_value
+        elif ssl_value in _SSL_TRUE_VALUES:
+            connect_args["sslmode"] = "require"
+        elif ssl_value in _SSL_FALSE_VALUES:
+            connect_args["sslmode"] = "disable"
+
+    return url.set(query=query), connect_args
+
+
 def _sync_engine():
     """Sync engine derived from the async DATABASE_URL — callers here are
     often invoked from sync code paths."""
     from sqlalchemy import create_engine
 
-    sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
-    return create_engine(sync_url, pool_pre_ping=True)
+    sync_url, connect_args = _psycopg2_url_and_connect_args(settings.database_url)
+    return create_engine(sync_url, pool_pre_ping=True, connect_args=connect_args)
 
 
 def _strip_raed_state_tags(tags: Optional[list]) -> list:
