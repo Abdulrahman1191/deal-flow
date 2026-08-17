@@ -22,8 +22,8 @@ def _mark_failed(lead_id: str, error: str) -> None:
     from sqlalchemy import create_engine
     from app.config import settings
 
-    url = settings.database_url.replace("+asyncpg", "+psycopg2")
-    engine = create_engine(url)
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(settings.database_url)
+    engine = create_engine(url, connect_args=connect_args)
     with engine.begin() as conn:
         conn.execute(
             text("UPDATE leads SET status='failed' WHERE id=:lid AND status IN ('processing','pending')"),

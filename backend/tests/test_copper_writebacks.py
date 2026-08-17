@@ -26,7 +26,7 @@ from app.main import app
 from app.routers import assessments
 from app.services import claude_agent, copper_writer, email_sender
 from app.services.auth import get_current_user
-from app.tasks import drain_outbox
+from app.tasks import assess_lead, drain_outbox
 
 client = TestClient(app)
 
@@ -1020,6 +1020,53 @@ def test_sync_engine_passes_normalized_url_and_sslmode_to_create_engine(monkeypa
     assert captured["pool_pre_ping"] is True
     assert "ssl=" not in captured["url"]
     assert captured["url"].startswith("postgresql://")
+
+
+def test_mark_failed_normalizes_asyncpg_ssl_param_via_shared_helper(monkeypatch):
+    """assess_lead._mark_failed derives its sync engine the same way
+    _sync_engine does (issue #120 follow-up) -- confirms it reuses
+    _psycopg2_url_and_connect_args instead of a bare string .replace(), which
+    left the asyncpg-only `ssl=require` param in place and made psycopg2
+    raise `invalid connection option "ssl"`, so a lead stuck after exhausted
+    retries never flipped to 'failed' and the UI spinner never cleared."""
+    # `_mark_failed` does `from app.config import settings` locally, which
+    # binds to the same singleton `copper_writer.settings` patches here.
+    monkeypatch.setattr(
+        copper_writer.settings,
+        "database_url",
+        "postgresql+asyncpg://u:p@h/db?ssl=require",
+    )
+
+    captured = {}
+
+    class _FakeConn:
+        def execute(self, *a, **k):
+            captured["executed"] = True
+
+    class _FakeEngine:
+        def begin(self):
+            return self
+
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_create_engine(url, connect_args=None):
+        captured["url"] = str(url)
+        captured["connect_args"] = connect_args
+        return _FakeEngine()
+
+    import sqlalchemy
+    monkeypatch.setattr(sqlalchemy, "create_engine", fake_create_engine)
+
+    assess_lead._mark_failed(str(uuid.uuid4()), "boom")
+
+    assert captured["connect_args"] == {"sslmode": "require"}
+    assert "ssl=" not in captured["url"]
+    assert captured["url"].startswith("postgresql://")
+    assert captured["executed"] is True
 
 
 def test_outbox_health_403s_for_non_admin():
