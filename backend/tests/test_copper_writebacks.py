@@ -935,6 +935,93 @@ def test_outbox_health_returns_counts_and_recent_failures_for_admin():
     assert "copper_unqualified_status_id unset" in failure["last_error"]
 
 
+# ---------------------------------------------------------------------------
+# 8. _sync_engine SSL param normalization (issue #120): the async DATABASE_URL
+#    uses asyncpg's `ssl=require`, which psycopg2 rejects outright
+#    (`invalid connection option "ssl"`) if passed straight through, silently
+#    failing every _enqueue call. Must translate to psycopg2's `sslmode`.
+# ---------------------------------------------------------------------------
+
+def test_psycopg2_url_translates_asyncpg_ssl_require_to_sslmode_connect_arg():
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(
+        "postgresql+asyncpg://u:p@h/db?ssl=require"
+    )
+    assert connect_args == {"sslmode": "require"}
+    assert "ssl" not in dict(url.query)
+    assert "sslmode" not in dict(url.query)  # lives in connect_args, not the URL
+    assert "ssl=" not in str(url)
+    assert url.drivername == "postgresql"
+
+
+def test_psycopg2_url_translates_asyncpg_ssl_true_to_sslmode_require():
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(
+        "postgresql+asyncpg://u:p@h/db?ssl=true"
+    )
+    assert connect_args == {"sslmode": "require"}
+    assert "ssl" not in dict(url.query)
+
+
+def test_psycopg2_url_no_ssl_param_passes_through_unchanged():
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(
+        "postgresql+asyncpg://u:p@h/db"
+    )
+    assert connect_args == {}
+    assert dict(url.query) == {}
+    assert url.drivername == "postgresql"
+    assert url.password == "p"
+
+
+def test_psycopg2_url_existing_sslmode_passes_through_unchanged():
+    """A URL already written with psycopg2-style sslmode (e.g. hand-configured
+    for local dev) must not be touched or duplicated."""
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(
+        "postgresql+asyncpg://u:p@h/db?sslmode=verify-full"
+    )
+    assert connect_args == {}
+    assert dict(url.query) == {"sslmode": "verify-full"}
+
+
+def test_psycopg2_url_drops_bare_ssl_when_sslmode_already_present():
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(
+        "postgresql+asyncpg://u:p@h/db?ssl=require&sslmode=verify-full"
+    )
+    assert connect_args == {}
+    assert dict(url.query) == {"sslmode": "verify-full"}
+
+
+def test_sync_engine_passes_normalized_url_and_sslmode_to_create_engine(monkeypatch):
+    """End-to-end through _sync_engine(): confirms the psycopg2 engine is
+    actually built with the translated sslmode, not just that the helper
+    function computes it correctly."""
+    monkeypatch.setattr(
+        copper_writer.settings,
+        "database_url",
+        "postgresql+asyncpg://u:p@h/db?ssl=require",
+    )
+
+    captured = {}
+
+    class _FakeEngine:
+        pass
+
+    def fake_create_engine(url, pool_pre_ping=None, connect_args=None):
+        captured["url"] = str(url)
+        captured["pool_pre_ping"] = pool_pre_ping
+        captured["connect_args"] = connect_args
+        return _FakeEngine()
+
+    import sqlalchemy
+    monkeypatch.setattr(sqlalchemy, "create_engine", fake_create_engine)
+
+    engine = copper_writer._sync_engine()
+
+    assert isinstance(engine, _FakeEngine)
+    assert captured["connect_args"] == {"sslmode": "require"}
+    assert captured["pool_pre_ping"] is True
+    assert "ssl=" not in captured["url"]
+    assert captured["url"].startswith("postgresql://")
+
+
 def test_outbox_health_403s_for_non_admin():
     async def _fake_get_db():
         yield _FakeOutboxHealthSession(count_rows=[], failed_rows=[])
