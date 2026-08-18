@@ -179,60 +179,75 @@ class TestCompanyContext:
         assert _company_context(_lead("Watieq")) == ""
 
 
-class TestOcrFallback:
-    """extract_text_from_pdf falls back to OCR only when the text layer is
-    absent/garbled (issue #97); a real text layer never pays the OCR cost."""
+class TestLlmFallback:
+    """extract_text_from_pdf falls back to the multimodal LLM only when the text
+    layer is absent/garbled; a real text layer never pays the LLM cost.
+
+    (Was TestOcrFallback / issue #97 -- the Tesseract tier was replaced by
+    app/services/deck_llm.py on 2026-08-18.)"""
 
     def _boom(self, _path):
-        raise AssertionError("OCR must not run when a text layer already produced clean text")
+        raise AssertionError("LLM must not run when a text layer already produced clean text")
 
-    def test_ocr_used_when_text_layer_is_empty(self, monkeypatch, tmp_path):
+    def test_llm_used_when_text_layer_is_empty(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: "")
         monkeypatch.setattr(pitch_deck, "_extract_pypdf", lambda path: "")
-        monkeypatch.setattr(pitch_deck, "_extract_ocr", lambda path: CLEAN_ENGLISH)
-        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", True)
+        monkeypatch.setattr(pitch_deck, "_extract_llm", lambda path: CLEAN_ENGLISH)
+        monkeypatch.setattr(settings, "pitch_deck_llm_extraction_enabled", True)
 
         result = extract_text_from_pdf(tmp_path / "scanned.pdf")
 
         assert result == CLEAN_ENGLISH
 
-    def test_ocr_used_when_text_layer_is_garbled(self, monkeypatch, tmp_path):
+    def test_llm_used_when_text_layer_is_garbled(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: PROD_MOJIBAKE)
         monkeypatch.setattr(pitch_deck, "_extract_pypdf", lambda path: PROD_MOJIBAKE)
-        monkeypatch.setattr(pitch_deck, "_extract_ocr", lambda path: CLEAN_ARABIC)
-        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", True)
+        monkeypatch.setattr(pitch_deck, "_extract_llm", lambda path: CLEAN_ARABIC)
+        monkeypatch.setattr(settings, "pitch_deck_llm_extraction_enabled", True)
 
         result = extract_text_from_pdf(tmp_path / "scanned.pdf")
 
         assert result == CLEAN_ARABIC
 
-    def test_text_layer_pdf_never_invokes_ocr(self, monkeypatch, tmp_path):
+    def test_text_layer_pdf_never_invokes_llm(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: CLEAN_ENGLISH)
         monkeypatch.setattr(pitch_deck, "_extract_pypdf", self._boom)
-        monkeypatch.setattr(pitch_deck, "_extract_ocr", self._boom)
+        monkeypatch.setattr(pitch_deck, "_extract_llm", self._boom)
 
         result = extract_text_from_pdf(tmp_path / "text-layer.pdf")
 
         assert result == CLEAN_ENGLISH
 
-    def test_ocr_disabled_by_config_flag_short_circuits_before_any_ocr_deps(
+    def test_llm_disabled_by_config_flag_short_circuits_before_any_network_call(
         self, monkeypatch, tmp_path
     ):
-        # Gate lives inside _extract_ocr itself, ahead of the fitz/pytesseract/
-        # PIL imports -- so disabling it works even on a box without tesseract.
-        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", False)
+        # The gate lives inside _extract_llm itself, ahead of the deck_llm
+        # import and the file read -- so disabling it costs nothing and works
+        # even with no GEMINI_API_KEY configured.
+        monkeypatch.setattr(settings, "pitch_deck_llm_extraction_enabled", False)
 
-        result = pitch_deck._extract_ocr(tmp_path / "scanned.pdf")
+        result = pitch_deck._extract_llm(tmp_path / "scanned.pdf")
 
         assert result == ""
 
-    def test_ocr_disabled_by_config_flag_leaves_deck_empty_not_garbage(
+    def test_llm_disabled_by_config_flag_leaves_deck_empty_not_garbage(
         self, monkeypatch, tmp_path
     ):
         monkeypatch.setattr(pitch_deck, "_extract_pymupdf", lambda path: "")
         monkeypatch.setattr(pitch_deck, "_extract_pypdf", lambda path: "")
-        monkeypatch.setattr(settings, "pitch_deck_ocr_enabled", False)
+        monkeypatch.setattr(settings, "pitch_deck_llm_extraction_enabled", False)
 
         result = extract_text_from_pdf(tmp_path / "scanned.pdf")
 
         assert result == ""
+
+    def test_missing_api_key_degrades_to_empty_not_an_exception(
+        self, monkeypatch, tmp_path
+    ):
+        """DeckLLMUnavailable must never escape into the ingestion task."""
+        monkeypatch.setattr(settings, "pitch_deck_llm_extraction_enabled", True)
+        monkeypatch.setattr(settings, "gemini_api_key", "")
+        deck = tmp_path / "scanned.pdf"
+        deck.write_bytes(b"%PDF-1.4 fake")
+
+        assert pitch_deck._extract_llm(deck) == ""

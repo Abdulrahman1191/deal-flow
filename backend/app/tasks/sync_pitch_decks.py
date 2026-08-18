@@ -53,6 +53,7 @@ from app.database import CelerySessionLocal
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
 from app.services.copper_service import fetch_lead_by_id
+from app.services import deck_cache
 from app.services.pitch_deck import (
     MATCH_THRESHOLD,
     extract_text_from_pdf,
@@ -94,7 +95,7 @@ def _list_pdfs_in_folder(service, folder_id: str) -> list[dict]:
     while True:
         resp = service.files().list(
             q=q,
-            fields="nextPageToken, files(id, name)",
+            fields="nextPageToken, files(id, name, modifiedTime)",
             pageSize=1000,
             pageToken=page_token,
         ).execute()
@@ -123,11 +124,28 @@ def _download_and_extract(service, drive_file: dict) -> str:
     BEFORE deciding whether to attach) and _ingest_from_drive (which needs it
     to store on the lead) -- so a deck is downloaded/extracted at most once
     per file even when verification consumes it first.
+
+    Results are cached by (file id, modifiedTime) -- see app/services/
+    deck_cache.py. Without that, a file whose name never resolves to a single
+    lead is re-downloaded and re-extracted on every 30-minute sweep, forever.
     """
+    file_id = drive_file["id"]
+    modified_time = drive_file.get("modifiedTime")
+
+    cached = deck_cache.get(file_id, modified_time)
+    if cached is not None:
+        logger.info(
+            "%r: reusing cached extraction (%d chars)", drive_file["name"], len(cached)
+        )
+        return cached
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         pdf_path = Path(tmp_dir) / drive_file["name"]
-        _download_pdf(service, drive_file["id"], pdf_path)
-        return extract_text_from_pdf(pdf_path)
+        _download_pdf(service, file_id, pdf_path)
+        text = extract_text_from_pdf(pdf_path)
+
+    deck_cache.put(file_id, text, modified_time)
+    return text
 
 
 def _parse_drive_file_id(url: Optional[str]) -> Optional[str]:
@@ -268,7 +286,7 @@ async def _ingest_from_copper_link(db: AsyncSession, service, lead: Lead) -> str
         return "skipped_non_drive"
 
     try:
-        meta = service.files().get(fileId=file_id, fields="id, name").execute()
+        meta = service.files().get(fileId=file_id, fields="id, name, modifiedTime").execute()
         drive_file = {"id": file_id, "name": meta.get("name") or f"{file_id}.pdf"}
         await _ingest_from_drive(db, service, lead, drive_file, require_existing_card=False)
     except Exception as exc:

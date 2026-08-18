@@ -49,6 +49,14 @@ services:
     # never passes it and shows as permanently "unhealthy". Disable it.
     healthcheck:
       disable: true
+    # Resource ceiling. The worker ran unlimited until 2026-08-18, when the
+    # Tesseract OCR tier had it at 234% CPU on a 4-core host -- starving reem
+    # and everything else in production while the container still reported
+    # "Up". Deck extraction is now a network call so this should never bind,
+    # which is exactly why it is safe to set: it caps the blast radius of any
+    # future CPU-heavy task instead of letting it take the box down.
+    cpus: 2.0
+    mem_limit: 3g
     networks:
       - internal
     depends_on:
