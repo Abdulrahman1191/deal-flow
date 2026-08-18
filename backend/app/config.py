@@ -11,8 +11,13 @@ class Settings(BaseSettings):
     # --- LLM providers ---
     deep_seek_api: str = ""              # primary assessment model
     deepseek_model: str = "deepseek-chat"
-    # Platform also injects ANTHROPIC_API_KEY and GEMINI_API_KEY — we don't
-    # currently use them but they're available if we want to swap models.
+    # Platform also injects ANTHROPIC_API_KEY — available if we want to swap
+    # the assessment model.
+    # Gemini is used for pitch-deck text extraction (app/services/deck_llm.py):
+    # it reads the PDF directly, including scanned/Arabic decks that DeepSeek
+    # cannot see because it is text-only.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.7-flash"
 
     # --- Web research ---
     tavily_api_key: str = ""
@@ -91,12 +96,17 @@ class Settings(BaseSettings):
     # no behavior change to the existing high-confidence auto-attach path).
     deck_match_verify_enabled: bool = True
 
-    # --- Pitch-deck OCR fallback (issue #97) ---
-    # Gate for the whole OCR fallback tier in extract_text_from_pdf. Off ->
-    # scanned/image-only decks are left ungarbled-but-empty exactly as before
-    # this feature (no Tesseract calls), useful if a deploy image is missing
-    # the tesseract binary/traineddata and OCR attempts would just spam logs.
-    pitch_deck_ocr_enabled: bool = True
+    # --- Pitch-deck LLM extraction (replaces the OCR fallback of issue #97) ---
+    # Gate for the multimodal-LLM tier in extract_text_from_pdf (app/services/
+    # deck_llm.py). Off -> scanned/image-only decks stay empty and get flagged,
+    # exactly as they did before any fallback tier existed.
+    #
+    # This replaced Tesseract OCR on 2026-08-18. OCR rendered 40 pages at 300
+    # DPI and ran ara+eng over them: minutes of multi-core CPU per deck inside a
+    # --pool=solo worker, which blocked every other task behind it. Gemini does
+    # the same job over the network, so the worker waits on a socket instead of
+    # burning prod's cores.
+    pitch_deck_llm_extraction_enabled: bool = True
 
     # --- Daily briefing schedule ---
     briefing_cron_hour: int = 4

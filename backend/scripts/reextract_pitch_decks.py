@@ -1,11 +1,11 @@
 """
-Re-extract text (with OCR fallback) for leads whose pitch deck is already
+Re-extract text (with the LLM fallback tier) for leads whose pitch deck is already
 attached via Drive (pitch_deck_drive_id set) but never yielded usable text
 (pitch_deck_text empty) -- image-only/scanned decks, or Arabic decks whose
-extraction failed before the OCR fallback existed (issue #97).
+extraction failed before the LLM fallback tier existed.
 
 Re-downloads each candidate's deck from Drive by its stored file id and
-re-runs extract_text_from_pdf (PyMuPDF -> pypdf -> OCR; see
+re-runs extract_text_from_pdf (PyMuPDF -> pypdf -> LLM; see
 app/services/pitch_deck.py). Any lead that now yields text gets it stored and
 a re-assessment queued, so leads stuck in `awaiting_deck` unstick without
 waiting for a re-upload.
@@ -66,7 +66,7 @@ def plan_reextract(leads: Iterable[Lead]) -> dict:
 
 def render_plan(plan: dict) -> str:
     lines = [
-        "Re-extract pitch-deck text via OCR fallback for stuck leads (all owners)",
+        "Re-extract pitch-deck text via the LLM fallback for stuck leads (all owners)",
         f"=== Candidates: {len(plan['leads'])} ===",
     ]
     for row in plan["leads"]:
@@ -93,11 +93,17 @@ async def apply_reextract(db: AsyncSession, service, leads: list[Lead]) -> dict:
     """Re-download + re-extract each candidate. Per-lead failures (bad file,
     Drive hiccup, corrupt PDF) are caught and counted rather than aborting the
     rest of the run -- one bad deck must not block the other ~26."""
+    from app.services import deck_cache
     from app.tasks.sync_pitch_decks import _download_pdf
 
     unstuck, still_empty, failed = 0, 0, 0
     for lead in leads:
         filename = lead.pitch_deck_filename or f"{lead.pitch_deck_drive_id}.pdf"
+        # Drop any cached extraction first: this script exists precisely to
+        # force a fresh read of decks a previous tier failed on, and a cached
+        # empty result from that tier would otherwise be reused by the next
+        # sweep even after we succeed here.
+        deck_cache.invalidate(lead.pitch_deck_drive_id)
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 pdf_path = Path(tmp_dir) / filename

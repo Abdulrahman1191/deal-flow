@@ -13,10 +13,11 @@ Text extraction is layered (see extract_text_from_pdf):
     better than pypdf, which mangles Arabic decks built on non-Unicode fonts
     into Latin-1 mojibake (e.g. "GþþÿN þþþþÿ" instead of real Arabic).
   - A garble guard rejects extractions dominated by junk characters.
-  - When the text layer is absent (scanned decks) or garbled, we OCR the
-    rendered pages with Tesseract (ara+eng). Arabic-first decks were the
+  - When the text layer is absent (scanned decks) or garbled, we hand the PDF
+    to a multimodal LLM (app/services/deck_llm.py). Arabic-first decks were the
     motivating case: a broken text layer meant the AI assessment scored them
-    on noise.
+    on noise. This tier used to be Tesseract OCR; see deck_llm.py for why it
+    was replaced on 2026-08-18.
 """
 import difflib
 import re
@@ -42,10 +43,8 @@ MAX_STORED_CHARS = 30_000
 _GARBLE_RATIO_THRESHOLD = 0.30   # >30% junk chars among non-whitespace => garbled
 _MIN_USABLE_CHARS = 40           # below this the text layer is effectively absent
 
-# --- OCR fallback tunables --------------------------------------------------
-_OCR_LANGS = "ara+eng"
-_OCR_DPI = 300                   # render resolution; 300 is the Tesseract sweet spot
-_OCR_MAX_PAGES = 40              # cap work on very long decks
+# NOTE: the former OCR tunables (_OCR_LANGS/_OCR_DPI/_OCR_MAX_PAGES) are gone
+# with the Tesseract tier. Page limits and payload caps now live in deck_llm.py.
 
 # Arabic Unicode blocks: base (0600-06FF), Supplement (0750-077F), Extended-A
 # (08A0-08FF), Presentation Forms-A (FB50-FDFF) and -B (FE70-FEFF).
@@ -140,43 +139,37 @@ def _extract_pypdf(path: Path) -> str:
         return ""
 
 
-def _extract_ocr(path: Path) -> str:
-    """OCR the rendered pages with Tesseract (ara+eng).
+def _extract_llm(path: Path) -> str:
+    """Read the deck with a multimodal LLM when the text layers fail.
 
-    Used when no usable text layer exists (scanned decks) or the layer is
-    garbled. Renders each page to a bitmap via PyMuPDF, then runs Tesseract.
-    Degrades gracefully (returns "") if PyMuPDF/pytesseract/the tesseract binary
-    or Arabic traineddata are unavailable, so a deployment without OCR support
-    simply skips the deck rather than crashing. Also gated behind
-    settings.pitch_deck_ocr_enabled so OCR can be switched off firm-wide (e.g.
-    an image missing tesseract) without touching code.
+    Used for scanned decks (no text layer at all) and for decks whose embedded
+    text is garbled by a broken font CMap -- the Arabic mojibake case. The PDF
+    is sent as-is; the model does its own vision pass over the pages.
+
+    Degrades gracefully to "" so a deployment with no GEMINI_API_KEY, or a deck
+    too large to send, simply falls through to the caller's "flag it" branch
+    rather than crashing the ingestion task. Gated behind
+    settings.pitch_deck_llm_extraction_enabled so the tier can be switched off
+    firm-wide without touching code.
     """
-    if not settings.pitch_deck_ocr_enabled:
+    if not settings.pitch_deck_llm_extraction_enabled:
+        return ""
+
+    from app.services import deck_llm
+
+    try:
+        pdf_bytes = path.read_bytes()
+    except OSError as exc:
+        print(f"[pitch_deck] could not read {path.name}: {exc!r}")
         return ""
 
     try:
-        import fitz
-        import pytesseract
-        from PIL import Image
-    except ImportError as exc:
-        print(f"[pitch_deck] OCR deps unavailable ({exc}); skipping OCR for {path.name}")
-        return ""
-
-    import io
-
-    try:
-        parts: list[str] = []
-        with fitz.open(str(path)) as doc:
-            for page in doc[:_OCR_MAX_PAGES]:
-                pix = page.get_pixmap(dpi=_OCR_DPI)
-                img = Image.open(io.BytesIO(pix.tobytes("png")))
-                parts.append(pytesseract.image_to_string(img, lang=_OCR_LANGS))
-        return "\n\n".join(p for p in parts if p.strip())
-    except pytesseract.TesseractNotFoundError:
-        print(f"[pitch_deck] tesseract binary not found; skipping OCR for {path.name}")
+        return deck_llm.extract_text(pdf_bytes, filename=path.name)
+    except deck_llm.DeckLLMUnavailable as exc:
+        print(f"[pitch_deck] LLM extraction unavailable for {path.name}: {exc}")
         return ""
     except Exception as exc:
-        print(f"[pitch_deck] OCR failed on {path.name}: {exc!r}")
+        print(f"[pitch_deck] LLM extraction failed on {path.name}: {exc!r}")
         return ""
 
 
@@ -206,25 +199,26 @@ def extract_text_from_pdf(path: Path) -> str:
       1. Read the text layer with PyMuPDF (handles Arabic CMaps well). Use it if
          it's clean and substantial.
       2. Otherwise try pypdf, in case PyMuPDF choked on a quirk pypdf survives.
-      3. If both text layers are absent or garbled, OCR the rendered pages.
+      3. If both text layers are absent or garbled, let a multimodal LLM read
+         the PDF directly.
 
     A garbled extraction (high ratio of junk chars — the Arabic mojibake bug) is
-    never stored as-is: we re-extract via OCR, and if every method still yields
-    garbage we return "" so the caller flags the deck rather than poisoning the
-    AI assessment with noise.
+    never stored as-is: we re-extract via the LLM, and if every method still
+    yields garbage we return "" so the caller flags the deck rather than
+    poisoning the AI assessment with noise.
     """
     layers = (
         ("pymupdf", _extract_pymupdf),
         ("pypdf", _extract_pypdf),
-        ("ocr", _extract_ocr),
+        ("llm", _extract_llm),
     )
     best_text = ""
     best_garble = 1.0
     for label, extractor in layers:
         text = _clean(extractor(path))
         if not _looks_garbled(text):
-            if label == "ocr":
-                print(f"[pitch_deck] {path.name}: text layer unusable, used OCR ({label})")
+            if label == "llm":
+                print(f"[pitch_deck] {path.name}: text layer unusable, used LLM ({label})")
             return text[:MAX_STORED_CHARS]
         # Track the least-bad candidate purely for diagnostics.
         ratio = _garble_ratio(text)
