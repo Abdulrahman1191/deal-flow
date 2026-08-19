@@ -7,6 +7,7 @@ import ArchivePage from "./pages/ArchivePage";
 import AwaitingDeckPage from "./pages/AwaitingDeckPage";
 import FeedbackInboxPage from "./pages/FeedbackInboxPage";
 import CalibrationPage from "./pages/CalibrationPage";
+import AssociatesPage from "./pages/AssociatesPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
 import ErrorBoundary from "./components/shared/ErrorBoundary";
 import useAppStore from "./store/useAppStore";
@@ -72,6 +73,11 @@ function Dashboard() {
           {activeTab === "calibration" && (
             <div className="h-full overflow-y-auto animate-fade-in">
               <CalibrationPage />
+            </div>
+          )}
+          {activeTab === "associates" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <AssociatesPage />
             </div>
           )}
         </ErrorBoundary>
