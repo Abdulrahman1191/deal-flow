@@ -60,6 +60,7 @@ export default function Navbar() {
         ...baseTabs,
         { id: "feedback" as const, label: "Feedback" },
         { id: "calibration" as const, label: "Calibration" },
+        { id: "associates" as const, label: "Associates" },
       ]
     : baseTabs;
 
