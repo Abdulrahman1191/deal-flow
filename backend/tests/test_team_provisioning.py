@@ -75,6 +75,35 @@ def test_team_email_list_empty_defaults_to_owner_only(monkeypatch):
     assert settings.team_email_list() == [OWNER]
 
 
+# ---------- Settings.client_facing_email_list (issue #127) ----------
+
+
+def test_client_facing_email_list_excludes_non_client_facing(monkeypatch):
+    monkeypatch.setattr(settings, "team_emails", "waleed@raed.vc,almuhammed@raed.vc")
+    monkeypatch.setattr(settings, "non_client_facing_emails", "almuhammed@raed.vc")
+    emails = settings.client_facing_email_list()
+    assert "almuhammed@raed.vc" not in emails
+    assert "waleed@raed.vc" in emails
+    assert OWNER in emails
+
+
+def test_client_facing_email_list_includes_new_team_member(monkeypatch):
+    # default exclusion set is just the QA account, so a freshly added
+    # teammate shows up with no other config change
+    monkeypatch.setattr(settings, "team_emails", "waleed@raed.vc,arsalan@raed.vc")
+    emails = settings.client_facing_email_list()
+    assert "arsalan@raed.vc" in emails
+
+
+def test_client_facing_email_list_default_exclusion_is_almuhammed():
+    assert settings.non_client_facing_email_set() == {"almuhammed@raed.vc"}
+
+
+def test_non_client_facing_email_set_lowercases_and_dedupes(monkeypatch):
+    monkeypatch.setattr(settings, "non_client_facing_emails", "Almuhammed@raed.vc, almuhammed@raed.vc")
+    assert settings.non_client_facing_email_set() == {"almuhammed@raed.vc"}
+
+
 # ---------- provision_team_users ----------
 
 

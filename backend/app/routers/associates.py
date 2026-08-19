@@ -14,21 +14,13 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.user import User
 from app.services.auth import get_current_user, is_owner
 
 router = APIRouter(prefix="/associates", tags=["associates"])
 
-# The four client-facing associates the GP wants visibility into.
-# almuhammed@raed.vc is deliberately excluded — non-client-facing, test leads
-# only (see issue #125).
-ASSOCIATE_EMAILS = [
-    "abdulrahman@raed.vc",
-    "waleed@raed.vc",
-    "uday@raed.vc",
-    "yomna@raed.vc",
-]
 
 class AssociatePerformanceOut(BaseModel):
     email: str
@@ -58,11 +50,15 @@ async def associates_performance(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Per-associate lead-management counts for the GP dashboard. Admin-only."""
+    """Per-associate lead-management counts for the GP dashboard. Admin-only.
+    Roster is data-driven: settings.client_facing_email_list() -- TEAM_EMAILS
+    minus NON_CLIENT_FACING_EMAILS (issue #127) -- not a hardcoded list, so a
+    teammate added to TEAM_EMAILS appears here automatically."""
     if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    email_params = {f"email{i}": email for i, email in enumerate(ASSOCIATE_EMAILS)}
+    associate_emails = settings.client_facing_email_list()
+    email_params = {f"email{i}": email for i, email in enumerate(associate_emails)}
     email_placeholders = ", ".join(f":{key}" for key in email_params)
 
     rows = (await db.execute(text(f"""
@@ -99,5 +95,5 @@ async def associates_performance(
     }
 
     return AssociatesPerformanceOut(
-        associates=[by_email.get(email, _zero_row(email)) for email in ASSOCIATE_EMAILS]
+        associates=[by_email.get(email, _zero_row(email)) for email in associate_emails]
     )

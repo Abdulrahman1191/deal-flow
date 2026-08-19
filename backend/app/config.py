@@ -124,6 +124,15 @@ class Settings(BaseSettings):
     # sign-in, so the periodic Copper sync can populate their board before
     # they ever log in. Empty → just `owner_email` (see team_email_list()).
     team_emails: str = ""
+    # Comma-separated subset of TEAM_EMAILS that are valid users but not
+    # client-facing associates (test/engineer accounts) -- excluded from
+    # associate-facing views (GP dashboard, view-as dropdown, per-associate
+    # reporting) while still getting a user row + Copper sync like everyone
+    # else. See client_facing_email_list(). Onboard/offboard a temporary
+    # tester by adding/removing them in TEAM_EMAILS (+ redeploy); use this
+    # setting only to keep a permanent non-client-facing account (like the
+    # QA account below) out of those views.
+    non_client_facing_emails: str = "almuhammed@raed.vc"
 
     # --- Misc behavioural flags ---
     # Skip the periodic Copper sync task. Useful when bulk-pruning leads or
@@ -151,6 +160,21 @@ class Settings(BaseSettings):
         if owner not in emails:
             emails.append(owner)
         return emails
+
+    def non_client_facing_email_set(self) -> set[str]:
+        """Lowercased set of NON_CLIENT_FACING_EMAILS -- test/engineer
+        accounts that are valid users but excluded from associate-facing
+        views."""
+        return {e.strip().lower() for e in self.non_client_facing_emails.split(",") if e.strip()}
+
+    def client_facing_email_list(self) -> list[str]:
+        """team_email_list() minus non_client_facing_email_set() -- the
+        data-driven roster for associate-facing views (GP dashboard, view-as
+        dropdown, per-associate reporting). Adding/removing an email from
+        TEAM_EMAILS adds/removes them here automatically; no hardcoded
+        associate list."""
+        excluded = self.non_client_facing_email_set()
+        return [e for e in self.team_email_list() if e not in excluded]
 
     class Config:
         env_file = ".env"
