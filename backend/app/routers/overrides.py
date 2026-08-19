@@ -15,16 +15,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.override import AssessmentOverride
 from app.models.user import User
 from app.services.auth import get_current_user, is_owner
 
 router = APIRouter(prefix="/overrides", tags=["overrides"])
-
-# Internal QA account used to poke leads while testing — its rows are
-# synthetic, not real deal flow, so every calibration aggregate excludes it.
-_TEST_ACCOUNT_EMAIL = "almuhammed@raed.vc"
 
 
 def _rate(numerator: int, denominator: int) -> Optional[float]:
@@ -161,7 +158,7 @@ class CalibrationStatsOut(BaseModel):
     agreement_over_time: list[WeeklyAgreementOut]
     partner_profiles: list[PartnerProfileOut]
     disagreement_pairs: dict[str, int]
-    excluded_test_account: str
+    excluded_test_accounts: list[str]
 
 
 @router.get("/calibration", response_model=CalibrationStatsOut)
@@ -172,36 +169,43 @@ async def calibration_stats(
     """Backend for the calibration dashboard (issue #104): is the AI
     improving over time, and which partners give articulated ratings vs
     vague ones. Read-only, owner-only. Every aggregate here excludes
-    `_TEST_ACCOUNT_EMAIL` — its leads are QA test data, not real deal flow.
+    `settings.non_client_facing_email_set()` (issue #127) — those accounts'
+    leads are QA/engineer test data, not real deal flow.
     """
     if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     from sqlalchemy import text
 
-    params = {"test_email": _TEST_ACCOUNT_EMAIL}
+    excluded_emails = sorted(settings.non_client_facing_email_set())
+    params = {f"excl_email{i}": email for i, email in enumerate(excluded_emails)}
+    if params:
+        placeholders = ", ".join(f":{key}" for key in params)
+        exclusion_clause = f"(acted_by_email IS NULL OR acted_by_email NOT IN ({placeholders}))"
+    else:
+        exclusion_clause = "TRUE"
 
-    overall = (await db.execute(text("""
+    overall = (await db.execute(text(f"""
         SELECT
           COUNT(*) AS total,
           COUNT(*) FILTER (WHERE ai_bucket = human_bucket) AS agreements,
           COUNT(*) FILTER (WHERE ai_bucket != human_bucket) AS disagreements
         FROM assessment_overrides
-        WHERE acted_by_email IS DISTINCT FROM :test_email
+        WHERE {exclusion_clause}
     """), params)).first()
 
-    weekly_rows = (await db.execute(text("""
+    weekly_rows = (await db.execute(text(f"""
         SELECT
           date_trunc('week', created_at) AS week_start,
           COUNT(*) AS total,
           COUNT(*) FILTER (WHERE ai_bucket = human_bucket) AS agreements
         FROM assessment_overrides
-        WHERE acted_by_email IS DISTINCT FROM :test_email
+        WHERE {exclusion_clause}
         GROUP BY 1
         ORDER BY 1
     """), params)).all()
 
-    partner_rows = (await db.execute(text("""
+    partner_rows = (await db.execute(text(f"""
         SELECT
           acted_by_email,
           COUNT(*) AS total,
@@ -214,17 +218,17 @@ async def calibration_stats(
                OR (human_reason IS NOT NULL AND human_reason != '')
           ) AS articulated
         FROM assessment_overrides
-        WHERE acted_by_email IS DISTINCT FROM :test_email
+        WHERE {exclusion_clause}
           AND acted_by_email IS NOT NULL
         GROUP BY acted_by_email
         ORDER BY total DESC
     """), params)).all()
 
-    pair_rows = (await db.execute(text("""
+    pair_rows = (await db.execute(text(f"""
         SELECT ai_bucket || '→' || human_bucket AS pair, COUNT(*) AS n
         FROM assessment_overrides
         WHERE trigger IN ('override','re-override')
-          AND acted_by_email IS DISTINCT FROM :test_email
+          AND {exclusion_clause}
         GROUP BY 1 ORDER BY 2 DESC
     """), params)).all()
 
@@ -259,5 +263,5 @@ async def calibration_stats(
             for r in partner_rows
         ],
         disagreement_pairs={r[0]: r[1] for r in pair_rows},
-        excluded_test_account=_TEST_ACCOUNT_EMAIL,
+        excluded_test_accounts=excluded_emails,
     )

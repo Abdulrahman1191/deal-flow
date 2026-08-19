@@ -43,7 +43,7 @@ export interface CalibrationStats {
   agreement_over_time: WeeklyAgreement[];
   partner_profiles: PartnerProfile[];
   disagreement_pairs: Record<string, number>;
-  excluded_test_account: string;
+  excluded_test_accounts: string[];
 }
 
 export const fetchCalibrationStats = () =>

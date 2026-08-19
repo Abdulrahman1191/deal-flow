@@ -100,8 +100,8 @@ export default function CalibrationPage() {
       <div>
         <h1 className="text-xl font-semibold text-foreground">Calibration</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Is the AI getting better, and which partners rate carefully? Excludes the QA test
-          account ({stats.excluded_test_account}).
+          Is the AI getting better, and which partners rate carefully? Excludes QA/test
+          accounts ({stats.excluded_test_accounts.join(", ")}).
         </p>
       </div>
 

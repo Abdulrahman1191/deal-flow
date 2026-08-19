@@ -143,7 +143,7 @@ def test_calibration_endpoint_assembles_all_sections():
     assert body["agreements"] == 7
     assert body["disagreements"] == 3
     assert body["agreement_rate"] == 0.7
-    assert body["excluded_test_account"] == "almuhammed@raed.vc"
+    assert body["excluded_test_accounts"] == sorted(settings.non_client_facing_email_set())
 
     assert len(body["agreement_over_time"]) == 2
     assert body["agreement_over_time"][0]["total"] == 4
@@ -230,8 +230,58 @@ def test_calibration_excludes_test_account_in_every_query():
     assert response.status_code == 200
     assert len(session.queries) == 4
     for sql, params in zip(session.queries, session.params):
-        assert "IS DISTINCT FROM :test_email" in sql
-        assert params == {"test_email": "almuhammed@raed.vc"}
+        assert "NOT IN (:excl_email0)" in sql
+        assert params == {"excl_email0": "almuhammed@raed.vc"}
+
+
+def test_calibration_excludes_multiple_test_accounts_in_every_query(monkeypatch):
+    """issue #127 fix-round-1: the exclusion set must be data-driven off
+    settings.non_client_facing_email_set() -- adding a second test/engineer
+    account there (the exact mechanism the issue introduces) must exclude it
+    from every calibration aggregate too, not just the one hardcoded email."""
+    monkeypatch.setattr(
+        settings, "non_client_facing_emails", "almuhammed@raed.vc,arsalan@raed.vc"
+    )
+    overall_row = (0, 0, 0)
+
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([overall_row, [], [], []])
+    try:
+        response = client.get("/api/v1/overrides/calibration")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    assert response.json()["excluded_test_accounts"] == ["almuhammed@raed.vc", "arsalan@raed.vc"]
+    assert len(session.queries) == 4
+    for sql, params in zip(session.queries, session.params):
+        assert "NOT IN (:excl_email0, :excl_email1)" in sql
+        assert params == {
+            "excl_email0": "almuhammed@raed.vc",
+            "excl_email1": "arsalan@raed.vc",
+        }
+
+
+def test_calibration_exclusion_set_empty_does_not_break_query(monkeypatch):
+    """An empty NON_CLIENT_FACING_EMAILS must not produce invalid SQL like
+    `NOT IN ()` -- falls back to including everything."""
+    monkeypatch.setattr(settings, "non_client_facing_emails", "")
+    overall_row = (0, 0, 0)
+
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([overall_row, [], [], []])
+    try:
+        response = client.get("/api/v1/overrides/calibration")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    assert response.json()["excluded_test_accounts"] == []
+    for sql, params in zip(session.queries, session.params):
+        assert "NOT IN" not in sql
+        assert params == {}
 
 
 def test_calibration_overall_rate_none_when_no_rows():

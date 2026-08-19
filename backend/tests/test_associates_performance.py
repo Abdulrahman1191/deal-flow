@@ -1,6 +1,8 @@
 """
 Tests for GET /associates/performance — the GP dashboard backend (issue
-#125): per-associate lead-management throughput counts.
+#125), and its data-driven roster (issue #127): the associate list comes
+from settings.client_facing_email_list() (TEAM_EMAILS minus
+NON_CLIENT_FACING_EMAILS), not a hardcoded list.
 
 Same fake-session pattern as test_overrides_calibration.py: no live Postgres
 in this suite. A recording session returns canned rows shaped exactly like
@@ -15,13 +17,13 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.database import get_db
 from app.main import app
-from app.routers.associates import ASSOCIATE_EMAILS
 from app.services.auth import get_current_user
 
 client = TestClient(app)
 
 OWNER_EMAIL = settings.owner_email
 NON_ADMIN_EMAIL = "waleed@raed.vc"
+ASSOCIATE_EMAILS = ["abdulrahman@raed.vc", "waleed@raed.vc", "uday@raed.vc", "yomna@raed.vc"]
 
 
 class _FakeResult:
@@ -69,7 +71,14 @@ def _clear_db():
     app.dependency_overrides.pop(get_db, None)
 
 
-def test_non_admin_gets_403():
+def _set_roster(monkeypatch, team_emails, non_client_facing=None):
+    monkeypatch.setattr(settings, "team_emails", team_emails)
+    if non_client_facing is not None:
+        monkeypatch.setattr(settings, "non_client_facing_emails", non_client_facing)
+
+
+def test_non_admin_gets_403(monkeypatch):
+    _set_roster(monkeypatch, ",".join(ASSOCIATE_EMAILS))
     _auth_as(NON_ADMIN_EMAIL)
     _use_db([])
     try:
@@ -81,7 +90,8 @@ def test_non_admin_gets_403():
     assert response.status_code == 403
 
 
-def test_returns_the_four_associates_not_almuhammed():
+def test_returns_the_four_associates_not_almuhammed(monkeypatch):
+    _set_roster(monkeypatch, ",".join(ASSOCIATE_EMAILS) + ",almuhammed@raed.vc")
     rows = [
         ("abdulrahman@raed.vc", 10, 2, 1, 3, 4, 2, 1, 1),
         ("waleed@raed.vc", 5, 1, 0, 2, 2, 1, 0, 1),
@@ -109,7 +119,47 @@ def test_returns_the_four_associates_not_almuhammed():
         assert "almuhammed@raed.vc" not in params.values()
 
 
-def test_correct_counts_for_present_associate():
+def test_new_team_member_appears_automatically(monkeypatch):
+    """issue #127: adding a member to TEAM_EMAILS (and not excluding them)
+    must make them appear here with no code change."""
+    _set_roster(monkeypatch, ",".join(ASSOCIATE_EMAILS) + ",arsalan@raed.vc")
+
+    _auth_as(OWNER_EMAIL)
+    _use_db([[]])
+    try:
+        response = client.get("/api/v1/associates/performance")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    emails = [a["email"] for a in response.json()["associates"]]
+    assert "arsalan@raed.vc" in emails
+
+
+def test_excluded_member_does_not_appear(monkeypatch):
+    """A TEAM_EMAILS member added to NON_CLIENT_FACING_EMAILS must not show
+    up, even though they're still a valid provisioned/synced user."""
+    _set_roster(
+        monkeypatch,
+        ",".join(ASSOCIATE_EMAILS) + ",arsalan@raed.vc",
+        non_client_facing="almuhammed@raed.vc,arsalan@raed.vc",
+    )
+
+    _auth_as(OWNER_EMAIL)
+    _use_db([[]])
+    try:
+        response = client.get("/api/v1/associates/performance")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    emails = [a["email"] for a in response.json()["associates"]]
+    assert "arsalan@raed.vc" not in emails
+    assert emails == ASSOCIATE_EMAILS
+
+
+def test_correct_counts_for_present_associate(monkeypatch):
+    _set_roster(monkeypatch, ",".join(ASSOCIATE_EMAILS))
     rows = [
         ("abdulrahman@raed.vc", 10, 2, 1, 3, 4, 2, 1, 1),
     ]
@@ -135,7 +185,8 @@ def test_correct_counts_for_present_associate():
     assert abdulrahman["archived"] == 1
 
 
-def test_zero_fills_associates_with_no_leads():
+def test_zero_fills_associates_with_no_leads(monkeypatch):
+    _set_roster(monkeypatch, ",".join(ASSOCIATE_EMAILS))
     _auth_as(OWNER_EMAIL)
     _use_db([[]])
     try:
