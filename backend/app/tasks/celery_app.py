@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership"],
 )
 
 celery.conf.update(
@@ -32,6 +32,14 @@ celery.conf.update(
         "drain-copper-outbox": {
             "task": "app.tasks.drain_outbox.drain_copper_outbox_task",
             "schedule": 30.0,  # every 30 seconds
+        },
+        # Firm-wide, status-agnostic ownership reconcile against Copper's
+        # current assignee_id (issue #123). Closes the gap left by
+        # sync-copper-leads above, which only reassigns leads Copper reports
+        # as open-status-assigned to an actively-synced user.
+        "reconcile-ownership": {
+            "task": "app.tasks.reconcile_ownership.reconcile_ownership_task",
+            "schedule": 900.0,  # every 15 minutes
         },
         # Collapse duplicate-name leads automatically (archives extras, reversible).
         # Runs daily at 02:00 UTC; also safe to run the CLI (scripts/dedupe_leads.py)
