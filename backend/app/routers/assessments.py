@@ -551,6 +551,7 @@ async def reassess(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     lead.status = "pending"
+    lead.assessment_attempts = 0
     await db.commit()
     assess_lead_task.delay(lead_id)
     return {"status": "queued"}
