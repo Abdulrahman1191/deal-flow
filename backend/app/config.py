@@ -109,6 +109,19 @@ class Settings(BaseSettings):
     # above a normal assessment's runtime so an in-flight lead is never reaped.
     assessment_reap_after_minutes: int = 20
 
+    # --- Copper outbox re-drive (issue #131) ---
+    # A Copper write-back that exhausts drain_outbox's 5 delivery attempts
+    # lands in status='failed' and would otherwise never be retried again --
+    # a transient Copper outage permanently strands it. redrive_failed_outbox_task
+    # resets failed rows back to 'pending' at most this many times each
+    # (tracked per-row via copper_outbox.redrive_count); rows past the cap
+    # stay 'failed' for good (genuinely undeliverable), still visible via
+    # GET /leads/outbox-health (issue #65).
+    outbox_max_redrives: int = 3
+    # How often (seconds) redrive_failed_outbox_task runs -- see the
+    # "redrive-failed-copper-outbox" beat schedule entry in celery_app.py.
+    outbox_redrive_interval_seconds: int = 1800  # 30 minutes
+
     # --- Owner / identity ---
     # Email that gets owner-level access to Portfolio + Feedback tabs.
     # On the platform, this is the @raed.vc identity. Falls back to legacy

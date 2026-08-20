@@ -24,6 +24,10 @@ class CopperOutbox(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
     last_error: Mapped[Optional[str]] = mapped_column(Text)
+    # Incremented each time redrive_failed_outbox_task resets this row from
+    # 'failed' back to 'pending' (issue #131). Capped at settings.outbox_max_redrives
+    # so a genuinely-undeliverable row doesn't loop forever.
+    redrive_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
