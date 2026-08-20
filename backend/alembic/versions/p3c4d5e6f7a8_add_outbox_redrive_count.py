@@ -8,8 +8,8 @@ resets a failed row back to 'pending'; once it reaches
 settings.outbox_max_redrives the row is left 'failed' for good instead of
 looping forever.
 
-Revision ID: o2b3c4d5e6f7
-Revises: n1a2b3c4d5e6
+Revision ID: p3c4d5e6f7a8
+Revises: o2b3c4d5e6f7
 Create Date: 2026-08-20
 
 """
@@ -19,8 +19,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "o2b3c4d5e6f7"
-down_revision: Union[str, None] = "n1a2b3c4d5e6"
+revision: str = "p3c4d5e6f7a8"
+down_revision: Union[str, None] = "o2b3c4d5e6f7"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

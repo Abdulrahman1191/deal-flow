@@ -38,6 +38,12 @@ Two guards keep a single run from doing something silly:
   pydantic would coerce from an empty env var) would otherwise make *every*
   pending/processing lead -- including ones queued a second ago -- look
   stale. Falls back to DEFAULT_REAP_AFTER_MINUTES instead.
+
+A lead that assess_lead_task has dead-lettered to 'failed' after exceeding
+MAX_ASSESS_ATTEMPTS (issue #129, see app/tasks/assess_lead.py) is never
+re-enqueued by this reaper: REAP_STATUSES only matches 'processing'/'pending',
+so a 'failed' lead falls straight out of the query above. This is what keeps
+a poison lead from being re-armed into another crash loop.
 """
 import asyncio
 from datetime import datetime, timedelta, timezone

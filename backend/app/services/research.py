@@ -6,6 +6,7 @@ results cover public web including Crunchbase, LinkedIn public pages, news.
 from __future__ import annotations
 import ipaddress
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 from tavily import TavilyClient
@@ -14,12 +15,26 @@ from app.config import settings
 
 _client = None
 
+# research_company() fires up to ~8 of these sequentially, so each one needs a
+# bound well under assess_lead_task's soft_time_limit=240 (issue #129). The
+# tavily-python SDK doesn't expose a timeout param on search(), so this
+# enforces a hard wall-clock cap from the outside: a stalled request keeps
+# running in its own thread but this call returns/raises promptly either way,
+# instead of hanging the assessment indefinitely.
+_SEARCH_TIMEOUT_SECONDS = 15
+_search_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tavily-search")
+
 
 def _get_client() -> TavilyClient:
     global _client
     if _client is None:
         _client = TavilyClient(api_key=settings.tavily_api_key)
     return _client
+
+
+def _tavily_search(*args, **kwargs):
+    future = _search_executor.submit(_get_client().search, *args, **kwargs)
+    return future.result(timeout=_SEARCH_TIMEOUT_SECONDS)
 
 
 def _is_public_host(hostname: str) -> bool:
@@ -121,7 +136,7 @@ def find_linkedin_via_llm_search(
     query = " ".join(p for p in query_parts if p).strip()
 
     try:
-        r = _get_client().search(query, max_results=10)
+        r = _tavily_search(query, max_results=10)
     except Exception as e:
         print(f"[linkedin-llm] tavily search failed: {e!r}")
         return None
@@ -229,7 +244,7 @@ def research_company(lead: dict) -> dict:
     results = {}
     for q in queries:
         try:
-            r = _get_client().search(q, max_results=5, include_answer=True)
+            r = _tavily_search(q, max_results=5, include_answer=True)
             results[q] = r
         except Exception as e:
             results[q] = {"error": str(e)}
@@ -250,7 +265,7 @@ def research_briefing_topics(date_str: str) -> dict:
     results = {}
     for q in queries:
         try:
-            r = _get_client().search(q, max_results=5, include_answer=True)
+            r = _tavily_search(q, max_results=5, include_answer=True)
             results[q] = r
         except Exception as e:
             results[q] = {"error": str(e)}
