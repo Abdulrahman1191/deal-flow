@@ -17,6 +17,30 @@ celery.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    task_default_queue="default",
+    # Queue isolation (issue #129): a hung/OOMing assessment must never be able
+    # to wedge Copper sync/write-backs by taking the worker process down with it.
+    # `heavy` carries the crash-prone AI work (assessment + deck ingestion/OCR);
+    # `default` carries lightweight CRM plumbing that has to stay responsive
+    # regardless of what's happening on `heavy`.
+    #
+    # DEPLOYMENT: this repo/agent can't edit the Dockerfile or process manager,
+    # so this only takes effect once whoever manages process config runs TWO
+    # worker processes instead of one:
+    #   celery -A app.tasks.celery_app worker -Q heavy   --concurrency=1  (higher memory limit)
+    #   celery -A app.tasks.celery_app worker -Q default --concurrency=<as today>
+    # Until both are running, a single worker consuming both queues still
+    # works (Celery just interleaves them) but doesn't get the isolation.
+    task_routes={
+        "app.tasks.assess_lead.*": {"queue": "heavy"},
+        "app.tasks.sync_pitch_decks.*": {"queue": "heavy"},  # Drive/OCR deck ingestion
+        "app.tasks.sync_copper.*": {"queue": "default"},
+        "app.tasks.drain_outbox.*": {"queue": "default"},
+        "app.tasks.reap_stuck_leads.*": {"queue": "default"},
+        "app.tasks.reconcile_ownership.*": {"queue": "default"},
+        "app.tasks.dedupe_leads.*": {"queue": "default"},
+        "app.tasks.generate_briefing.*": {"queue": "default"},
+    },
     beat_schedule={
         "daily-briefing": {
             "task": "app.tasks.generate_briefing.generate_all_briefings_task",

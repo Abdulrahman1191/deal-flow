@@ -78,12 +78,22 @@ def _substitute_name(data: dict, name: Optional[str] = None) -> None:
 _client = None
 
 
+
+# A stalled DeepSeek call must not be able to hang the whole assessment --
+# issue #129: assess_lead_task now has a soft_time_limit=240 budget for the
+# entire task, and this pipeline can make more than one sequential call
+# (linkedin discovery + the assessment itself), so each call gets its own
+# bounded slice of that budget rather than an unbounded default.
+_REQUEST_TIMEOUT_SECONDS = 60.0
+
+
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
         _client = OpenAI(
             api_key=settings.deep_seek_api,
             base_url="https://api.deepseek.com",
+            timeout=_REQUEST_TIMEOUT_SECONDS,
         )
     return _client
 

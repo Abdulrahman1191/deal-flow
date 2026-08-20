@@ -53,6 +53,13 @@ class Lead(Base):
     # API response.
     prior_contact_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), default="pending")
+    # Per-lead assess_lead_task attempt counter (issue #129). Incremented at
+    # the start of every attempt -- including worker-lost redeliveries, which
+    # bypass Celery's own max_retries -- and reset to 0 on a clean outcome
+    # (assessed / awaiting_deck). Once it exceeds MAX_ASSESS_ATTEMPTS the task
+    # dead-letters the lead to 'failed' instead of running again, so a lead
+    # that reliably crashes the worker can't loop forever.
+    assessment_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
