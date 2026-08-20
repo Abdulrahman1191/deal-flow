@@ -3,7 +3,7 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 
-from celery.exceptions import MaxRetriesExceededError
+from celery.exceptions import MaxRetriesExceededError, SoftTimeLimitExceeded
 from sqlalchemy import select, text
 
 from app.database import CelerySessionLocal
@@ -14,6 +14,13 @@ from app.services import claude_agent, research
 from app.services import copper_writer
 from app.services.events import EVENT_ASSESSED, EVENT_AWAITING_DECK, log_event
 from app.tasks.celery_app import celery
+
+# Bounds the worker-crash-loop (issue #129): acks_late + task_reject_on_worker_lost
+# redelivers a task that crashes the worker forever, bypassing Celery's own
+# max_retries (worker-lost redeliveries never touch self.request.retries). Once
+# a lead's assessment_attempts counter exceeds this, the task dead-letters it
+# to 'failed' instead of running again.
+MAX_ASSESS_ATTEMPTS = 3
 
 
 def _mark_failed(lead_id: str, error: str) -> None:
@@ -32,14 +39,47 @@ def _mark_failed(lead_id: str, error: str) -> None:
     print(f"[assess_lead] marked lead {lead_id} as failed: {error}")
 
 
+def _increment_attempts(lead_id: str) -> int:
+    """Sync DB write: atomically bump leads.assessment_attempts and return the
+    new count. Called at the very start of every task attempt -- including a
+    worker-lost redelivery of a task that just OOM'd/hard-killed the worker --
+    so the counter survives regardless of whether this same attempt goes on to
+    crash the worker again."""
+    from sqlalchemy import create_engine
+    from app.config import settings
+
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(settings.database_url)
+    engine = create_engine(url, connect_args=connect_args)
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "UPDATE leads SET assessment_attempts = assessment_attempts + 1 "
+                "WHERE id=:lid RETURNING assessment_attempts"
+            ),
+            {"lid": lead_id},
+        ).first()
+    return row[0] if row else 0
+
+
 @celery.task(
     bind=True,
     max_retries=3,
     default_retry_delay=60,
     acks_late=True,
     task_reject_on_worker_lost=True,
+    # A hung DeepSeek/Tavily call must fail the task cleanly instead of SIGKILL-ing
+    # the whole worker: soft raises SoftTimeLimitExceeded inside the task (caught
+    # below) with 60s of headroom to unwind before Celery force-kills it at hard.
+    soft_time_limit=240,
+    time_limit=300,
 )
 def assess_lead_task(self, lead_id: str) -> dict:
+    attempts = _increment_attempts(lead_id)
+    if attempts > MAX_ASSESS_ATTEMPTS:
+        error = f"exceeded {MAX_ASSESS_ATTEMPTS} assessment attempts (attempt #{attempts})"
+        _mark_failed(lead_id, error)
+        return {"lead_id": lead_id, "status": "failed", "error": error}
+
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -47,6 +87,9 @@ def assess_lead_task(self, lead_id: str) -> dict:
             return loop.run_until_complete(_run(lead_id))
         finally:
             loop.close()
+    except SoftTimeLimitExceeded as exc:
+        _mark_failed(lead_id, repr(exc))
+        return {"lead_id": lead_id, "status": "failed", "error": "soft time limit exceeded"}
     except MaxRetriesExceededError as exc:
         _mark_failed(lead_id, repr(exc))
         return {"lead_id": lead_id, "status": "failed", "error": "max retries exceeded"}
@@ -71,6 +114,7 @@ async def _run(lead_id: str) -> dict:
         # set, at which point this gate passes and the lead scores normally.
         if not lead.pitch_deck_text:
             lead.status = "awaiting_deck"
+            lead.assessment_attempts = 0
             await log_event(db, lead.id, EVENT_AWAITING_DECK)
             await db.commit()
             return {"lead_id": lead_id, "status": "awaiting_deck"}
@@ -175,6 +219,7 @@ async def _run(lead_id: str) -> dict:
 
         if lead.status != "archived":
             lead.status = "assessed"
+        lead.assessment_attempts = 0
         await log_event(
             db,
             lead.id,

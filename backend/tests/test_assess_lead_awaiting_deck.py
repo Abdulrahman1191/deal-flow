@@ -80,6 +80,10 @@ def _fake_lead(pitch_deck_text=None, status="pending", owner_email=None):
         copper_id=None,
         raw_copper_data=None,
         owner_email=owner_email,
+        # Nonzero so tests can assert _run() resets it on a clean outcome
+        # (issue #129) -- a lead that eventually succeeds must not stay
+        # poisoned by earlier transient-failure attempts.
+        assessment_attempts=2,
     )
 
 
@@ -100,6 +104,7 @@ def test_gate_parks_deckless_lead_without_scoring(monkeypatch):
 
     assert result == {"lead_id": str(lead.id), "status": "awaiting_deck"}
     assert lead.status == "awaiting_deck"
+    assert lead.assessment_attempts == 0
     # No AssessmentCard is created or touched -- only the LeadEvent is added.
     assert len(session.added) == 1
     event = session.added[0]
@@ -155,6 +160,7 @@ def test_lead_with_deck_text_scores_normally_and_lands_on_assessed(monkeypatch):
     result = asyncio.run(assess_lead._run(str(lead.id)))
 
     assert lead.status == "assessed"
+    assert lead.assessment_attempts == 0
     assert result["bucket"] == "YES"
     assert result["confidence_score"] == 82
     # A card was created (added) since none existed yet.

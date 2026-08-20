@@ -188,6 +188,7 @@ async def ingest_lead(
 
         if material_change and lead.status not in ("archived", "approved"):
             lead.status = "pending"
+            lead.assessment_attempts = 0
             await db.commit()
             assess_lead_task.delay(str(lead.id))
             return {"lead_id": str(lead.id), "status": "synced_and_reassessing"}
