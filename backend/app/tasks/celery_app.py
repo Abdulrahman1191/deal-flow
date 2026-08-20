@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox"],
 )
 
 celery.conf.update(
@@ -69,6 +69,15 @@ celery.conf.update(
         "reap-stuck-leads": {
             "task": "app.tasks.reap_stuck_leads.reap_stuck_leads_task",
             "schedule": 600.0,  # every 10 minutes
+        },
+        # Self-healing backstop for copper_outbox rows that exhausted
+        # drain_copper_outbox_task's 5 delivery attempts (issue #131): resets
+        # 'failed' rows back to 'pending' so a transient Copper outage doesn't
+        # permanently strand a write-back. Bounded by
+        # settings.outbox_max_redrives per row -- see app/tasks/redrive_outbox.py.
+        "redrive-failed-copper-outbox": {
+            "task": "app.tasks.redrive_outbox.redrive_failed_outbox_task",
+            "schedule": settings.outbox_redrive_interval_seconds,
         },
     },
 )
