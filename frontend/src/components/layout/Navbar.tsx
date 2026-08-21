@@ -11,6 +11,9 @@ const baseTabs = [
   { id: "framework", label: "Framework" },
   { id: "archive", label: "Archive" },
   { id: "awaiting_deck", label: "Awaiting Deck" },
+  // Not owner-gated: pipeline health carries no lead data, ADMIN_EMAILS is a
+  // two-person list, and an incident nobody can see is how August went.
+  { id: "system", label: "System" },
 ] as const;
 
 export default function Navbar() {

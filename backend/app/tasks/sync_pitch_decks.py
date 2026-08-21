@@ -53,7 +53,7 @@ from app.database import CelerySessionLocal
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
 from app.services.copper_service import fetch_lead_by_id
-from app.services import deck_cache
+from app.services import deck_cache, task_guard
 from app.services.pitch_deck import (
     MATCH_THRESHOLD,
     extract_text_from_pdf,
@@ -577,10 +577,25 @@ async def sync_lead_pitch_deck(db: AsyncSession, lead: Lead, *, force: bool = Fa
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=120)
-def sync_pitch_decks_task(self) -> dict:
+def sync_pitch_decks_task(self, force: bool = False) -> dict:
+    """Beat task: sweep the Drive pitch-deck folder.
+
+    `force=True` bypasses the minimum-interval guard for an operator-triggered
+    run (`sync_pitch_decks_task.delay(force=True)`). Queued messages carry no
+    arguments, so a backlog enqueued before this parameter existed still
+    deserialises fine and is subject to the guard.
+    """
     if not settings.google_service_account_json:
         print("[sync_pitch_decks] GOOGLE_SERVICE_ACCOUNT_JSON not set; skipping")
         return {"skipped": "GOOGLE_SERVICE_ACCOUNT_JSON not set"}
+
+    name = "app.tasks.sync_pitch_decks.sync_pitch_decks_task"
+    since = task_guard.should_skip(name, settings.deck_sweep_min_interval_seconds, force=force)
+    if since is not None:
+        print(f"[sync_pitch_decks] last full sweep was {since:.0f}s ago; skipping duplicate")
+        return {"skipped": "ran recently", "seconds_since_last_run": round(since)}
+    task_guard.mark_ran(name)
+
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -593,16 +608,26 @@ def sync_pitch_decks_task(self) -> dict:
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=120)
-def sync_copper_pitch_deck_links_task(self) -> dict:
+def sync_copper_pitch_deck_links_task(self, force: bool = False) -> dict:
     """Beat task: sweep deckless leads for a Drive link in Copper's own
     "Pitch Deck" URL field. No-ops until both GOOGLE_SERVICE_ACCOUNT_JSON and
-    COPPER_CF_PITCH_DECK_URL_ID are configured."""
+    COPPER_CF_PITCH_DECK_URL_ID are configured.
+
+    `force=True` bypasses the minimum-interval guard (see sync_pitch_decks_task)."""
     if not settings.google_service_account_json:
         print("[sync_pitch_decks][copper_link] GOOGLE_SERVICE_ACCOUNT_JSON not set; skipping")
         return {"skipped": "GOOGLE_SERVICE_ACCOUNT_JSON not set"}
     if not settings.copper_cf_pitch_deck_url_id:
         print("[sync_pitch_decks][copper_link] COPPER_CF_PITCH_DECK_URL_ID not set; skipping")
         return {"skipped": "COPPER_CF_PITCH_DECK_URL_ID not set"}
+
+    name = "app.tasks.sync_pitch_decks.sync_copper_pitch_deck_links_task"
+    since = task_guard.should_skip(name, settings.deck_sweep_min_interval_seconds, force=force)
+    if since is not None:
+        print(f"[sync_pitch_decks][copper_link] last full sweep was {since:.0f}s ago; skipping duplicate")
+        return {"skipped": "ran recently", "seconds_since_last_run": round(since)}
+    task_guard.mark_ran(name)
+
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

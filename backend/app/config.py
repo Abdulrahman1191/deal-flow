@@ -96,6 +96,20 @@ class Settings(BaseSettings):
     # no behavior change to the existing high-confidence auto-attach path).
     deck_match_verify_enabled: bool = True
 
+    # --- Deck-sweep minimum interval ---
+    # Both deck sweeps run on a 1800s beat schedule. Beat enqueues them on that
+    # interval regardless of whether the previous one is still queued, and the
+    # workers are --pool=solo, so a sweep that runs longer than its interval
+    # makes the `heavy` queue grow without bound: 59 sync_pitch_decks and 40
+    # sync_copper_pitch_deck_links tasks were queued on 2026-08-21, ~29 hours
+    # of accumulation. A duplicate sweep re-lists the same Drive folder and
+    # re-verifies the same unmatched filenames, so it is waste, not redundancy.
+    #
+    # Below the 1800s schedule on purpose: a legitimately-scheduled run must
+    # never be skipped for clock jitter or a slightly-early beat tick. Set to 0
+    # to disable the guard entirely. See app/services/task_guard.py.
+    deck_sweep_min_interval_seconds: int = 1500
+
     # --- Pitch-deck LLM extraction (replaces the OCR fallback of issue #97) ---
     # Gate for the multimodal-LLM tier in extract_text_from_pdf (app/services/
     # deck_llm.py). Off -> scanned/image-only decks stay empty and get flagged,
