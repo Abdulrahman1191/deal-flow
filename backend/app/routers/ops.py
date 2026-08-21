@@ -105,11 +105,19 @@ class OpsOut(BaseModel):
 
 
 def _age_seconds(iso: Optional[str], now: datetime) -> Optional[float]:
-    """Seconds since an ISO timestamp, or None if absent/unparseable."""
+    """Seconds since an ISO timestamp, or None if absent/unparseable.
+
+    Clamped at zero. Heartbeats are written by the worker containers and read
+    by the app container, whose clocks drift by milliseconds, so a just-written
+    timestamp is routinely a fraction of a second in the future -- prod
+    returned -0.33 immediately after a deploy. A negative age is meaningless to
+    every caller and renders as "drained -0s ago", so it is squashed here
+    rather than in each of them.
+    """
     if not iso:
         return None
     try:
-        return (now - datetime.fromisoformat(iso)).total_seconds()
+        return max(0.0, (now - datetime.fromisoformat(iso)).total_seconds())
     except Exception:
         return None
 
