@@ -62,6 +62,39 @@ services:
     depends_on:
       - redis
 
+  # Dedicated consumer for the `heavy` queue (assessments + pitch-deck sweeps).
+  # PR #130 (deployed 2026-08-20 11:05) routes app.tasks.assess_lead.* and
+  # app.tasks.sync_pitch_decks.* to `heavy`, but the `worker` service above
+  # consumes only `default` (no -Q, so it takes task_default_queue). Nothing
+  # drained `heavy`: 125 tasks / 20 leads stranded and every assessment stalled
+  # from 11:05 onward while Copper sync kept working. This service is the
+  # process half of that change, and it lived only as an uncommitted edit on the
+  # prod host until now -- one `raed-redeploy` (git reset --hard) would have
+  # silently reinstated the stall.
+  #
+  # Deliberately NO --beat: exactly one scheduler may run, and it lives in the
+  # `worker` service. A second --beat would double-fire every periodic task.
+  worker-heavy:
+    image: deal-flow-worker
+    build: .
+    container_name: ${APP_NAME}-worker-heavy
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A app.tasks.celery_app.celery worker -Q heavy --loglevel=info --pool=solo -n heavy@%h
+    healthcheck:
+      disable: true
+    # Same ceiling as `worker`, for the same reason: assessments are the
+    # CPU/memory-hungry tier and must never starve the host.
+    cpus: 2.0
+    mem_limit: 3g
+    networks:
+      - internal
+    depends_on:
+      - redis
+
   redis:
     image: redis:7-alpine
     container_name: ${APP_NAME}-redis
