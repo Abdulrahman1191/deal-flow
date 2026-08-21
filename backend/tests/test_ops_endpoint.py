@@ -229,6 +229,38 @@ class TestStallDetection:
         assert body["redis_reachable"] is True
 
 
+class TestClockSkew:
+    """The app and worker containers keep separate clocks.
+
+    A heartbeat written moments ago is routinely a fraction of a second in the
+    future from the reader's point of view -- prod returned -0.33s right after a
+    deploy, which renders as "drained -0s ago".
+    """
+
+    def test_a_future_timestamp_reads_as_zero_not_negative(self, monkeypatch):
+        ahead = (datetime.now(timezone.utc) + timedelta(seconds=0.5)).isoformat()
+        body = _get(
+            monkeypatch,
+            depths={
+                "default": {"depth": 0, "backlog": [], "sampled": 0},
+                "heavy": {"depth": 4, "backlog": [], "sampled": 4},
+            },
+            consumers=BOTH_CONSUMED,
+            heartbeats={
+                "app.tasks.sync_pitch_decks.sync_pitch_decks_task": {
+                    "at": ahead, "state": "SUCCESS", "runtime_seconds": 1.0,
+                },
+            },
+        )
+
+        heavy = next(q for q in body["queues"] if q["name"] == "heavy")
+        assert heavy["seconds_since_completion"] == 0.0
+
+        task = next(t for t in body["tasks"] if t["schedule_name"] == "sync-pitch-decks")
+        assert task["seconds_since"] == 0.0
+        assert task["stale"] is False
+
+
 class TestRedisReachability:
     def test_depth_none_means_unreachable_not_empty(self, monkeypatch):
         body = _get(
