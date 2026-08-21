@@ -6,7 +6,8 @@ export interface OpsQueue {
   backlog: { task: string; count: number }[];
   sampled: number;
   consumers: string[] | null;
-  no_consumer: boolean;
+  stalled: boolean;
+  seconds_since_completion: number | null;
 }
 
 export interface OpsTask {
@@ -27,6 +28,7 @@ export interface OpsStatus {
   generated_at: string;
   redis_reachable: boolean;
   workers_reachable: boolean;
+  observing_seconds: number | null;
   queues: OpsQueue[];
   unacked: number | null;
   tasks: OpsTask[];

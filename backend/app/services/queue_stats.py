@@ -129,19 +129,24 @@ def unacked_count() -> Optional[int]:
 
 
 def consumers_by_queue() -> Optional[dict]:
-    """{queue: [worker names]} for the workers currently consuming it.
+    """{queue: [worker names]} for the workers that ANSWERED a control ping.
 
-    This is the check that would have caught 2026-08-20 outright: `heavy` had
-    tasks and no consumer, because the running worker had no -Q and therefore
-    subscribed to `default` only. Depth alone looked like a busy day.
+    INFORMATIONAL ONLY -- never treat an absence here as proof of absence.
 
-    Returns None when the workers can't be reached at all (broker down, or no
-    worker running) -- which is itself distinct from {} and is reported as
-    such rather than being flattened into "no consumers".
+    Both workers run --pool=solo, which executes tasks in the main thread, so a
+    worker cannot serve control broadcasts while it is running a task. Measured
+    on prod 2026-08-21: `deal-flow-worker-heavy` did not answer `inspect
+    active_queues` even at a 15-second timeout, because it is essentially never
+    idle -- while `platform@` (short tasks, mostly idle) answered instantly. A
+    consumer check built on this alone reports a permanent false alarm on the
+    one queue that matters most.
 
-    Uses a broadcast ping with a short timeout: workers answer in single-digit
-    milliseconds on a local broker, and a slow/absent worker must degrade this
-    endpoint to "unknown", never hang it.
+    So this is displayed as corroboration and nothing else; whether a queue is
+    actually being drained is decided by real task completions -- see
+    routers/ops.py, which requires BOTH signals before it claims a stall.
+
+    Returns None when nothing answered at all, which is distinct from {} and
+    must not be flattened into "no consumers".
     """
     try:
         active = celery.control.inspect(timeout=1.0).active_queues()
