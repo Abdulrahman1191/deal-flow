@@ -105,3 +105,62 @@ celery.conf.update(
         },
     },
 )
+
+
+# ---------------------------------------------------------------------------
+# Task heartbeats (GET /api/v1/ops/queues)
+#
+# Recorded via signals rather than in each task body so coverage cannot rot: a
+# task added later is reported without its author remembering to. The handlers
+# are deliberately trivial and swallow everything -- observability must never
+# be able to fail the work it is observing.
+#
+# Timing is kept per task id, not in a single variable, because the `default`
+# worker interleaves several short tasks and a bare start-time would be
+# overwritten between prerun and postrun.
+# ---------------------------------------------------------------------------
+from celery.signals import task_postrun, task_prerun  # noqa: E402
+
+_started_at: dict = {}
+
+
+@task_prerun.connect
+def _record_task_start(task_id=None, task=None, **_kwargs):
+    import time
+
+    try:
+        _started_at[task_id] = time.monotonic()
+    except Exception:
+        pass
+
+
+@task_postrun.connect
+def _record_task_end(task_id=None, task=None, state=None, retval=None, **_kwargs):
+    import time
+
+    try:
+        from app.services import task_heartbeat
+
+        started = _started_at.pop(task_id, None)
+        runtime = (time.monotonic() - started) if started is not None else None
+
+        # A task that returned {"skipped": ...} ran fine but did no work. Saying
+        # "success" there would let a permanently-skipping task (a missing env
+        # var, say) look perfectly healthy forever, which is precisely the class
+        # of silent failure this endpoint exists to expose.
+        reported = state
+        if state == "SUCCESS" and isinstance(retval, dict) and retval.get("skipped"):
+            reported = "SKIPPED"
+
+        # On FAILURE, Celery passes the exception itself as retval -- keeping a
+        # trimmed string of it means the status line says WHY, not just "broken".
+        error = str(retval) if state == "FAILURE" and retval is not None else None
+
+        task_heartbeat.record(
+            getattr(task, "name", "") or "",
+            state=reported or "UNKNOWN",
+            runtime_seconds=runtime,
+            error=error,
+        )
+    except Exception:
+        pass

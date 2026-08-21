@@ -8,6 +8,7 @@ import AwaitingDeckPage from "./pages/AwaitingDeckPage";
 import FeedbackInboxPage from "./pages/FeedbackInboxPage";
 import CalibrationPage from "./pages/CalibrationPage";
 import AssociatesPage from "./pages/AssociatesPage";
+import SystemPage from "./pages/SystemPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
 import ErrorBoundary from "./components/shared/ErrorBoundary";
 import useAppStore from "./store/useAppStore";
@@ -78,6 +79,11 @@ function Dashboard() {
           {activeTab === "associates" && (
             <div className="h-full overflow-y-auto animate-fade-in">
               <AssociatesPage />
+            </div>
+          )}
+          {activeTab === "system" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <SystemPage />
             </div>
           )}
         </ErrorBoundary>
