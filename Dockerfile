@@ -31,10 +31,12 @@ WORKDIR /app
 # System deps:
 #   libpq-dev/gcc — psycopg2 build
 #   curl          — platform healthcheck
-#   tesseract-ocr (+ -ara) — OCR fallback for scanned / broken-CMap Arabic decks
+# Tesseract (tesseract-ocr / -ara) was removed 2026-08-18: scanned and
+# broken-CMap Arabic decks now go to a multimodal LLM instead (see
+# backend/app/services/deck_llm.py), which is a network call rather than
+# minutes of multi-core CPU inside the single-slot Celery worker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libpq-dev gcc curl \
-      tesseract-ocr tesseract-ocr-ara \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps — install before code so cache survives code changes
@@ -50,6 +52,11 @@ COPY --from=frontend-build /frontend/dist ./frontend-dist
 # The platform proxy targets us on $PORT (defaults to 3000 per the platform
 # convention; FastAPI binds to that at runtime).
 ENV PORT=3000
+# Unbuffered stdout/stderr. Without this, Python block-buffers stdout when it is
+# a pipe (not a TTY) and Celery routes its own logging through the same stream,
+# so `docker logs deal-flow-worker` stayed EMPTY for 12h while the worker was
+# busy -- which read as "the worker is dead" during the 2026-08-18 incident.
+ENV PYTHONUNBUFFERED=1
 EXPOSE 3000
 
 # Platform expects a healthcheck — hit our DB-aware /health endpoint
