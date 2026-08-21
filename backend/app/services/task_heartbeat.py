@@ -32,6 +32,15 @@ from app.services.redis_util import client
 # Bumped if the value shape changes, so a new reader never parses old JSON.
 HASH_KEY = "task_heartbeat:v1"
 
+# When this store started observing. Written once, then left alone.
+#
+# Without it a fresh deploy looks exactly like an outage: the hash is empty, so
+# every task reads "never run" and every interval task is flagged stale -- which
+# is what the System page did on its own first deploy, reporting six healthy
+# tasks as broken. A task that has not run cannot be called late until we have
+# been watching for longer than its interval.
+SINCE_KEY = "task_heartbeat_since:v1"
+
 # Long enough that a daily task (dedupe-leads, daily-briefing) still shows its
 # last run after a quiet weekend, and that a task which STOPPED running stays
 # visibly stale instead of quietly disappearing from the report -- a missing
@@ -67,6 +76,10 @@ def record(
     try:
         c.hset(HASH_KEY, task_name, json.dumps(payload))
         c.expire(HASH_KEY, TTL_SECONDS)
+        # NX: the first write wins and the marker then ages with the store, so
+        # it always answers "how long have we been watching", not "when did this
+        # task last run".
+        c.set(SINCE_KEY, _now().isoformat(), nx=True, ex=TTL_SECONDS)
     except Exception as exc:
         print(f"[{_LABEL}] could not record {task_name}: {exc!r}")
     finally:
@@ -100,3 +113,28 @@ def read_all() -> dict:
             # A single unparseable field must not blank the whole report.
             out[name] = {"at": None, "state": "unparseable", "runtime_seconds": None, "error": None}
     return out
+
+
+def observing_seconds() -> Optional[float]:
+    """How long this store has been collecting, or None if it never has.
+
+    Callers use it to avoid mistaking a cold start for a dead pipeline: with no
+    heartbeat and no observation window, the honest answer is "not yet known",
+    not "stale".
+    """
+    c = client(_LABEL)
+    if c is None:
+        return None
+    try:
+        raw = c.get(SINCE_KEY)
+        if not raw:
+            return None
+        return (_now() - datetime.fromisoformat(raw)).total_seconds()
+    except Exception as exc:
+        print(f"[{_LABEL}] could not read observation start: {exc!r}")
+        return None
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass

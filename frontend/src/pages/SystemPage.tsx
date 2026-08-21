@@ -56,12 +56,12 @@ function QueueCard({ queue }: { queue: OpsQueue }) {
     <div className="bg-card border border-border rounded-xl p-4 space-y-3">
       <div className="flex items-baseline justify-between gap-3">
         <span className="font-medium text-foreground">{queue.name}</span>
-        {queue.no_consumer ? (
-          <Pill tone="bad">no consumer</Pill>
-        ) : queue.consumers === null ? (
-          <Pill tone="muted">consumers unknown</Pill>
+        {queue.stalled ? (
+          <Pill tone="bad">stalled</Pill>
+        ) : queue.seconds_since_completion !== null ? (
+          <Pill tone="ok">drained {relative(queue.seconds_since_completion)}</Pill>
         ) : (
-          <Pill tone="ok">{queue.consumers.length} consumer{queue.consumers.length === 1 ? "" : "s"}</Pill>
+          <Pill tone="muted">no completions yet</Pill>
         )}
       </div>
 
@@ -75,8 +75,15 @@ function QueueCard({ queue }: { queue: OpsQueue }) {
       </div>
 
       {queue.consumers && queue.consumers.length > 0 && (
-        <div className="text-xs text-muted-foreground truncate" title={queue.consumers.join(", ")}>
-          {queue.consumers.join(", ")}
+        <div
+          className="text-xs text-muted-foreground truncate"
+          title={
+            "Workers that answered a control ping. A --pool=solo worker cannot " +
+            "answer while it is running a task, so a worker missing from this " +
+            "line is not evidence that it is gone."
+          }
+        >
+          answered ping: {queue.consumers.join(", ")}
         </div>
       )}
 
@@ -113,7 +120,7 @@ function TaskRow({ task }: { task: OpsTask }) {
       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{task.schedule}</td>
       <td className="px-4 py-3 whitespace-nowrap">
         <Pill tone={tone}>
-          {task.stale ? "stale" : state ? state.toLowerCase() : "never run"}
+          {task.stale ? "late" : state ? state.toLowerCase() : "no runs yet"}
         </Pill>
       </td>
       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap tabular-nums">
@@ -142,7 +149,7 @@ export default function SystemPage() {
   }
 
   const stale = (data?.tasks ?? []).filter((t) => t.stale);
-  const starved = (data?.queues ?? []).filter((q) => q.no_consumer);
+  const starved = (data?.queues ?? []).filter((q) => q.stalled);
 
   return (
     <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
@@ -163,7 +170,11 @@ export default function SystemPage() {
               {starved.map((q) => (
                 <p key={q.name} className="text-sm text-foreground">
                   <span className="font-medium">{q.name}</span> has {q.depth} task
-                  {q.depth === 1 ? "" : "s"} waiting and no worker consuming it.
+                  {q.depth === 1 ? "" : "s"} waiting and nothing has completed on it{" "}
+                  {q.seconds_since_completion === null
+                    ? "at all"
+                    : `since ${relative(q.seconds_since_completion)}`}
+                  .
                 </p>
               ))}
               {stale.map((t) => (
@@ -219,8 +230,12 @@ export default function SystemPage() {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Task history lives in the broker, which has no persistence — after a Redis
-            restart every task reads as "never run" until it next runs.
+            Task history lives in the broker, which has no persistence — after a redeploy
+            or a Redis restart every task reads as "no runs yet" until it next runs.
+            {data?.observing_seconds != null && (
+              <> Collecting for {relative(data.observing_seconds).replace(" ago", "")}; a
+              task is only called late once that exceeds its own interval.</>
+            )}
           </p>
         </>
       )}

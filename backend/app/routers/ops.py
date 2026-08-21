@@ -49,17 +49,33 @@ router = APIRouter(prefix="/ops", tags=["ops"])
 # is not explainable that way.
 STALE_AFTER_INTERVALS = 2.5
 
+# A queue is called stalled when work is waiting and NOTHING routed to it has
+# completed within this window. Not "no worker answered a ping": both workers
+# run --pool=solo, which cannot serve a control broadcast while executing a
+# task, and the heavy worker is essentially never idle, so it never answers.
+# Built on the ping alone this endpoint reported `heavy` as having no consumer
+# while that consumer was visibly draining it.
+#
+# Real completions are the signal that cannot lie, and they catch a strictly
+# larger set of failures: a queue with no consumer AND a worker that is present
+# but wedged both show up as "nothing finished lately", where a ping would
+# happily report the wedged one as healthy.
+QUEUE_STALL_SECONDS = 900.0
+
 
 class QueueOut(BaseModel):
     name: str
     depth: Optional[int]
     backlog: list[dict]
     sampled: int
+    # Workers that ANSWERED a control ping. Informational only: an empty list
+    # is not evidence of absence (see QUEUE_STALL_SECONDS above).
     consumers: Optional[list[str]]
-    # True only when we positively know there is work and nothing consuming it.
-    # Unknown consumers (workers unreachable) must not raise this -- an alarm
-    # that fires on missing information trains people to ignore it.
-    no_consumer: bool
+    # Work is waiting and nothing routed here has completed lately. Suppressed
+    # until the heartbeat store has observed for a full window, so a fresh
+    # deploy is never reported as a stall.
+    stalled: bool
+    seconds_since_completion: Optional[float]
 
 
 class TaskOut(BaseModel):
@@ -80,9 +96,22 @@ class OpsOut(BaseModel):
     generated_at: str
     redis_reachable: bool
     workers_reachable: bool
+    # None until the first task reports. While it is below a task's interval,
+    # that task cannot be judged late -- we simply have not watched long enough.
+    observing_seconds: Optional[float]
     queues: list[QueueOut]
     unacked: Optional[int]
     tasks: list[TaskOut]
+
+
+def _age_seconds(iso: Optional[str], now: datetime) -> Optional[float]:
+    """Seconds since an ISO timestamp, or None if absent/unparseable."""
+    if not iso:
+        return None
+    try:
+        return (now - datetime.fromisoformat(iso)).total_seconds()
+    except Exception:
+        return None
 
 
 def _queue_for_task(task_name: str) -> str:
@@ -116,14 +145,39 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
     raw_queues = queue_stats.depths()
     consumers = queue_stats.consumers_by_queue()
     heartbeats = task_heartbeat.read_all()
+    observing = task_heartbeat.observing_seconds()
 
     redis_reachable = any(v.get("depth") is not None for v in raw_queues.values())
     workers_reachable = consumers is not None
+
+    # Age of the most recent completion on each queue, whatever the task and
+    # whatever its outcome: a FAILURE or a SKIP still proves something is
+    # pulling from that queue, which is the only question being asked here.
+    freshest: dict[str, float] = {}
+    for task_name, beat in heartbeats.items():
+        age = _age_seconds(beat.get("at"), now)
+        if age is None:
+            continue
+        queue = _queue_for_task(task_name)
+        if queue not in freshest or age < freshest[queue]:
+            freshest[queue] = age
 
     queues = []
     for name, stats in raw_queues.items():
         subscribed = None if consumers is None else consumers.get(name, [])
         depth = stats.get("depth")
+        since_completion = freshest.get(name)
+
+        # Three conditions, all required. Work must be waiting; nothing may have
+        # completed within the window; and we must have been watching for at
+        # least that long, so a cold start cannot masquerade as a stall.
+        stalled = bool(
+            depth
+            and (since_completion is None or since_completion > QUEUE_STALL_SECONDS)
+            and observing is not None
+            and observing > QUEUE_STALL_SECONDS
+        )
+
         queues.append(
             QueueOut(
                 name=name,
@@ -131,7 +185,8 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
                 backlog=stats.get("backlog", []),
                 sampled=stats.get("sampled", 0),
                 consumers=subscribed,
-                no_consumer=bool(subscribed is not None and not subscribed and depth),
+                stalled=stalled,
+                seconds_since_completion=since_completion,
             )
         )
 
@@ -142,18 +197,20 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
         beat = heartbeats.get(task_name) or {}
 
         last_at = beat.get("at")
-        since = None
-        if last_at:
-            try:
-                since = (now - datetime.fromisoformat(last_at)).total_seconds()
-            except Exception:
-                since = None
+        since = _age_seconds(last_at, now)
 
         stale = None
         if seconds:
-            # Never run at all is stale too -- that is exactly what a routing
-            # change with no consumer looks like on a fresh worker.
-            stale = True if since is None else since > seconds * STALE_AFTER_INTERVALS
+            window = seconds * STALE_AFTER_INTERVALS
+            if since is not None:
+                stale = since > window
+            else:
+                # Never run. That is a real symptom -- a routing change with no
+                # consumer looks exactly like this -- but only once we have
+                # watched for longer than the task's own interval. Before that
+                # the task simply has not come round yet, and calling it stale
+                # turns every deploy into a wall of false alarms.
+                stale = observing is not None and observing > window
 
         tasks.append(
             TaskOut(
@@ -179,6 +236,7 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
         generated_at=now.isoformat(),
         redis_reachable=redis_reachable,
         workers_reachable=workers_reachable,
+        observing_seconds=observing,
         queues=queues,
         unacked=queue_stats.unacked_count(),
         tasks=tasks,
