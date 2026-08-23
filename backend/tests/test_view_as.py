@@ -428,7 +428,7 @@ MUTATION_CASES = [
     ("PATCH", "/api/v1/assessments/{lead_id}/draft", {"draft_subject": "New subject"}),
     ("POST", "/api/v1/assessments/{lead_id}/regenerate-draft", None),
     ("POST", "/api/v1/leads/{lead_id}/archive-no-reply", None),
-    ("POST", "/api/v1/leads/bulk-archive", {"lead_ids": []}),
+    ("POST", "/api/v1/leads/bulk-archive", {"lead_ids": [], "reason_option_ids": [367301]}),
 ]
 
 

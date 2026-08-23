@@ -10,6 +10,7 @@ import SelectCheckbox from "../components/shared/SelectCheckbox";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 import { useToast } from "../components/shared/Toast";
 import BulkArchiveBar from "../components/leads/BulkArchiveBar";
+import BulkArchiveReasonModal from "../components/leads/BulkArchiveReasonModal";
 import type { Lead } from "../types/lead";
 
 // Shared with Navbar's count badge so both stay on the same cache entry.
@@ -165,6 +166,7 @@ function AwaitingDeckCard({
 
 export default function AwaitingDeckPage() {
   const [sort, setSort] = useState<SortOrder>("newest");
+  const [showBulkArchiveModal, setShowBulkArchiveModal] = useState(false);
   const readOnly = !!useAppStore((s) => s.viewAs);
   const qc = useQueryClient();
   const toast = useToast();
@@ -184,9 +186,11 @@ export default function AwaitingDeckPage() {
   const { selected, toggle, selectAll, clear, allSelected } = useBulkSelection(selectableIds);
 
   const bulkArchive = useMutation({
-    mutationFn: () => bulkArchiveLeads(Array.from(selected)),
+    mutationFn: (vars: { reasonOptionIds: number[]; note: string }) =>
+      bulkArchiveLeads(Array.from(selected), vars.reasonOptionIds, vars.note),
     onSuccess: (result) => {
       clear();
+      setShowBulkArchiveModal(false);
       const parts = [`Archived ${result.archived} · synced to Copper`];
       if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
       toast(parts.join(" · "));
@@ -197,13 +201,6 @@ export default function AwaitingDeckPage() {
       qc.invalidateQueries({ queryKey: ["archive"] });
     },
   });
-
-  const handleBulkArchive = () => {
-    const n = selected.size;
-    if (confirm(`Archive ${n} lead${n === 1 ? "" : "s"}? Each one is also marked Unqualified in Copper.`)) {
-      bulkArchive.mutate();
-    }
-  };
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
@@ -226,9 +223,20 @@ export default function AwaitingDeckPage() {
           allSelected={allSelected}
           onSelectAll={selectAll}
           onClear={clear}
-          onArchiveSelected={handleBulkArchive}
+          onArchiveSelected={() => setShowBulkArchiveModal(true)}
           archiving={bulkArchive.isPending}
           readOnly={readOnly}
+        />
+      )}
+
+      {showBulkArchiveModal && (
+        <BulkArchiveReasonModal
+          count={selected.size}
+          submitting={bulkArchive.isPending}
+          onCancel={() => setShowBulkArchiveModal(false)}
+          onSubmit={({ reason_option_ids, note }) =>
+            bulkArchive.mutate({ reasonOptionIds: reason_option_ids, note })
+          }
         />
       )}
 

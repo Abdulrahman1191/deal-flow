@@ -7,6 +7,7 @@ import StatsRow from "../components/leads/StatsRow";
 import LeadBucket from "../components/leads/LeadBucket";
 import LeadCard from "../components/leads/LeadCard";
 import BulkArchiveBar from "../components/leads/BulkArchiveBar";
+import BulkArchiveReasonModal from "../components/leads/BulkArchiveReasonModal";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 import { useToast } from "../components/shared/Toast";
 import type { Lead } from "../types/lead";
@@ -50,6 +51,7 @@ export default function LeadsPage() {
   const [stage, setStage] = useState("");
   const [exporting, setExporting] = useState(false);
   const [sort, setSort] = useState<SortOrder>("newest");
+  const [showBulkArchiveModal, setShowBulkArchiveModal] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["leads", sort],
@@ -99,9 +101,11 @@ export default function LeadsPage() {
   const { selected, toggle, selectAll, clear, allSelected } = useBulkSelection(selectableIds);
 
   const bulkArchive = useMutation({
-    mutationFn: () => bulkArchiveLeads(Array.from(selected)),
+    mutationFn: (vars: { reasonOptionIds: number[]; note: string }) =>
+      bulkArchiveLeads(Array.from(selected), vars.reasonOptionIds, vars.note),
     onSuccess: (data) => {
       clear();
+      setShowBulkArchiveModal(false);
       const parts = [`Archived ${data.archived} · synced to Copper`];
       if (data.failed.length > 0) parts.push(`${data.failed.length} failed`);
       toast(parts.join(" · "));
@@ -112,13 +116,6 @@ export default function LeadsPage() {
       qc.invalidateQueries({ queryKey: ["archive"] });
     },
   });
-
-  const handleBulkArchive = () => {
-    const n = selected.size;
-    if (confirm(`Archive ${n} lead${n === 1 ? "" : "s"}? Each one is also marked Unqualified in Copper.`)) {
-      bulkArchive.mutate();
-    }
-  };
 
   const handleExportYes = async () => {
     setExporting(true);
@@ -227,10 +224,20 @@ export default function LeadsPage() {
             allSelected={allSelected}
             onSelectAll={selectAll}
             onClear={clear}
-            onArchiveSelected={handleBulkArchive}
+            onArchiveSelected={() => setShowBulkArchiveModal(true)}
             archiving={bulkArchive.isPending}
             readOnly={readOnly}
           />
+          {showBulkArchiveModal && (
+            <BulkArchiveReasonModal
+              count={selected.size}
+              submitting={bulkArchive.isPending}
+              onCancel={() => setShowBulkArchiveModal(false)}
+              onSubmit={({ reason_option_ids, note }) =>
+                bulkArchive.mutate({ reasonOptionIds: reason_option_ids, note })
+              }
+            />
+          )}
           {hasFilter && bucket("YES").length + bucket("MAYBE").length + bucket("REJECT").length === 0 ? (
             <div className="border border-dashed border-border rounded-2xl py-12 text-center text-sm text-muted-foreground">
               No deals match your search.

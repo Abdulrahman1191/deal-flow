@@ -492,10 +492,19 @@ async def bulk_archive_leads(
     Archive many leads in one action. Each lead gets the same treatment as
     the single-lead archive-no-reply path -- status=archived, an `archived`
     LeadEvent (reason=bulk_archive), and the full Copper write-back
-    (Unqualified + tags + best-effort AI reason/detail) -- but WITHOUT the
-    single-archive rating gate: bulk archive is an explicit bulk disposition,
-    and requiring every lead in the batch to already be rated would make
-    clearing a batch impractical.
+    (Unqualified + tags + a reason) -- but WITHOUT the single-archive rating
+    gate: bulk archive is an explicit bulk disposition, and requiring every
+    lead in the batch to already be rated would make clearing a batch
+    impractical.
+
+    Unlike the single-archive path, the Unqualification Reasons (Copper
+    custom field 244358) are NOT best-effort/AI-only here: the caller must
+    choose at least one reason option id up front, and it's applied to every
+    lead in the batch -- so every bulk-archived lead is guaranteed to land in
+    Copper with a reason, never silently skipped because an AI call failed.
+    The Unqualified Details field (244359) prefers the caller's note; when no
+    note is given it falls back to a best-effort AI-generated detail (which,
+    like the single-archive path, may simply be omitted on failure).
 
     Per-lead isolation: each lead is processed in its own try/except so one
     bad id or a mid-batch DB/Copper hiccup never aborts the rest -- it's
@@ -505,11 +514,20 @@ async def bulk_archive_leads(
     """
     block_if_impersonating(request, user)
 
+    allowed_reason_ids = set(claude_agent.UNQUAL_REASON_OPTIONS.values())
+    invalid_reason_ids = [rid for rid in body.reason_option_ids if rid not in allowed_reason_ids]
+    if invalid_reason_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown reason_option_ids: {invalid_reason_ids}",
+        )
+
     from app.models.assessment import AssessmentCard
 
     archived = 0
     copper_enqueued = 0
     failed: list[dict] = []
+    note = (body.note or "").strip() or None
 
     for raw_lead_id in body.lead_ids:
         try:
@@ -543,10 +561,13 @@ async def bulk_archive_leads(
                 )
                 card = card_result.scalar_one_or_none()
 
-                # AI-generated reason/detail are additive and best-effort: a
-                # failed AI call must never block the archive write below.
-                reason_option_ids, detail_text = None, None
-                if card:
+                # Reason ids are mandatory and always come from the caller
+                # (validated above), never from the AI. The detail note
+                # prefers the caller's note; only when none was given do we
+                # fall back to a best-effort AI-generated detail -- a failed
+                # AI call must never block the archive write below.
+                detail_text = note
+                if detail_text is None and card:
                     try:
                         unqual = claude_agent.generate_unqualification_reason(
                             company_name=lead.company_name,
@@ -554,8 +575,7 @@ async def bulk_archive_leads(
                             summary=card.summary,
                             red_flags=card.red_flags,
                         )
-                        reason_option_ids = unqual.get("reason_option_ids")
-                        detail_text = unqual.get("detail_text")
+                        detail_text = unqual.get("detail_text") or None
                     except Exception as exc:
                         print(
                             f"[bulk_archive] Unqualification-reason AI call failed for "
@@ -566,7 +586,7 @@ async def bulk_archive_leads(
                     existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
                     copper_writer.archive_in_copper(
                         lead.copper_id, existing_tags,
-                        reason_option_ids=reason_option_ids, detail_text=detail_text,
+                        reason_option_ids=body.reason_option_ids, detail_text=detail_text,
                     )
                     copper_enqueued += 1
                 except Exception as exc:
