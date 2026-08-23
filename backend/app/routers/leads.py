@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 from typing import Optional
 
 from pathlib import Path
@@ -15,7 +16,15 @@ from app.models.event import LeadEvent
 from app.models.lead import Lead
 from app.models.user import User
 from app.routers.assessments import _require_rating
-from app.schemas.lead import LeadOut, LeadUpdate, LeadWithAssessment, PaginatedLeads, PitchDeckSyncResult
+from app.schemas.lead import (
+    BulkArchiveRequest,
+    BulkArchiveResult,
+    LeadOut,
+    LeadUpdate,
+    LeadWithAssessment,
+    PaginatedLeads,
+    PitchDeckSyncResult,
+)
 from app.services.auth import (
     block_if_impersonating,
     effective_owner_email,
@@ -470,6 +479,106 @@ async def list_archive(
             "archived_at": last.created_at.isoformat() if last else lead.updated_at.isoformat(),
         })
     return out
+
+
+@router.post("/bulk-archive", response_model=BulkArchiveResult)
+async def bulk_archive_leads(
+    body: BulkArchiveRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Archive many leads in one action. Each lead gets the same treatment as
+    the single-lead archive-no-reply path -- status=archived, an `archived`
+    LeadEvent (reason=bulk_archive), and the full Copper write-back
+    (Unqualified + tags + best-effort AI reason/detail) -- but WITHOUT the
+    single-archive rating gate: bulk archive is an explicit bulk disposition,
+    and requiring every lead in the batch to already be rated would make
+    clearing a batch impractical.
+
+    Per-lead isolation: each lead is processed in its own try/except so one
+    bad id or a mid-batch DB/Copper hiccup never aborts the rest -- it's
+    recorded in `failed` and the loop moves on. A DB-level exception poisons
+    the session's transaction until rolled back, so the except clause rolls
+    back before continuing to the next lead.
+    """
+    block_if_impersonating(request, user)
+
+    from app.models.assessment import AssessmentCard
+
+    archived = 0
+    copper_enqueued = 0
+    failed: list[dict] = []
+
+    for raw_lead_id in body.lead_ids:
+        try:
+            try:
+                lead_uuid = uuid.UUID(str(raw_lead_id))
+            except ValueError:
+                failed.append({"lead_id": str(raw_lead_id), "error": "invalid_lead_id"})
+                continue
+
+            result = await db.execute(
+                select(Lead).where(Lead.id == lead_uuid, Lead.owner_email == user.email)
+            )
+            lead = result.scalar_one_or_none()
+            if not lead:
+                failed.append({"lead_id": str(raw_lead_id), "error": "not_found"})
+                continue
+
+            if lead.status == "archived":
+                archived += 1
+                continue
+
+            lead.status = "archived"
+            await log_event(db, lead.id, EVENT_ARCHIVED, {"reason": "bulk_archive"})
+            await db.commit()
+            archived += 1
+
+            if lead.copper_id and not lead.copper_opportunity_id:
+                card_result = await db.execute(
+                    select(AssessmentCard).where(AssessmentCard.lead_id == lead.id)
+                    .order_by(AssessmentCard.created_at.desc()).limit(1)
+                )
+                card = card_result.scalar_one_or_none()
+
+                # AI-generated reason/detail are additive and best-effort: a
+                # failed AI call must never block the archive write below.
+                reason_option_ids, detail_text = None, None
+                if card:
+                    try:
+                        unqual = claude_agent.generate_unqualification_reason(
+                            company_name=lead.company_name,
+                            bucket=card.user_override or card.bucket,
+                            summary=card.summary,
+                            red_flags=card.red_flags,
+                        )
+                        reason_option_ids = unqual.get("reason_option_ids")
+                        detail_text = unqual.get("detail_text")
+                    except Exception as exc:
+                        print(
+                            f"[bulk_archive] Unqualification-reason AI call failed for "
+                            f"lead {lead.id} (archiving anyway): {exc!r}"
+                        )
+
+                try:
+                    existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
+                    copper_writer.archive_in_copper(
+                        lead.copper_id, existing_tags,
+                        reason_option_ids=reason_option_ids, detail_text=detail_text,
+                    )
+                    copper_enqueued += 1
+                except Exception as exc:
+                    print(
+                        f"[bulk_archive] Copper write failed for lead {lead.id} "
+                        f"(local commit succeeded): {exc!r}"
+                    )
+        except Exception as exc:
+            await db.rollback()
+            failed.append({"lead_id": str(raw_lead_id), "error": repr(exc)})
+
+    return BulkArchiveResult(archived=archived, copper_enqueued=copper_enqueued, failed=failed)
 
 
 @router.post("/{lead_id}/archive-no-reply")
