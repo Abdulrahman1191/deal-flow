@@ -9,8 +9,9 @@ Covers:
   1. `detect_applicant_language` -- the pure deterministic gate.
   2. `assess_lead` / `regenerate_draft` -- the resolved instruction reaches
      the LLM prompt and (via a fake client that role-plays the model)
-     produces an Arabic vs English subject+body, while the Calendly URL and
-     owner name in the sign-off are preserved untranslated.
+     produces an Arabic vs English subject+body, while the Calendly URL is
+     preserved untranslated and the sign-off carries no personal name
+     (issue #136 -- drafts sign off as "Raed Ventures" only).
 """
 from __future__ import annotations
 import json
@@ -66,8 +67,9 @@ class _RoleplayingCompletions:
     """Fake DeepSeek client: reads the resolved language instruction out of
     the prompt it was given (mirrors _EchoingCompletions in
     test_owner_calendly_draft.py) and writes back a subject/body in that
-    language, echoing the Calendly URL and sign-off name verbatim -- exactly
-    as we instruct the real model to do."""
+    language, echoing the Calendly URL verbatim and signing off as just
+    "Raed Ventures" (no personal name) -- exactly as we instruct the real
+    model to do."""
 
     def create(self, **kwargs):
         prompt = kwargs["messages"][-1]["content"]
@@ -79,13 +81,13 @@ class _RoleplayingCompletions:
             draft_subject = "طلبك للانضمام إلى راعد فنتشرز"
             draft_body = (
                 f"مرحباً،\n\nشكراً لتقديم طلبكم إلى راعد فنتشرز. هل ترغبون في حجز مكالمة قصيرة؟ "
-                f"{calendly_url}\n\nمع التحية،\n[Associate Name], Raed Ventures"
+                f"{calendly_url}\n\nمع التحية،\nRaed Ventures"
             )
         else:
             draft_subject = "Thanks for applying to Raed Ventures"
             draft_body = (
                 f"Hi there,\n\nWould you like to book a short call? {calendly_url}\n\n"
-                "Best,\n[Associate Name], Raed Ventures"
+                "Best,\nRaed Ventures"
             )
 
         payload = {
@@ -139,8 +141,9 @@ def test_assess_lead_arabic_applicant_yields_arabic_draft(monkeypatch):
     assert _has_arabic(result["draft_body"])
     # Calendly URL is preserved verbatim (never translated/altered).
     assert "https://calendly.com/waleed-raed/pl" in result["draft_body"]
-    # Owner's sign-off name is preserved untranslated.
-    assert "Waleed, Raed Ventures" in result["draft_body"]
+    # Sign-off is the firm, not the owner's personal name (issue #136).
+    assert "Raed Ventures" in result["draft_body"]
+    assert "Waleed" not in result["draft_body"]
 
 
 def test_assess_lead_english_applicant_yields_english_draft(monkeypatch):
@@ -194,7 +197,9 @@ def test_regenerate_draft_arabic_applicant_yields_arabic_draft(monkeypatch):
     assert _has_arabic(result["draft_subject"])
     assert _has_arabic(result["draft_body"])
     assert "https://calendly.com/udayrvc/30min" in result["draft_body"]
-    assert "Uday, Raed Ventures" in result["draft_body"]
+    # Sign-off is the firm, not the owner's personal name (issue #136).
+    assert "Raed Ventures" in result["draft_body"]
+    assert "Uday" not in result["draft_body"]
 
 
 def test_regenerate_draft_english_applicant_yields_english_draft(monkeypatch):

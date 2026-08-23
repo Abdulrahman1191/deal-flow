@@ -1,10 +1,14 @@
 """
-Generated outreach drafts must carry the lead OWNER's Calendly link + name,
-not a single hardcoded associate's (issue #84). Covers three layers:
+Generated outreach drafts must carry the lead OWNER's Calendly link, not a
+single hardcoded default (issue #84). The sign-off itself no longer carries
+any personal/associate name — since all outreach sends from the unified
+submission@raed.vc / "Raed Ventures" identity, drafts sign off as "Raed
+Ventures" only regardless of who the lead owner is (issue #136). Covers
+three layers:
 
-  1. claude_agent.assess_lead / regenerate_draft — the actual prompt +
-     substitution logic, exercised against a fake DeepSeek client (mirrors
-     the LLM-mocking pattern in test_pitch_deck.py) so no live API key is
+  1. claude_agent.assess_lead / regenerate_draft — the actual prompt
+     building, exercised against a fake DeepSeek client (mirrors the
+     LLM-mocking pattern in test_pitch_deck.py) so no live API key is
      needed. The fake echoes back whatever Calendly link it was given in the
      prompt, so these tests catch a regression where the owner's link never
      makes it into the request sent to the model.
@@ -42,9 +46,9 @@ client = TestClient(app)
 
 class _EchoingCompletions:
     """Stands in for OpenAI's chat.completions -- echoes back whichever
-    Calendly link appears in the prompt it was given, and always emits the
-    "[Associate Name]" placeholder in the sign-off, matching how the real
-    model is instructed to behave (see claude_agent._PLACEHOLDER)."""
+    Calendly link appears in the prompt it was given, and always signs off
+    as just "Raed Ventures", matching how the real model is instructed to
+    behave (issue #136 -- no personal/associate name in the closing)."""
 
     def create(self, **kwargs):
         prompt = kwargs["messages"][-1]["content"]
@@ -63,7 +67,7 @@ class _EchoingCompletions:
             "draft_subject": "Thanks for applying to Raed Ventures",
             "draft_body": (
                 f"Hi there,\n\nWould you like to book a short call? {calendly_url}\n\n"
-                "Best,\n[Associate Name], Raed Ventures"
+                "Best,\nRaed Ventures"
             ),
         }
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))])
@@ -81,7 +85,7 @@ def _install_fake_llm(monkeypatch):
 # ---------- layer 1: claude_agent.assess_lead / regenerate_draft ----------
 
 
-def test_regenerate_draft_uses_owner_calendly_and_name(monkeypatch):
+def test_regenerate_draft_uses_owner_calendly_and_omits_owner_name(monkeypatch):
     _install_fake_llm(monkeypatch)
     result = claude_agent.regenerate_draft(
         {"company_name": "Acme Deep Tech", "founder_names": ["Founder One"]},
@@ -91,8 +95,8 @@ def test_regenerate_draft_uses_owner_calendly_and_name(monkeypatch):
         owner_name="Waleed",
     )
     assert "https://calendly.com/waleed-raed/pl" in result["draft_body"]
-    assert "Waleed, Raed Ventures" in result["draft_body"]
-    assert "[Associate Name]" not in result["draft_body"]
+    assert "Raed Ventures" in result["draft_body"]
+    assert "Waleed" not in result["draft_body"]
 
 
 def test_regenerate_draft_falls_back_when_owner_has_neither(monkeypatch):
@@ -105,12 +109,10 @@ def test_regenerate_draft_falls_back_when_owner_has_neither(monkeypatch):
         owner_name=None,
     )
     assert claude_agent.DEFAULT_CALENDLY_URL in result["draft_body"]
-    from app.config import settings
-
-    assert f"{settings.associate_name}, Raed Ventures" in result["draft_body"]
+    assert "Raed Ventures" in result["draft_body"]
 
 
-def test_assess_lead_uses_owner_calendly_and_name(monkeypatch):
+def test_assess_lead_uses_owner_calendly_and_omits_owner_name(monkeypatch):
     _install_fake_llm(monkeypatch)
     lead_data = {
         "company_name": "Acme Deep Tech",
@@ -129,7 +131,8 @@ def test_assess_lead_uses_owner_calendly_and_name(monkeypatch):
         owner_name="Uday",
     )
     assert "https://calendly.com/udayrvc/30min" in result["draft_body"]
-    assert "Uday, Raed Ventures" in result["draft_body"]
+    assert "Raed Ventures" in result["draft_body"]
+    assert "Uday" not in result["draft_body"]
 
 
 def test_assess_lead_falls_back_when_owner_has_neither(monkeypatch):
@@ -146,9 +149,7 @@ def test_assess_lead_falls_back_when_owner_has_neither(monkeypatch):
     }
     result = claude_agent.assess_lead(lead_data, research_data={})
     assert claude_agent.DEFAULT_CALENDLY_URL in result["draft_body"]
-    from app.config import settings
-
-    assert f"{settings.associate_name}, Raed Ventures" in result["draft_body"]
+    assert "Raed Ventures" in result["draft_body"]
 
 
 # ---------- layer 2: app.tasks.assess_lead._run loads the owner ----------

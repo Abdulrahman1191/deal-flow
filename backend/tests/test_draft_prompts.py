@@ -50,12 +50,15 @@ def test_both_prompts_enforce_word_limits():
 
 
 def test_both_prompts_include_calendly_and_signoff():
-    # The Calendly link and sign-off name are resolved per lead-owner at
-    # generation time (issue #84) rather than hardcoded, so the raw template
-    # carries format placeholders here instead of a literal URL/name.
+    # The Calendly link is resolved per lead-owner at generation time
+    # (issue #84) rather than hardcoded, so the raw template carries a
+    # format placeholder here instead of a literal URL. The sign-off itself
+    # carries no personal/associate name (issue #136) -- drafts sign off as
+    # "Raed Ventures" only.
     for block in (ASSESS_DRAFT_BLOCK, REGEN_BLOCK):
         assert "{calendly_url}" in block
-        assert "{associate_name}, Raed Ventures" in block
+        assert 'Sign off as just "Raed Ventures"' in block
+        assert "{associate_name}" not in block
 
 
 def test_both_prompts_never_invent_founder_title():
