@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, Integer, ForeignKey, DateTime, func
+from sqlalchemy import String, Text, Integer, ForeignKey, DateTime, Boolean, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +32,10 @@ class AssessmentCard(Base):
     # Snapshot of which Raed-portfolio precedents were retrieved + cited
     # in this assessment. Foundation for measuring retrieval-quality vs accuracy.
     precedents_cited: Mapped[Optional[list]] = mapped_column(JSONB)
+    # True when this score was made without a pitch deck -- website content
+    # and/or description only (issue #144) -- so the UI can flag it as
+    # lower-confidence until a deck is attached and re-assessment refines it.
+    assessed_without_deck: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     user_override: Mapped[Optional[str]] = mapped_column(String(16))
     user_override_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     # Lightweight thumbs up/down on the AI recommendation ("up" | "down"),

@@ -211,9 +211,10 @@ export default function AwaitingDeckPage() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">Awaiting Pitch Deck</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Leads parked here have no usable pitch deck yet, so they haven't been scored.
-            They rejoin the Deal Flow board automatically once a deck attaches and
-            re-assessment completes.
+            Leads parked here have no pitch deck, no usable website, and no more than a
+            thin description — genuinely nothing to assess yet. They rejoin the Deal Flow
+            board automatically once a deck, website, or fuller description gives
+            re-assessment something to work with.
           </p>
         </div>
         <SortToggle value={sort} onChange={setSort} />

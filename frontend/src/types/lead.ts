@@ -36,6 +36,7 @@ export interface Assessment {
   draft_body: string | null;
   draft_type: "rejection" | "meeting_request" | null;
   research_sources: string[] | null;
+  assessed_without_deck: boolean;
   user_override: string | null;
   user_override_at: string | null;
   user_rating: "up" | "down" | null;

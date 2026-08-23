@@ -176,6 +176,7 @@ def _fake_card(rated: bool, bucket: str = "YES", lead_id=None):
         draft_type="meeting_request" if bucket == "YES" else "rejection",
         research_sources=[],
         research_data={},
+        assessed_without_deck=False,
         user_override=None,
         user_override_at=None,
         user_rating="up" if rated else None,
