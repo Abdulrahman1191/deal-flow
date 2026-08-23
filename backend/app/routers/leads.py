@@ -497,15 +497,23 @@ async def bulk_archive_leads(
     and requiring every lead in the batch to already be rated would make
     clearing a batch impractical.
 
+    The Copper write-back (AI reason/detail generation + the archive call
+    itself) runs in `bulk_archive_writeback_task`, one Celery task per lead,
+    rather than inline here: auto-generating a reason for every selected lead
+    means one LLM call per lead, and running N of those synchronously inside
+    the request would make a large batch slow to respond. This endpoint only
+    does the fast, synchronous part (status + event + commit) and dispatches
+    the rest so it returns as soon as statuses are flipped.
+
     Per-lead isolation: each lead is processed in its own try/except so one
-    bad id or a mid-batch DB/Copper hiccup never aborts the rest -- it's
-    recorded in `failed` and the loop moves on. A DB-level exception poisons
-    the session's transaction until rolled back, so the except clause rolls
-    back before continuing to the next lead.
+    bad id or a mid-batch DB hiccup never aborts the rest -- it's recorded in
+    `failed` and the loop moves on. A DB-level exception poisons the
+    session's transaction until rolled back, so the except clause rolls back
+    before continuing to the next lead.
     """
     block_if_impersonating(request, user)
 
-    from app.models.assessment import AssessmentCard
+    from app.tasks.bulk_archive_writeback import bulk_archive_writeback_task
 
     archived = 0
     copper_enqueued = 0
@@ -537,43 +545,8 @@ async def bulk_archive_leads(
             archived += 1
 
             if lead.copper_id and not lead.copper_opportunity_id:
-                card_result = await db.execute(
-                    select(AssessmentCard).where(AssessmentCard.lead_id == lead.id)
-                    .order_by(AssessmentCard.created_at.desc()).limit(1)
-                )
-                card = card_result.scalar_one_or_none()
-
-                # AI-generated reason/detail are additive and best-effort: a
-                # failed AI call must never block the archive write below.
-                reason_option_ids, detail_text = None, None
-                if card:
-                    try:
-                        unqual = claude_agent.generate_unqualification_reason(
-                            company_name=lead.company_name,
-                            bucket=card.user_override or card.bucket,
-                            summary=card.summary,
-                            red_flags=card.red_flags,
-                        )
-                        reason_option_ids = unqual.get("reason_option_ids")
-                        detail_text = unqual.get("detail_text")
-                    except Exception as exc:
-                        print(
-                            f"[bulk_archive] Unqualification-reason AI call failed for "
-                            f"lead {lead.id} (archiving anyway): {exc!r}"
-                        )
-
-                try:
-                    existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-                    copper_writer.archive_in_copper(
-                        lead.copper_id, existing_tags,
-                        reason_option_ids=reason_option_ids, detail_text=detail_text,
-                    )
-                    copper_enqueued += 1
-                except Exception as exc:
-                    print(
-                        f"[bulk_archive] Copper write failed for lead {lead.id} "
-                        f"(local commit succeeded): {exc!r}"
-                    )
+                bulk_archive_writeback_task.delay(str(lead.id))
+                copper_enqueued += 1
         except Exception as exc:
             await db.rollback()
             failed.append({"lead_id": str(raw_lead_id), "error": repr(exc)})
