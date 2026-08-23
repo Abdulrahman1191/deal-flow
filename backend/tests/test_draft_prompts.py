@@ -49,13 +49,30 @@ def test_both_prompts_enforce_word_limits():
         assert "70 WORDS" in block
 
 
-def test_both_prompts_include_calendly_and_signoff():
-    # The Calendly link and sign-off name are resolved per lead-owner at
-    # generation time (issue #84) rather than hardcoded, so the raw template
-    # carries format placeholders here instead of a literal URL/name.
+def test_both_prompts_include_calendly_and_generic_signoff():
+    # The Calendly link is resolved per lead-owner at generation time
+    # (issue #84) rather than hardcoded, so the raw template carries a format
+    # placeholder here instead of a literal URL. The sign-off, however, is a
+    # plain "Raed Ventures" with no individual name (issue #137) -- outreach
+    # now sends from the unified submission@raed.vc address.
     for block in (ASSESS_DRAFT_BLOCK, REGEN_BLOCK):
         assert "{calendly_url}" in block
-        assert "{associate_name}, Raed Ventures" in block
+        assert 'Sign off as "Raed Ventures"' in block
+        assert "{associate_name}" not in block
+
+
+def test_rejection_prompts_do_not_invite_reengagement():
+    # A pass should read as polite and final -- the rejection prompt must not
+    # instruct the model to invite the founder to reconnect / reach back out
+    # (issue #137). The prompt DOES now explicitly tell the model NOT to do
+    # this, so rather than banning the underlying words outright (the
+    # negation itself legitimately uses them), assert the old affirmative
+    # "if things evolve" invitation is gone and the new negative instruction
+    # is present.
+    for block in (ASSESS_DRAFT_BLOCK, REGEN_BLOCK):
+        assert "if things evolve" not in block
+        assert "do NOT invite them to reach back out" in block
+        assert "polite and final" in block
 
 
 def test_both_prompts_never_invent_founder_title():
