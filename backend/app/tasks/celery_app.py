@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox", "app.tasks.bulk_archive_writeback"],
 )
 
 celery.conf.update(
@@ -34,6 +34,10 @@ celery.conf.update(
     task_routes={
         "app.tasks.assess_lead.*": {"queue": "heavy"},
         "app.tasks.sync_pitch_decks.*": {"queue": "heavy"},  # Drive/OCR deck ingestion
+        # Bulk-archive's per-lead reason-generation is an LLM call fired once per
+        # selected lead (issue #141) -- routed with the other AI work so a large
+        # batch can't crowd out the lightweight Copper sync/drain tasks below.
+        "app.tasks.bulk_archive_writeback.*": {"queue": "heavy"},
         "app.tasks.sync_copper.*": {"queue": "default"},
         "app.tasks.drain_outbox.*": {"queue": "default"},
         "app.tasks.reap_stuck_leads.*": {"queue": "default"},
