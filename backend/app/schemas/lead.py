@@ -84,12 +84,6 @@ class PaginatedLeads(BaseModel):
 
 class BulkArchiveRequest(BaseModel):
     lead_ids: List[str]
-    # Mandatory: at least one Copper "Unqualification Reasons" (custom field
-    # 244358) option id, chosen by the user and applied to every lead in the
-    # batch -- guarantees every bulk-archived lead gets a reason in Copper,
-    # unlike the AI-generated best-effort reason on the single-archive path.
-    reason_option_ids: List[int] = Field(..., min_length=1)
-    note: Optional[str] = None
 
 
 class BulkArchiveFailure(BaseModel):

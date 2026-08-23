@@ -26,13 +26,9 @@ export interface BulkArchiveResult {
   failed: { lead_id: string; error: string }[];
 }
 
-export const bulkArchiveLeads = (leadIds: string[], reasonOptionIds: number[], note?: string) =>
+export const bulkArchiveLeads = (leadIds: string[]) =>
   client
-    .post<BulkArchiveResult>("/leads/bulk-archive", {
-      lead_ids: leadIds,
-      reason_option_ids: reasonOptionIds,
-      note: note || undefined,
-    })
+    .post<BulkArchiveResult>("/leads/bulk-archive", { lead_ids: leadIds })
     .then((r) => r.data);
 
 export interface LeadEvent {

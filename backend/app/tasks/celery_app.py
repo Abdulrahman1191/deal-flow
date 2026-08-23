@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox", "app.tasks.bulk_archive"],
 )
 
 celery.conf.update(
@@ -40,6 +40,7 @@ celery.conf.update(
         "app.tasks.reconcile_ownership.*": {"queue": "default"},
         "app.tasks.dedupe_leads.*": {"queue": "default"},
         "app.tasks.generate_briefing.*": {"queue": "default"},
+        "app.tasks.bulk_archive.*": {"queue": "default"},
     },
     beat_schedule={
         "daily-briefing": {
