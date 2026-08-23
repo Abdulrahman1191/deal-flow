@@ -1,10 +1,10 @@
 """
-Tests for the "park deckless leads instead of rejecting them" gate (issue #67).
-
-assess_lead._run must, before doing ANY research or calling the LLM, check
-for usable pitch_deck_text. No text -> park the lead in `awaiting_deck`, log
-a LeadEvent, and return early (no cost, no AssessmentCard). Deck text present
--> score exactly as before and land on `assessed`.
+Tests for the "park deckless leads instead of rejecting them" gate (issue #67),
+now broadened (issue #144) so a deckless lead with a usable website or a
+substantial description gets scored -- via scraped website content standing
+in for the deck -- instead of being parked. assess_lead._run only parks a
+lead in `awaiting_deck` when it has NO deck, NO usable scraped website
+content, AND a thin/empty description.
 
 Exercised against a fake CelerySessionLocal async-context-manager session
 (mirrors the _FakeRunSession pattern in test_sync_pitch_decks.py) so no live
@@ -64,15 +64,15 @@ class _FakeSession:
         self.committed += 1
 
 
-def _fake_lead(pitch_deck_text=None, status="pending", owner_email=None):
+def _fake_lead(pitch_deck_text=None, status="pending", owner_email=None, website="https://acme.test", description="A deep-tech startup."):
     return SimpleNamespace(
         id=uuid.uuid4(),
         status=status,
         pitch_deck_text=pitch_deck_text,
         company_linkedin_url="https://linkedin.com/company/acme",
         company_name="Acme Deep Tech",
-        website="https://acme.test",
-        description="A deep-tech startup.",
+        website=website,
+        description=description,
         stage="seed",
         region="MENA",
         founder_names=["Founder One"],
@@ -91,12 +91,13 @@ def _boom(*_args, **_kwargs):
     raise AssertionError("must not be called for a lead with no pitch deck text")
 
 
-def test_gate_parks_deckless_lead_without_scoring(monkeypatch):
-    lead = _fake_lead(pitch_deck_text=None)
+def test_gate_parks_lead_with_no_deck_no_website_content_and_thin_description(monkeypatch):
+    lead = _fake_lead(pitch_deck_text=None, website=None, description="")
     session = _FakeSession(lead)
     monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
     monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", _boom)
     monkeypatch.setattr(assess_lead.research, "research_company", _boom)
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", lambda website: "")
     monkeypatch.setattr(assess_lead.research, "scrape_linkedin_from_website", _boom)
     monkeypatch.setattr(assess_lead.research, "find_linkedin_via_llm_search", _boom)
 
@@ -113,18 +114,122 @@ def test_gate_parks_deckless_lead_without_scoring(monkeypatch):
     assert session.committed == 1
 
 
-def test_gate_also_parks_lead_with_empty_string_deck_text(monkeypatch):
+def test_gate_also_parks_lead_with_empty_string_deck_text_no_website_thin_description(monkeypatch):
     """Empty string is falsy just like None -- `not lead.pitch_deck_text`
-    covers both, matching the backfill script's OR-null-or-empty filter."""
-    lead = _fake_lead(pitch_deck_text="")
+    covers both. With no website content and a thin description, this still
+    has no usable context anywhere, so it still parks."""
+    lead = _fake_lead(pitch_deck_text="", website=None, description="")
     session = _FakeSession(lead)
     monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
     monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", _boom)
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", lambda website: "")
 
     result = asyncio.run(assess_lead._run(str(lead.id)))
 
     assert result["status"] == "awaiting_deck"
     assert lead.status == "awaiting_deck"
+
+
+def test_gate_scores_deckless_lead_with_usable_website_content_instead_of_parking(monkeypatch):
+    """A deckless lead whose site scrapes real content should be assessed --
+    not parked -- with the scraped text folded into research_data and the
+    card flagged assessed_without_deck (issue #144)."""
+    lead = _fake_lead(pitch_deck_text=None, website="https://acme.test", description="")
+    session = _FakeSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
+
+    scraped_text = "Acme Deep Tech builds proprietary sensors for industrial robotics. " * 3
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", lambda website: scraped_text)
+
+    captured_research_data = {}
+
+    def _fake_research_company(lead_data):
+        assert lead_data["pitch_deck_text"] is None
+        return {"some query": {"results": []}}
+
+    monkeypatch.setattr(assess_lead.research, "research_company", _fake_research_company)
+
+    assessment_result = {
+        "bucket": "MAYBE",
+        "confidence_score": 40,
+        "summary": "Website-only assessment.",
+        "positive_signals": [],
+        "red_flags": [],
+        "data_gaps": ["no pitch deck provided"],
+        "scoring_breakdown": {},
+        "draft_subject": None,
+        "draft_body": None,
+        "draft_type": None,
+        "research_sources": [],
+        "precedents_cited": [],
+    }
+
+    def _fake_assess(lead_data, research_data, **kwargs):
+        captured_research_data.update(research_data)
+        return assessment_result
+
+    monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", _fake_assess)
+
+    import app.services.feedback_patterns as feedback_patterns
+
+    async def _fake_exemplars(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(feedback_patterns, "retrieve_labeled_exemplars", _fake_exemplars)
+
+    result = asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert result["bucket"] == "MAYBE"
+    assert lead.status == "assessed"
+    assert captured_research_data.get("company_website_content") == scraped_text
+    cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
+    assert len(cards) == 1
+    assert cards[0].assessed_without_deck is True
+
+
+def test_gate_scores_deckless_lead_with_substantial_description_instead_of_parking(monkeypatch):
+    """A deckless lead with no website but a substantial description should
+    also be assessed, not parked -- description alone can carry it."""
+    lead = _fake_lead(
+        pitch_deck_text=None,
+        website=None,
+        description="A well-funded team building proprietary industrial sensor hardware for MENA factories.",
+    )
+    session = _FakeSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
+    # No website -> scrape_website_content must not even be called.
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", _boom)
+    monkeypatch.setattr(assess_lead.research, "research_company", lambda lead_data: {})
+
+    assessment_result = {
+        "bucket": "MAYBE",
+        "confidence_score": 35,
+        "summary": "Description-only assessment.",
+        "positive_signals": [],
+        "red_flags": [],
+        "data_gaps": [],
+        "scoring_breakdown": {},
+        "draft_subject": None,
+        "draft_body": None,
+        "draft_type": None,
+        "research_sources": [],
+        "precedents_cited": [],
+    }
+    monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", lambda *a, **k: assessment_result)
+
+    import app.services.feedback_patterns as feedback_patterns
+
+    async def _fake_exemplars(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(feedback_patterns, "retrieve_labeled_exemplars", _fake_exemplars)
+
+    result = asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert result["bucket"] == "MAYBE"
+    assert lead.status == "assessed"
+    cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
+    assert cards[0].assessed_without_deck is True
 
 
 def test_lead_with_deck_text_scores_normally_and_lands_on_assessed(monkeypatch):
@@ -133,6 +238,8 @@ def test_lead_with_deck_text_scores_normally_and_lands_on_assessed(monkeypatch):
     monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
 
     monkeypatch.setattr(assess_lead.research, "research_company", lambda lead_data: {"sources": []})
+    # A deck is present -> the website scrape must be skipped entirely.
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", _boom)
 
     assessment_result = {
         "bucket": "YES",
@@ -167,3 +274,4 @@ def test_lead_with_deck_text_scores_normally_and_lands_on_assessed(monkeypatch):
     cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
     assert len(cards) == 1
     assert cards[0].bucket == "YES"
+    assert cards[0].assessed_without_deck is False

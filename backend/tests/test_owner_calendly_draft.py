@@ -383,6 +383,7 @@ def _fake_card_row(bucket="YES"):
         draft_type=None,
         research_sources=[],
         research_data={},
+        assessed_without_deck=False,
         user_override=None,
         user_override_at=None,
         user_rating="up",

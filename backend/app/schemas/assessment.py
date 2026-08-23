@@ -19,6 +19,7 @@ class AssessmentOut(BaseModel):
     draft_body: Optional[str]
     draft_type: Optional[str]
     research_sources: Optional[List]
+    assessed_without_deck: bool
     user_override: Optional[str]
     user_override_at: Optional[datetime]
     user_rating: Optional[str]

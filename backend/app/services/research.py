@@ -7,6 +7,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from concurrent.futures import ThreadPoolExecutor
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 from tavily import TavilyClient
@@ -111,6 +112,101 @@ def scrape_linkedin_from_website(website: str | None) -> str | None:
     except Exception:
         return None
     return None
+
+
+_WEBSITE_SCRAPE_MAX_CHARS = 5000
+_WEBSITE_SCRAPE_TIMEOUT_SECONDS = 8
+
+
+class _VisibleTextExtractor(HTMLParser):
+    """Strips tags/script/style/nav-chrome and collects visible text. Stdlib
+    only (no readability/BeautifulSoup dependency) -- this is a best-effort
+    "main content" heuristic, not real readability extraction."""
+
+    _SKIPPED_TAGS = {"script", "style", "noscript", "svg", "template"}
+
+    def __init__(self):
+        super().__init__()
+        self._skip_depth = 0
+        self.chunks: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIPPED_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIPPED_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            text = data.strip()
+            if text:
+                self.chunks.append(text)
+
+    def get_text(self) -> str:
+        return " ".join(self.chunks)
+
+
+def _html_to_text(html: str) -> str:
+    parser = _VisibleTextExtractor()
+    try:
+        parser.feed(html)
+    except Exception:
+        pass
+    return parser.get_text()
+
+
+def scrape_website_content(website: str | None, max_chars: int = _WEBSITE_SCRAPE_MAX_CHARS) -> str:
+    """
+    Best-effort fetch of a lead's own company website (landing page + /about)
+    with readable text extracted, for deckless leads (issue #144) so a public
+    site + description can substitute for a pitch deck instead of parking
+    every no-deck lead unscored.
+
+    Robust by design: short timeout, at most two pages, capped output length,
+    and NEVER raises -- a missing site, 404, timeout, or SSRF-unsafe/private
+    host all just return "" and the caller falls back to description-only
+    context. Reuses the same httpx.Client + _is_safe_url SSRF guard as
+    scrape_linkedin_from_website above rather than adding a new HTTP/HTML
+    dependency.
+    """
+    if not website:
+        return ""
+    url = website if website.startswith("http") else f"https://{website}"
+    if not _is_safe_url(url):
+        return ""
+    try:
+        import httpx
+
+        def _block_unsafe_redirect(request: "httpx.Request") -> None:
+            if not _is_safe_url(str(request.url)):
+                raise ValueError(f"blocked SSRF-unsafe target: {request.url}")
+
+        def _fetch_text(client: "httpx.Client", target_url: str) -> str:
+            try:
+                r = client.get(target_url)
+            except Exception:
+                return ""
+            if r.status_code >= 400:
+                return ""
+            return _html_to_text(r.text)
+
+        with httpx.Client(
+            timeout=_WEBSITE_SCRAPE_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; RaedBot/1.0)"},
+            event_hooks={"request": [_block_unsafe_redirect]},
+        ) as client:
+            text = _fetch_text(client, url)
+            if len(text) < max_chars:
+                about_url = url.rstrip("/") + "/about"
+                about_text = _fetch_text(client, about_url)
+                if about_text:
+                    text = (text + " " + about_text).strip()
+    except Exception:
+        return ""
+    return text[:max_chars]
 
 
 def find_linkedin_via_llm_search(

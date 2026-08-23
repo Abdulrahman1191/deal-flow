@@ -299,9 +299,16 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
       {/* AI recommendation */}
       {assessment && (
         <div className="rounded-xl bg-muted/40 border border-border p-3 space-y-2.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            AI recommendation
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              AI recommendation
+            </span>
+            {assessment.assessed_without_deck && (
+              <span title="Scored from the company's website and description — no pitch deck yet. Attach a deck to refine this.">
+                <Badge label="No deck" variant="neutral" />
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-3">
             {aiBucket && <Badge label={aiBucket} variant={bucketVariant[aiBucket]} />}
             <div className="flex-1">

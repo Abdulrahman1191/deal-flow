@@ -22,6 +22,12 @@ from app.tasks.celery_app import celery
 # to 'failed' instead of running again.
 MAX_ASSESS_ATTEMPTS = 3
 
+# Minimum length (issue #144) for a lead's freeform `description` to count as
+# "substantial" enough, on its own, to carry an assessment. Below this, a
+# deckless lead also needs usable scraped website content to escape the
+# awaiting_deck gate below.
+MIN_DESCRIPTION_CHARS = 40
+
 
 def _mark_failed(lead_id: str, error: str) -> None:
     """Sync DB write to flip a stuck 'processing' lead to 'failed'.
@@ -108,11 +114,29 @@ async def _run(lead_id: str) -> dict:
         if not lead:
             return {"error": "Lead not found"}
 
-        # No deck yet: park it instead of scoring on thin context (description
-        # alone) and dumping it in REJECT. sync_pitch_decks_task / the
-        # per-lead sync endpoint re-queue this task once pitch_deck_text is
-        # set, at which point this gate passes and the lead scores normally.
-        if not lead.pitch_deck_text:
+        has_deck = bool(lead.pitch_deck_text)
+
+        # No deck yet (issue #144): scrape the company's own public website so
+        # its landing page + description can substitute for a pitch deck,
+        # instead of parking every no-deck lead unassessed. Best-effort and
+        # bounded (see research.scrape_website_content) -- never raises, and
+        # is skipped entirely when a deck is already present.
+        website_content = (
+            research.scrape_website_content(lead.website)
+            if not has_deck and lead.website
+            else ""
+        )
+        has_website_content = bool(website_content.strip())
+        has_substantial_description = bool(
+            lead.description and len(lead.description.strip()) >= MIN_DESCRIPTION_CHARS
+        )
+
+        # Park only when there's genuinely no usable context at all: no deck,
+        # no usable scraped website content, and a thin/empty description.
+        # sync_pitch_decks_task / the per-lead sync endpoint re-queue this
+        # task once pitch_deck_text is set, at which point a deck-backed
+        # re-assessment refines the score.
+        if not has_deck and not has_website_content and not has_substantial_description:
             lead.status = "awaiting_deck"
             lead.assessment_attempts = 0
             await log_event(db, lead.id, EVENT_AWAITING_DECK)
@@ -152,6 +176,12 @@ async def _run(lead_id: str) -> dict:
         }
 
         research_data = research.research_company(lead_data)
+        # Broaden the scoring context with the scraped site (issue #144) --
+        # research_data is JSON-dumped whole into the assessment prompt's
+        # "Research data" section, so this reaches the LLM without touching
+        # the prompt template itself.
+        if website_content:
+            research_data["company_website_content"] = website_content
 
         # Feedback→pattern loop: pull the team's recent labeled judgments on
         # similar leads and feed them to the assessor as calibration. Best-effort
@@ -205,6 +235,10 @@ async def _run(lead_id: str) -> dict:
             research_sources=assessment_result.get("research_sources"),
             research_data=research_data,  # preserve full Tavily input for training
             precedents_cited=assessment_result.get("precedents_cited"),
+            # True when this score was made without a pitch deck (website
+            # and/or description only) -- issue #144 -- so partners know it's
+            # lower-confidence and can attach a deck to refine it later.
+            assessed_without_deck=not has_deck,
             user_override=None,
             user_override_at=None,
             approved_at=None,
