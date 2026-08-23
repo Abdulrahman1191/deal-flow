@@ -8,8 +8,6 @@ from openai import OpenAI
 
 from app.config import settings
 
-_PLACEHOLDER = "[Associate Name]"
-
 # Fallback used when a lead's owner has no calendly_url set (see User.calendly_url,
 # issue #84) -- keeps the previous single hardcoded link as the default.
 DEFAULT_CALENDLY_URL = "https://calendly.com/abdulrahman-raed/30min"
@@ -28,8 +26,8 @@ _LANGUAGE_INSTRUCTIONS = {
         "Language: the applicant's original submission is in ARABIC. Write the "
         "ENTIRE email -- subject, greeting, body, and sign-off -- in natural, "
         'professional Arabic, with an appropriate Arabic greeting and closing. Never '
-        'translate or alter the Calendly URL itself, and keep "Raed Ventures" and the '
-        "associate's name exactly as given, untransliterated."
+        'translate or alter the Calendly URL itself, and keep "Raed Ventures" exactly '
+        "as given, untransliterated."
     ),
     "en": (
         "Language: the applicant's original submission is in English. Write the "
@@ -66,14 +64,6 @@ def detect_applicant_language(lead_data: dict) -> str:
 def _language_instruction(lead_data: dict) -> str:
     return _LANGUAGE_INSTRUCTIONS[detect_applicant_language(lead_data)]
 
-
-def _substitute_name(data: dict, name: Optional[str] = None) -> None:
-    """Replace [Associate Name] placeholder in draft fields with the given name
-    (falls back to settings.associate_name -- the old global default)."""
-    name = name or settings.associate_name
-    for key in ("draft_body", "draft_subject"):
-        if isinstance(data.get(key), str):
-            data[key] = data[key].replace(_PLACEHOLDER, name)
 
 _client = None
 
@@ -361,22 +351,23 @@ copy.
   the company does (drawn from the deck/description) — plain fact only, never
   flattery, and omit it entirely if it isn't clear from the materials. Ask if they'd
   like to book a short call and include this Calendly link:
-  {calendly_url}. Sign off as {associate_name}, Raed
-  Ventures. Follow this shape:
+  {calendly_url}. Sign off as "Raed Ventures" — do NOT
+  sign with an individual's name. Follow this shape:
     Hi {{name}},
     Thank you for applying to Raed Ventures. We had a look at {{company}} and we're
     interested to learn more about what you're building.
     Would you like to book a short call? {{calendly}}
     Best,
-    {associate_name}, Raed Ventures
+    Raed Ventures
 - If REJECT: draft_type "rejection". Short, honest, respectful email, MAX 70 WORDS,
   no bullet points. Open by thanking them for applying to Raed Ventures. State
   plainly that it isn't a fit for Raed right now, on a FIT basis (stage, sector, or
-  business-model type) — not a judgment of the company. Keep the door open — wish
-  them well and invite them to reach back out if things evolve. IMPORTANT: Never
-  cite lack of information or insufficient data as a reason — if data is thin, fall
-  back to a fit-based reason (e.g. stage, sector focus, model type). Sign off as
-  {associate_name}, Raed Ventures.
+  business-model type) — not a judgment of the company. Close politely and warmly,
+  wishing them well — do NOT invite them to reach back out, reconnect, or keep us
+  posted if things change; the pass should read as polite and final. IMPORTANT:
+  Never cite lack of information or insufficient data as a reason — if data is thin,
+  fall back to a fit-based reason (e.g. stage, sector focus, model type). Sign off
+  as "Raed Ventures" — do NOT sign with an individual's name.
 - If MAYBE: set draft_type, draft_subject, draft_body all to null.
 
 Subject lines must be plain and non-salesy, no clickbait, no emoji — e.g. "Your
@@ -442,11 +433,15 @@ def assess_lead(
     feedback→pattern loop. Callers without a DB session (eval scripts) can omit
     it; the prompt then shows "(no recent team calibration yet)".
 
-    `owner_calendly` / `owner_name` are the lead owner's Calendly link and
-    full name (issue #84) — the draft's meeting link and sign-off should be
-    the owner's, not a single hardcoded associate's. Callers without an owner
-    on hand may omit them; generation falls back to the previous defaults
-    (DEFAULT_CALENDLY_URL / settings.associate_name) so it never breaks.
+    `owner_calendly` is the lead owner's Calendly link (issue #84) — the
+    draft's meeting link should be the owner's, not a single hardcoded
+    default. Callers without an owner on hand may omit it; generation falls
+    back to DEFAULT_CALENDLY_URL so it never breaks.
+
+    `owner_name` is accepted for backward compatibility with callers but is
+    no longer used: the draft signature always reads "Raed Ventures" with no
+    individual name (issue #137) — the owner is still reachable via CC/Reply-To
+    (issue #116), just not named in the body.
     """
     pitch_deck_text = lead_data.get("pitch_deck_text") or ""
     pitch_deck_excerpt = pitch_deck_text[:12_000] if pitch_deck_text else "(none provided)"
@@ -486,11 +481,9 @@ def assess_lead(
     from app.services import feedback_patterns as _fp
     team_calibration_block = _fp.format_for_prompt(team_calibration or [])
 
-    effective_name = owner_name or settings.associate_name
     effective_calendly = owner_calendly or DEFAULT_CALENDLY_URL
 
     prompt = ASSESS_USER_TEMPLATE.format(
-        associate_name=effective_name,
         calendly_url=effective_calendly,
         language_instruction=_language_instruction(lead_data),
         company_name=lead_data.get("company_name", ""),
@@ -525,7 +518,6 @@ def assess_lead(
 
     result = json.loads(response.choices[0].message.content)
     _enforce_bucket_consistency(result)
-    _substitute_name(result, effective_name)
     # Surface which precedents got cited so we can persist them on the
     # assessment_card and measure their influence later.
     result["precedents_cited"] = [
@@ -602,22 +594,24 @@ Rules per bucket — you MUST follow these exactly:
   ONE concrete, factual sentence about what the company does (plain fact only, never
   flattery — omit it entirely if it isn't clear from the context). Ask if they'd
   like to book a short call and include this Calendly link:
-  {calendly_url}. Sign off as {associate_name}, Raed
-  Ventures. Follow this shape:
+  {calendly_url}. Sign off as "Raed Ventures" — do NOT
+  sign with an individual's name. Follow this shape:
     Hi {{name}},
     Thank you for applying to Raed Ventures. We had a look at {{company}} and we're
     interested to learn more about what you're building.
     Would you like to book a short call? {{calendly}}
     Best,
-    {associate_name}, Raed Ventures
+    Raed Ventures
 - MAYBE: draft_type, draft_subject, draft_body MUST all be null. Do not write an email.
 - REJECT: draft_type MUST be "rejection". Short, honest, respectful email,
   MAX 70 WORDS, no bullet points. Open by thanking them for applying to Raed
   Ventures. State plainly that it isn't a fit for Raed right now, on a FIT basis (stage,
-  sector, or business-model type). Keep the door open — wish them well, encourage
-  them to reach out if things evolve. IMPORTANT: Never cite lack of information or
-  insufficient data as a reason — always use a fit-based reason (stage, sector
-  focus, model type). Sign off as {associate_name}, Raed Ventures.
+  sector, or business-model type). Close politely and warmly, wishing them well —
+  do NOT invite them to reach back out, reconnect, or keep us posted if things
+  change; the pass should read as polite and final. IMPORTANT: Never cite lack of
+  information or insufficient data as a reason — always use a fit-based reason
+  (stage, sector focus, model type). Sign off as "Raed Ventures" — do NOT sign with
+  an individual's name.
 
 Return strict JSON:
 {{
@@ -773,9 +767,13 @@ def regenerate_draft(
 ) -> dict[str, Any]:
     """Produces a fresh draft email for a manually-set bucket. No re-assessment.
 
-    `owner_calendly` / `owner_name` are the lead owner's Calendly link and full
-    name (issue #84); omit to fall back to DEFAULT_CALENDLY_URL /
-    settings.associate_name.
+    `owner_calendly` is the lead owner's Calendly link (issue #84); omit to
+    fall back to DEFAULT_CALENDLY_URL.
+
+    `owner_name` is accepted for backward compatibility with callers but is
+    no longer used: the draft signature always reads "Raed Ventures" with no
+    individual name (issue #137) — the owner is still reachable via CC/Reply-To
+    (issue #116), just not named in the body.
 
     `lead_data`'s `description` / `pitch_deck_text` (the applicant's original
     submission, not the AI-written `summary`) drive language detection — see
@@ -784,11 +782,9 @@ def regenerate_draft(
     if bucket not in ("YES", "MAYBE", "REJECT"):
         raise ValueError(f"bucket must be YES/MAYBE/REJECT, got {bucket!r}")
 
-    effective_name = owner_name or settings.associate_name
     effective_calendly = owner_calendly or DEFAULT_CALENDLY_URL
 
     prompt = DRAFT_REGEN_USER_TEMPLATE.format(
-        associate_name=effective_name,
         calendly_url=effective_calendly,
         language_instruction=_language_instruction(lead_data),
         bucket=bucket,
@@ -815,7 +811,6 @@ def regenerate_draft(
         result["draft_type"] = None
         result["draft_subject"] = None
         result["draft_body"] = None
-    _substitute_name(result, effective_name)
     return result
 
 
