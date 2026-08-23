@@ -82,6 +82,21 @@ class PaginatedLeads(BaseModel):
     items: List[LeadWithAssessment]
 
 
+class BulkArchiveRequest(BaseModel):
+    lead_ids: List[str]
+
+
+class BulkArchiveFailure(BaseModel):
+    lead_id: str
+    error: str
+
+
+class BulkArchiveResult(BaseModel):
+    archived: int
+    copper_enqueued: int
+    failed: List[BulkArchiveFailure]
+
+
 class PitchDeckSyncResult(BaseModel):
     """Structured diagnostic returned by POST /leads/{id}/sync-pitch-deck --
     never a bare 500, so the "Fetch pitch deck" button can always show the

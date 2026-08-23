@@ -1,11 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { fetchLeads, syncPitchDeck } from "../api/leads";
+import { useMemo, useState } from "react";
+import { bulkArchiveLeads, fetchLeads, syncPitchDeck } from "../api/leads";
 import { reassess } from "../api/assessments";
 import useAppStore from "../store/useAppStore";
+import { useBulkSelection } from "../hooks/useBulkSelection";
 import Badge from "../components/shared/Badge";
 import PriorContactChip from "../components/shared/PriorContactChip";
+import SelectCheckbox from "../components/shared/SelectCheckbox";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
+import { useToast } from "../components/shared/Toast";
+import BulkArchiveBar from "../components/leads/BulkArchiveBar";
 import type { Lead } from "../types/lead";
 
 // Shared with Navbar's count badge so both stay on the same cache entry.
@@ -21,7 +25,15 @@ function SkeletonRow() {
   );
 }
 
-function AwaitingDeckCard({ lead }: { lead: Lead }) {
+function AwaitingDeckCard({
+  lead,
+  selected,
+  onToggleSelect,
+}: {
+  lead: Lead;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   const qc = useQueryClient();
   const readOnly = !!useAppStore((s) => s.viewAs);
 
@@ -50,7 +62,16 @@ function AwaitingDeckCard({ lead }: { lead: Lead }) {
       data-testid="awaiting-deck-card"
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
+        <div className="flex items-start gap-2 min-w-0">
+          {onToggleSelect && (
+            <SelectCheckbox
+              checked={!!selected}
+              onChange={onToggleSelect}
+              readOnly={readOnly}
+              label={`Select ${lead.company_name} for bulk archive`}
+            />
+          )}
+          <div className="min-w-0">
           <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
           <PriorContactChip
             priorContact={lead.prior_contact}
@@ -84,6 +105,7 @@ function AwaitingDeckCard({ lead }: { lead: Lead }) {
               )}
             </div>
           )}
+          </div>
         </div>
         <Badge label="Awaiting Deck" variant="maybe" />
       </div>
@@ -143,6 +165,9 @@ function AwaitingDeckCard({ lead }: { lead: Lead }) {
 
 export default function AwaitingDeckPage() {
   const [sort, setSort] = useState<SortOrder>("newest");
+  const readOnly = !!useAppStore((s) => s.viewAs);
+  const qc = useQueryClient();
+  const toast = useToast();
 
   // Sharing AWAITING_DECK_QUERY_KEY as-is (rather than appending sort) keeps
   // this on the same cache entry as Navbar's count badge in the common case
@@ -155,6 +180,30 @@ export default function AwaitingDeckPage() {
   });
 
   const leads = data?.items ?? [];
+  const selectableIds = useMemo(() => leads.map((l) => l.id), [leads]);
+  const { selected, toggle, selectAll, clear, allSelected } = useBulkSelection(selectableIds);
+
+  const bulkArchive = useMutation({
+    mutationFn: () => bulkArchiveLeads(Array.from(selected)),
+    onSuccess: (result) => {
+      clear();
+      const parts = [`Archived ${result.archived} · synced to Copper`];
+      if (result.failed.length > 0) parts.push(`${result.failed.length} failed`);
+      toast(parts.join(" · "));
+    },
+    onError: () => toast("Couldn't archive the selected leads — please try again."),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["archive"] });
+    },
+  });
+
+  const handleBulkArchive = () => {
+    const n = selected.size;
+    if (confirm(`Archive ${n} lead${n === 1 ? "" : "s"}? Each one is also marked Unqualified in Copper.`)) {
+      bulkArchive.mutate();
+    }
+  };
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
@@ -169,6 +218,19 @@ export default function AwaitingDeckPage() {
         </div>
         <SortToggle value={sort} onChange={setSort} />
       </div>
+
+      {!isLoading && leads.length > 0 && (
+        <BulkArchiveBar
+          count={selected.size}
+          total={selectableIds.length}
+          allSelected={allSelected}
+          onSelectAll={selectAll}
+          onClear={clear}
+          onArchiveSelected={handleBulkArchive}
+          archiving={bulkArchive.isPending}
+          readOnly={readOnly}
+        />
+      )}
 
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -188,7 +250,12 @@ export default function AwaitingDeckPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {leads.map((lead) => (
-            <AwaitingDeckCard key={lead.id} lead={lead} />
+            <AwaitingDeckCard
+              key={lead.id}
+              lead={lead}
+              selected={selected.has(lead.id)}
+              onToggleSelect={() => toggle(lead.id)}
+            />
           ))}
         </div>
       )}

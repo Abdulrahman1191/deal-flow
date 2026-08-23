@@ -1,15 +1,26 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { exportLeadsCsv, fetchLeads, syncMyLeads } from "../api/leads";
+import { bulkArchiveLeads, exportLeadsCsv, fetchLeads, syncMyLeads } from "../api/leads";
 import useAppStore from "../store/useAppStore";
+import { useBulkSelection } from "../hooks/useBulkSelection";
 import StatsRow from "../components/leads/StatsRow";
 import LeadBucket from "../components/leads/LeadBucket";
 import LeadCard from "../components/leads/LeadCard";
+import BulkArchiveBar from "../components/leads/BulkArchiveBar";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
+import { useToast } from "../components/shared/Toast";
 import type { Lead } from "../types/lead";
 
-function LeadCardPending({ lead }: { lead: Lead }) {
-  return <LeadCard lead={lead} />;
+function LeadCardPending({
+  lead,
+  selected,
+  onToggleSelect,
+}: {
+  lead: Lead;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
+  return <LeadCard lead={lead} selected={selected} onToggleSelect={onToggleSelect} />;
 }
 
 function SkeletonCard() {
@@ -31,7 +42,9 @@ function SkeletonCard() {
 
 export default function LeadsPage() {
   const { leads, setLeads } = useAppStore();
+  const readOnly = !!useAppStore((s) => s.viewAs);
   const qc = useQueryClient();
+  const toast = useToast();
   const didAutoSync = useRef(false);
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState("");
@@ -81,6 +94,31 @@ export default function LeadsPage() {
   const bucket = (b: string) =>
     filtered.filter((l: Lead) => (l.assessment?.user_override ?? l.assessment?.bucket) === b);
   const hasFilter = !!search.trim() || !!stage;
+
+  const selectableIds = useMemo(() => filtered.map((l) => l.id), [filtered]);
+  const { selected, toggle, selectAll, clear, allSelected } = useBulkSelection(selectableIds);
+
+  const bulkArchive = useMutation({
+    mutationFn: () => bulkArchiveLeads(Array.from(selected)),
+    onSuccess: (data) => {
+      clear();
+      const parts = [`Archived ${data.archived} · synced to Copper`];
+      if (data.failed.length > 0) parts.push(`${data.failed.length} failed`);
+      toast(parts.join(" · "));
+    },
+    onError: () => toast("Couldn't archive the selected leads — please try again."),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["archive"] });
+    },
+  });
+
+  const handleBulkArchive = () => {
+    const n = selected.size;
+    if (confirm(`Archive ${n} lead${n === 1 ? "" : "s"}? Each one is also marked Unqualified in Copper.`)) {
+      bulkArchive.mutate();
+    }
+  };
 
   const handleExportYes = async () => {
     setExporting(true);
@@ -183,15 +221,43 @@ export default function LeadsPage() {
       ) : (
         <>
           <StatsRow leads={filtered} />
+          <BulkArchiveBar
+            count={selected.size}
+            total={selectableIds.length}
+            allSelected={allSelected}
+            onSelectAll={selectAll}
+            onClear={clear}
+            onArchiveSelected={handleBulkArchive}
+            archiving={bulkArchive.isPending}
+            readOnly={readOnly}
+          />
           {hasFilter && bucket("YES").length + bucket("MAYBE").length + bucket("REJECT").length === 0 ? (
             <div className="border border-dashed border-border rounded-2xl py-12 text-center text-sm text-muted-foreground">
               No deals match your search.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <LeadBucket title="Yes — Schedule Meeting" leads={bucket("YES")} accent="bg-success" />
-              <LeadBucket title="Maybe — Review" leads={bucket("MAYBE")} accent="bg-warning" />
-              <LeadBucket title="Reject" leads={bucket("REJECT")} accent="bg-error" />
+              <LeadBucket
+                title="Yes — Schedule Meeting"
+                leads={bucket("YES")}
+                accent="bg-success"
+                selected={selected}
+                onToggleSelect={toggle}
+              />
+              <LeadBucket
+                title="Maybe — Review"
+                leads={bucket("MAYBE")}
+                accent="bg-warning"
+                selected={selected}
+                onToggleSelect={toggle}
+              />
+              <LeadBucket
+                title="Reject"
+                leads={bucket("REJECT")}
+                accent="bg-error"
+                selected={selected}
+                onToggleSelect={toggle}
+              />
             </div>
           )}
           {filtered.filter((l) => !l.assessment).length > 0 && (
@@ -199,7 +265,12 @@ export default function LeadsPage() {
               <h3 className="text-sm font-semibold text-muted-foreground mb-3">Pending Assessment</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {filtered.filter((l) => !l.assessment).map((lead) => (
-                  <LeadCardPending key={lead.id} lead={lead} />
+                  <LeadCardPending
+                    key={lead.id}
+                    lead={lead}
+                    selected={selected.has(lead.id)}
+                    onToggleSelect={() => toggle(lead.id)}
+                  />
                 ))}
               </div>
             </div>

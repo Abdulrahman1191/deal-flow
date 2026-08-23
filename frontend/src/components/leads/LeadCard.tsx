@@ -14,11 +14,15 @@ import { overrideBucket, rateAssessment, reassess, type OverrideReason } from ".
 import { archiveNoReply, findLinkedin, syncPitchDeck, updateLead } from "../../api/leads";
 import ReasonModal from "./ReasonModal";
 import FeedbackModal from "./FeedbackModal";
+import SelectCheckbox from "../shared/SelectCheckbox";
 
 interface Props {
   lead: Lead;
   /** Position in its column — used to stagger the entrance animation. */
   index?: number;
+  /** Bulk-select (issue #141) — omitted entirely hides the checkbox. */
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }
 
 const bucketVariant: Record<string, "yes" | "maybe" | "reject"> = {
@@ -27,7 +31,7 @@ const bucketVariant: Record<string, "yes" | "maybe" | "reject"> = {
   REJECT: "reject",
 };
 
-export default function LeadCard({ lead, index = 0 }: Props) {
+export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
   // When set, a ReasonModal is open for this bucket. The user must save with
@@ -222,7 +226,16 @@ export default function LeadCard({ lead, index = 0 }: Props) {
     >
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
+        <div className="flex items-start gap-2 min-w-0">
+          {onToggleSelect && (
+            <SelectCheckbox
+              checked={!!selected}
+              onChange={onToggleSelect}
+              readOnly={readOnly}
+              label={`Select ${lead.company_name} for bulk archive`}
+            />
+          )}
+          <div className="min-w-0">
           <p className="font-semibold text-foreground text-sm">{lead.company_name}</p>
           <PriorContactChip
             priorContact={lead.prior_contact}
@@ -268,6 +281,7 @@ export default function LeadCard({ lead, index = 0 }: Props) {
               )}
             </div>
           )}
+          </div>
         </div>
         <div className="flex flex-col items-end gap-1">
           {bucket && <Badge label={bucket} variant={bucketVariant[bucket]} />}

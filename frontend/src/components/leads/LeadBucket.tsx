@@ -5,9 +5,14 @@ interface Props {
   title: string;
   leads: Lead[];
   accent: string;
+  /** Bulk-select (issue #141) — omitted entirely hides checkboxes on cards.
+   * Read-only-while-impersonating is handled inside LeadCard itself (it
+   * already reads viewAs from the store). */
+  selected?: Set<string>;
+  onToggleSelect?: (id: string) => void;
 }
 
-export default function LeadBucket({ title, leads, accent }: Props) {
+export default function LeadBucket({ title, leads, accent, selected, onToggleSelect }: Props) {
   return (
     <div className="flex flex-col gap-3 min-w-0">
       <div className="flex items-center gap-2 mb-1">
@@ -23,7 +28,13 @@ export default function LeadBucket({ title, leads, accent }: Props) {
         </div>
       )}
       {leads.map((lead, i) => (
-        <LeadCard key={lead.id} lead={lead} index={i} />
+        <LeadCard
+          key={lead.id}
+          lead={lead}
+          index={i}
+          selected={selected?.has(lead.id)}
+          onToggleSelect={onToggleSelect ? () => onToggleSelect(lead.id) : undefined}
+        />
       ))}
     </div>
   );

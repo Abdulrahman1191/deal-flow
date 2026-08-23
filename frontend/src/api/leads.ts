@@ -20,6 +20,17 @@ export const archiveLead = (id: string) =>
 export const archiveNoReply = (id: string) =>
   client.post(`/leads/${id}/archive-no-reply`).then((r) => r.data);
 
+export interface BulkArchiveResult {
+  archived: number;
+  copper_enqueued: number;
+  failed: { lead_id: string; error: string }[];
+}
+
+export const bulkArchiveLeads = (leadIds: string[]) =>
+  client
+    .post<BulkArchiveResult>("/leads/bulk-archive", { lead_ids: leadIds })
+    .then((r) => r.data);
+
 export interface LeadEvent {
   id: string;
   event_type: string;
