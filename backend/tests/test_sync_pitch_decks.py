@@ -175,6 +175,30 @@ def test_ingest_queues_reassessment_when_lead_already_assessed(monkeypatch):
     assert lead.pitch_deck_ingested_at is not None
 
 
+def test_ingest_queues_reassessment_for_deckless_assessed_lead(monkeypatch):
+    """A lead scored via the deckless path (issue #144) already sits in status
+    'assessed' with a card (assessed_without_deck=True). Issue #147 requires it
+    stay eligible for automatic re-assessment once a deck arrives -- eligibility
+    here is driven by "already has a card" (has_card=True), never by lead.status,
+    so a deckless-assessed lead must not be skipped just because it isn't sitting
+    in 'awaiting_deck'."""
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "clean deck text")
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    lead = _fake_lead(status="assessed")
+    db = _FakeSession(has_card=True)
+    drive_file = {"id": "file123", "name": "Acme.pdf"}
+
+    requeued = asyncio.run(spd._ingest_from_drive(db, None, lead, drive_file))
+
+    assert requeued is True
+    assert queued == [str(lead.id)]
+    assert lead.pitch_deck_text == "clean deck text"
+
+
 def test_ingest_skips_reassessment_when_never_assessed(monkeypatch):
     lead, requeued, queued = _run_ingest(monkeypatch, has_card=False, extracted_text="clean deck text")
 
@@ -336,6 +360,43 @@ def test_run_second_pass_with_no_new_files_is_idempotent(monkeypatch):
     assert result["reassessments_queued"] == 0
     assert queued == []
     assert already_synced.pitch_deck_text == "existing synced text"
+
+
+def test_run_requeues_deckless_assessed_lead_when_deck_arrives(monkeypatch):
+    """End-to-end (issue #147): a lead already scored without a deck (status
+    'assessed', pitch_deck_text still empty) must still be picked up by the
+    Drive sweep's candidate pool -- which filters on pitch_deck_text/drive_id,
+    not on lead.status -- and queued for re-assessment once a matching deck
+    shows up in the folder."""
+    lead = SimpleNamespace(
+        id=uuid.uuid4(),
+        pitch_deck_drive_id=None,
+        pitch_deck_filename=None,
+        pitch_deck_text=None,
+        pitch_deck_ingested_at=None,
+        company_name="Acme Deep Tech",
+        status="assessed",
+    )
+
+    monkeypatch.setattr(spd, "_drive_service", lambda: None)
+    monkeypatch.setattr(
+        spd,
+        "_list_pdfs_in_folder",
+        lambda service, folder_id: [{"id": "file123", "name": "Acme Deep Tech.pdf"}],
+    )
+    monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession([lead], has_card=True))
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "clean deck text")
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    result = asyncio.run(spd._run())
+
+    assert result["matched"] == 1
+    assert result["reassessments_queued"] == 1
+    assert queued == [str(lead.id)]
+    assert lead.pitch_deck_text == "clean deck text"
 
 
 def test_run_excludes_archived_leads_so_deck_attaches_to_the_active_survivor(monkeypatch):
