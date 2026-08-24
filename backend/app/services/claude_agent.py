@@ -160,6 +160,32 @@ Surface nuance. Flag what you don't know in `data_gaps`. Cite sources in
 
 Return your output as a valid JSON object matching the AssessmentResult schema."""
 
+NO_DECK_GUIDANCE = """
+⚠ NO PITCH DECK IS AVAILABLE for this lead — you are scoring from web research and the
+company's own website/description only (issue #144). Read this carefully:
+
+- The ABSENCE of a pitch deck is an information gap, NOT a negative signal. It must
+  NEVER, by itself, justify a REJECT.
+- Do not infer weakness (no traction, weak team, no moat, etc.) purely from information
+  that is simply missing. A criterion you cannot evidence should be scored in the 5-8
+  "couldn't find data" range (per rule 2 above) and logged as a `data_gaps` entry — never
+  scored low as if the absence itself were proof of a problem.
+- REJECT is valid here ONLY on POSITIVE disqualifying evidence actually present in the
+  research data / website / description — e.g. clearly outside MENA, clearly past
+  Series A, a clearly disqualifying business model (marketplace / dropshipping / agency /
+  commodity SaaS), or another affirmative poor-fit signal per the rubric. Never REJECT
+  because the deck is missing or because the available evidence is merely thin.
+- When the available evidence is genuinely insufficient to judge either way, prefer
+  MAYBE over REJECT — that routes the lead to human review instead of quietly burying it.
+- Reflect the extra uncertainty through a LOWER `confidence_score` and by listing what's
+  missing in `data_gaps` (e.g. "no pitch deck", "team background unverified", "traction
+  unknown") — NOT by moving to a harsher bucket. A thin-data YES/MAYBE with low
+  confidence and explicit data_gaps is the correct output, not a REJECT.
+- This lead will be automatically re-assessed once a pitch deck arrives. Your job now is
+  to triage fairly on what's actually available, not to pre-emptively reject for what's
+  missing.
+"""
+
 ASSESS_USER_TEMPLATE = """Research the following company and produce a full investment assessment.
 
 Company: {company_name}
@@ -179,7 +205,7 @@ Research data:
 
 Pitch deck excerpt (founder-provided, prefer this over web research when they conflict):
 {pitch_deck_excerpt}
-
+{no_deck_guidance}
 Historical precedents from Raed's portfolio (most similar to this lead):
 {precedents_block}
 
@@ -445,6 +471,10 @@ def assess_lead(
     """
     pitch_deck_text = lead_data.get("pitch_deck_text") or ""
     pitch_deck_excerpt = pitch_deck_text[:12_000] if pitch_deck_text else "(none provided)"
+    # Deckless leads are scored from web research + description alone (issue #144);
+    # without an explicit steer, thin data reads as weakness and drags the bucket
+    # toward REJECT. Only injected when there's genuinely no deck text (issue #147).
+    no_deck_guidance = NO_DECK_GUIDANCE if not pitch_deck_text else ""
 
     # Portfolio retrieval — find the 6 most similar past Raed bets/passes and
     # inject them as historical precedents into the prompt. See
@@ -496,6 +526,7 @@ def assess_lead(
         linkedin_urls=", ".join(lead_data.get("linkedin_urls") or []) or "N/A",
         research_data=json.dumps(research_data, indent=2),
         pitch_deck_excerpt=pitch_deck_excerpt,
+        no_deck_guidance=no_deck_guidance,
         precedents_block=precedents_block,
         team_calibration_block=team_calibration_block,
     )
