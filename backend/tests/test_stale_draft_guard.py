@@ -285,3 +285,169 @@ def test_regenerate_draft_endpoint_sets_draft_bucket(override_auth, monkeypatch)
     assert response.status_code == 200
     assert response.json()["draft_bucket"] == "YES"
     assert card.draft_bucket == "YES"
+
+
+# ---------- assess_lead._run: the upsert itself must set/refresh draft_bucket ----------
+#
+# The router-level tests above cover /override and /regenerate-draft, both of
+# which set card.draft_bucket explicitly. But the initial/re-assessment upsert
+# in app/tasks/assess_lead.py writes draft_subject/draft_body/draft_type
+# directly via a `fields` dict and previously omitted draft_bucket -- so a
+# fresh assessment left it NULL despite writing a real draft, and worse, a
+# re-assessment of a card that had been overridden to e.g. 'YES' would replace
+# the draft with one written for the new bucket while the OLD draft_bucket
+# value silently survived the upsert.
+
+
+class _FakeScalarResult:
+    def __init__(self, obj):
+        self._obj = obj
+
+    def scalar_one_or_none(self):
+        return self._obj
+
+
+class _FakeTaskSession:
+    """Mirrors test_owner_calendly_draft.py's _FakeTaskSession: dispatches
+    execute() by the query's target entity so app.tasks.assess_lead._run can
+    run against a fake lead/card/owner without a live Postgres."""
+
+    def __init__(self, lead, card=None, owner=None):
+        self.lead = lead
+        self.card = card
+        self.owner = owner
+        self.added: list = []
+        self.committed = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def execute(self, query):
+        from app.models.lead import Lead
+        from app.models.user import User
+        from app.models.assessment import AssessmentCard
+
+        entity = query.column_descriptions[0]["entity"]
+        if entity is Lead:
+            return _FakeScalarResult(self.lead)
+        if entity is User:
+            return _FakeScalarResult(self.owner)
+        assert entity is AssessmentCard
+        return _FakeScalarResult(self.card)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def commit(self):
+        self.committed += 1
+
+
+def _fake_run_lead(lead_id):
+    return SimpleNamespace(
+        id=lead_id,
+        status="pending",
+        pitch_deck_text="Deck contents go here " * 50,
+        company_linkedin_url="https://linkedin.com/company/acme",
+        company_name="Acme Deep Tech",
+        website="https://acme.test",
+        description="A deep-tech startup.",
+        stage="seed",
+        region="MENA",
+        founder_names=["Founder One"],
+        linkedin_urls=None,
+        copper_id=None,
+        raw_copper_data=None,
+        owner_email=None,
+        assessment_attempts=0,
+    )
+
+
+def _install_fake_run_deps(monkeypatch, assessment_result):
+    from app.tasks import assess_lead
+
+    monkeypatch.setattr(assess_lead.research, "research_company", lambda lead_data: {"sources": []})
+    monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", lambda *a, **k: assessment_result)
+
+    import app.services.feedback_patterns as feedback_patterns
+
+    async def _fake_exemplars(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(feedback_patterns, "retrieve_labeled_exemplars", _fake_exemplars)
+
+
+def test_fresh_assessment_sets_draft_bucket(monkeypatch):
+    """A brand-new assessment (no prior card) must record draft_bucket
+    alongside the draft it just wrote, not leave it NULL."""
+    import asyncio
+    from app.tasks import assess_lead
+
+    lead = _fake_run_lead(uuid.uuid4())
+    session = _FakeTaskSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
+    _install_fake_run_deps(
+        monkeypatch,
+        {
+            "bucket": "YES",
+            "confidence_score": 82,
+            "summary": "Strong team.",
+            "positive_signals": [],
+            "red_flags": [],
+            "data_gaps": [],
+            "scoring_breakdown": {},
+            "draft_subject": "Let's talk",
+            "draft_body": "Hi there",
+            "draft_type": "meeting_request",
+            "research_sources": [],
+            "precedents_cited": [],
+        },
+    )
+
+    asyncio.run(assess_lead._run(str(lead.id)))
+
+    from app.models.assessment import AssessmentCard
+
+    added_cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
+    assert len(added_cards) == 1
+    new_card = added_cards[0]
+    assert new_card.draft_type == "meeting_request"
+    assert new_card.draft_bucket == "YES"
+
+
+def test_reassessment_overwrites_stale_draft_bucket(monkeypatch):
+    """A card previously overridden to YES (draft_bucket='YES') that gets
+    re-assessed into a REJECT must not keep the stale 'YES' draft_bucket --
+    the upsert has to overwrite it to match the freshly-written draft."""
+    import asyncio
+    from app.tasks import assess_lead
+
+    lead = _fake_run_lead(uuid.uuid4())
+    card = _fake_card(bucket="YES", draft_type="meeting_request", user_override="YES")
+    assert card.draft_bucket == "YES"
+    session = _FakeTaskSession(lead, card=card)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
+    _install_fake_run_deps(
+        monkeypatch,
+        {
+            "bucket": "REJECT",
+            "confidence_score": 20,
+            "summary": "Not a fit after all.",
+            "positive_signals": [],
+            "red_flags": [],
+            "data_gaps": [],
+            "scoring_breakdown": {},
+            "draft_subject": "Thanks for reaching out",
+            "draft_body": "Not a fit right now.",
+            "draft_type": "rejection",
+            "research_sources": [],
+            "precedents_cited": [],
+        },
+    )
+
+    asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert card.draft_type == "rejection"
+    assert card.draft_bucket == "REJECT"

@@ -8,8 +8,8 @@ a *successful* regeneration matched, so staleness is detectable rather than
 inferred. Nullable -- existing rows and any draft written before this column
 existed have no recorded bucket.
 
-Revision ID: s6f7a8b9c0d1
-Revises: r5e6f7a8b9c0
+Revision ID: t7a8b9c0d1e2
+Revises: s6f7a8b9c0d1
 Create Date: 2026-08-25
 
 """
@@ -19,8 +19,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "s6f7a8b9c0d1"
-down_revision: Union[str, None] = "r5e6f7a8b9c0"
+revision: str = "t7a8b9c0d1e2"
+down_revision: Union[str, None] = "s6f7a8b9c0d1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
