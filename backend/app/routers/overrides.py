@@ -1,10 +1,14 @@
 """
 Read-only access to the training-data table.
 
-Owner-only. Used by:
+Most routes here are owner-only. Used by:
   - the eval harness (`scripts/eval_prompts.py`)
   - future analytical UI / metrics dashboard
   - hand inspection ("did we capture that one?")
+
+`/my-reasons` (issue #152) is the one exception: any authenticated user can
+call it, scoped to their own `acted_by_email` -- it powers the "Your
+reasons" chips in the rating/bucket-change modals, not an admin view.
 """
 from __future__ import annotations
 from datetime import datetime
@@ -20,6 +24,7 @@ from app.database import get_db
 from app.models.override import AssessmentOverride
 from app.models.user import User
 from app.services.auth import get_current_user, is_owner
+from app.services.learned_reasons import CONTEXTS, build_learned_reasons, normalize_reason_text
 
 router = APIRouter(prefix="/overrides", tags=["overrides"])
 
@@ -265,3 +270,100 @@ async def calibration_stats(
         disagreement_pairs={r[0]: r[1] for r in pair_rows},
         excluded_test_accounts=excluded_emails,
     )
+
+
+class LearnedReasonOut(BaseModel):
+    text: str
+    count: int
+    last_used_at: datetime
+    # "personal" = this caller has used it before; "team" = a fallback
+    # reason drawn from other users, shown only when the caller doesn't
+    # have enough of their own yet in this context.
+    source: str
+
+
+class MyReasonsOut(BaseModel):
+    rating_up: list[LearnedReasonOut]
+    rating_down: list[LearnedReasonOut]
+    bucket_yes: list[LearnedReasonOut]
+    bucket_maybe: list[LearnedReasonOut]
+    bucket_reject: list[LearnedReasonOut]
+
+
+# Below this many personal reasons in a context, pad with team-wide ones so a
+# new user doesn't see an empty chip list on day one.
+_MIN_PERSONAL_PER_CONTEXT = 3
+_CAP_PER_CONTEXT = 8
+# Bounded like feedback_patterns.retrieve_labeled_exemplars's `pool` -- recent
+# history is what a "your reasons" chip list should reflect anyway, and it
+# keeps the in-process clustering trivially fast.
+_ROW_POOL_LIMIT = 1000
+
+_REASON_COLUMNS = (
+    AssessmentOverride.trigger,
+    AssessmentOverride.human_bucket,
+    AssessmentOverride.human_reason,
+    AssessmentOverride.human_reason_tags,
+    AssessmentOverride.created_at,
+)
+
+
+@router.get("/my-reasons", response_model=MyReasonsOut)
+async def my_reasons(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """One-click reason chips learned from the caller's own override/rating
+    history (issue #152) -- powers the "Your reasons" section in
+    FeedbackModal and ReasonModal. Scoped to `acted_by_email == user.email`;
+    another user's reasons never appear as "personal" chips for this caller.
+
+    No LLM call is made (see app/services/learned_reasons.py for why
+    deterministic normalization was chosen over one), so there's nothing to
+    cache: this does one or two bounded, indexed SELECTs and clusters the
+    result in-process, well within interactive latency.
+    """
+    personal_rows = (
+        await db.execute(
+            select(*_REASON_COLUMNS)
+            .where(AssessmentOverride.acted_by_email == user.email)
+            .order_by(AssessmentOverride.created_at.desc())
+            .limit(_ROW_POOL_LIMIT)
+        )
+    ).all()
+    personal = build_learned_reasons(personal_rows, cap=_CAP_PER_CONTEXT)
+
+    sparse_contexts = [c for c in CONTEXTS if len(personal.get(c, [])) < _MIN_PERSONAL_PER_CONTEXT]
+    team: dict[str, list] = {}
+    if sparse_contexts:
+        team_rows = (
+            await db.execute(
+                select(*_REASON_COLUMNS)
+                .where(
+                    AssessmentOverride.acted_by_email.is_not(None),
+                    AssessmentOverride.acted_by_email != user.email,
+                )
+                .order_by(AssessmentOverride.created_at.desc())
+                .limit(_ROW_POOL_LIMIT)
+            )
+        ).all()
+        team = build_learned_reasons(team_rows, cap=_CAP_PER_CONTEXT)
+
+    def _assemble(ctx: str) -> list[LearnedReasonOut]:
+        chips = [
+            LearnedReasonOut(text=r.text, count=r.count, last_used_at=r.last_used_at, source="personal")
+            for r in personal.get(ctx, [])
+        ]
+        if ctx in sparse_contexts:
+            seen = {normalize_reason_text(c.text) for c in chips}
+            for r in team.get(ctx, []):
+                key = normalize_reason_text(r.text)
+                if key in seen or len(chips) >= _CAP_PER_CONTEXT:
+                    continue
+                seen.add(key)
+                chips.append(
+                    LearnedReasonOut(text=r.text, count=r.count, last_used_at=r.last_used_at, source="team")
+                )
+        return chips[:_CAP_PER_CONTEXT]
+
+    return MyReasonsOut(**{ctx: _assemble(ctx) for ctx in CONTEXTS})

@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { fetchMyReasons } from "../../api/overrides";
+import LearnedReasonChips from "./LearnedReasonChips";
 
 interface Props {
   companyName: string;
@@ -82,6 +85,7 @@ export default function FeedbackModal({
   onCancel,
 }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedLearned, setSelectedLearned] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
 
   const isUp = rating === "up";
@@ -91,14 +95,27 @@ export default function FeedbackModal({
   // the note. Any other tag already states a substantive "why" on its own.
   const hasSubstantiveTag = Array.from(selected).some((tag) => tag !== "Other");
   const hasNote = note.trim().length > 0;
-  const hasFeedback = hasSubstantiveTag || hasNote;
+  const hasFeedback = hasSubstantiveTag || hasNote || selectedLearned.size > 0;
   const onlyOtherSelected = selected.has("Other") && !hasSubstantiveTag;
+
+  // Learned one-click reason chips (issue #152) — context-aware by rating
+  // direction (thumbs-up vs thumbs-down), matching how they're captured.
+  const { data: myReasons } = useQuery({ queryKey: ["my-reasons"], queryFn: fetchMyReasons, staleTime: 5 * 60 * 1000 });
+  const learnedReasons = (isUp ? myReasons?.rating_up : myReasons?.rating_down) ?? [];
 
   const toggle = (tag: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(tag)) next.delete(tag);
       else next.add(tag);
+      return next;
+    });
+
+  const toggleLearned = (text: string) =>
+    setSelectedLearned((prev) => {
+      const next = new Set(prev);
+      if (next.has(text)) next.delete(text);
+      else next.add(text);
       return next;
     });
 
@@ -156,6 +173,15 @@ export default function FeedbackModal({
             </div>
           </div>
 
+          <LearnedReasonChips
+            reasons={learnedReasons}
+            selected={selectedLearned}
+            onToggle={toggleLearned}
+            activeClassName={
+              isUp ? "bg-success/20 text-success border-success" : "bg-warning/20 text-warning border-warning"
+            }
+          />
+
           <div>
             <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               {onlyOtherSelected ? "Note (required to explain \"Other\")" : "Optional note"}
@@ -185,7 +211,12 @@ export default function FeedbackModal({
               </span>
             )}
             <button
-              onClick={() => onSubmit({ reason_tags: Array.from(selected), reason: note })}
+              onClick={() =>
+                onSubmit({
+                  reason_tags: Array.from(selected),
+                  reason: [note.trim(), ...Array.from(selectedLearned)].filter(Boolean).join("; "),
+                })
+              }
               disabled={!hasFeedback}
               className={`px-5 py-2 text-sm font-medium rounded-lg text-white transition-colors ${
                 hasFeedback
