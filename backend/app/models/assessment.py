@@ -24,6 +24,10 @@ class AssessmentCard(Base):
     draft_subject: Mapped[Optional[str]] = mapped_column(Text)
     draft_body: Mapped[Optional[str]] = mapped_column(Text)
     draft_type: Mapped[Optional[str]] = mapped_column(String(16))
+    # Bucket the current draft_subject/draft_body/draft_type were actually
+    # written for (issue #150). Set on a successful regen, nulled out on a
+    # failed one, so a stale draft is detectable rather than inferred.
+    draft_bucket: Mapped[Optional[str]] = mapped_column(String(16))
     research_sources: Mapped[Optional[list]] = mapped_column(JSONB)
     data_gaps: Mapped[Optional[list]] = mapped_column(JSONB)
     # Raw Tavily research dict — captured so we can reconstruct what the AI saw
