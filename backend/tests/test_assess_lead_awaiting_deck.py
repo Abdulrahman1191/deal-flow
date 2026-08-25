@@ -232,6 +232,50 @@ def test_gate_scores_deckless_lead_with_substantial_description_instead_of_parki
     assert cards[0].assessed_without_deck is True
 
 
+def test_awaiting_deck_lead_leaves_awaiting_deck_once_deck_text_is_attached(monkeypatch):
+    """Issue #149, acceptance criterion 2: once the deck sweep attaches
+    pitch_deck_text to a lead that was sitting in awaiting_deck and queues
+    assess_lead_task (see test_ingest_queues_reassessment_for_awaiting_deck_lead_without_card
+    in test_sync_pitch_decks.py), the resulting run must score the lead
+    normally and move it off awaiting_deck -- not re-park it."""
+    lead = _fake_lead(pitch_deck_text="Deck contents go here " * 50, status="awaiting_deck")
+    session = _FakeSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
+
+    monkeypatch.setattr(assess_lead.research, "research_company", lambda lead_data: {"sources": []})
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", _boom)
+
+    assessment_result = {
+        "bucket": "MAYBE",
+        "confidence_score": 55,
+        "summary": "Deck-backed assessment.",
+        "positive_signals": [],
+        "red_flags": [],
+        "data_gaps": [],
+        "scoring_breakdown": {},
+        "draft_subject": None,
+        "draft_body": None,
+        "draft_type": None,
+        "research_sources": [],
+        "precedents_cited": [],
+    }
+    monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", lambda *a, **k: assessment_result)
+
+    import app.services.feedback_patterns as feedback_patterns
+
+    async def _fake_exemplars(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(feedback_patterns, "retrieve_labeled_exemplars", _fake_exemplars)
+
+    result = asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert lead.status == "assessed"
+    assert result["bucket"] == "MAYBE"
+    cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
+    assert cards[0].assessed_without_deck is False
+
+
 def test_lead_with_deck_text_scores_normally_and_lands_on_assessed(monkeypatch):
     lead = _fake_lead(pitch_deck_text="Deck contents go here " * 50)
     session = _FakeSession(lead, card=None)

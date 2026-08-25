@@ -139,6 +139,7 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
         # left every not-yet-committed lead for this run rolled back, which
         # is why a single bad record produced a stuck partial import that
         # repeated on every subsequent run.
+        is_new_lead = False
         try:
             existing = await db.execute(select(Lead).where(Lead.copper_id == copper_id))
             existing_lead = existing.scalar_one_or_none()
@@ -181,6 +182,7 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
                 # already imported earlier in this same run.
                 await db.commit()
                 new_count += 1
+                is_new_lead = True
         except Exception as exc:
             await db.rollback()
             failed_count += 1
@@ -189,10 +191,26 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
 
         await maybe_refresh_prior_contact(db, lead, raw)
 
-        try:
-            assess_lead_task.delay(str(lead.id))
-        except Exception as exc:
-            print(f"[sync_copper] enqueue failed for lead={lead.id} copper_id={copper_id} (will be picked up later): {exc!r}")
+        if is_new_lead and not lead.pitch_deck_text:
+            # A brand-new deck-less lead waits in awaiting_deck for the grace
+            # period instead of getting an immediate deck-less verdict (issue
+            # #149) -- the Drive sweep (sync_pitch_decks.py) auto-attaches a
+            # deck and queues the real assessment if one shows up in time;
+            # promote_awaiting_deck.py's periodic fallback queues the #144
+            # website/description assessment once the grace period elapses.
+            lead.status = "awaiting_deck"
+            lead.deck_wait_started_at = datetime.now(timezone.utc)
+            try:
+                from app.services.events import log_event, EVENT_AWAITING_DECK
+                await log_event(db, lead.id, EVENT_AWAITING_DECK)
+            except Exception as exc:
+                print(f"[sync_copper] event log skipped for {lead.id}: {exc!r}")
+            await db.commit()
+        else:
+            try:
+                assess_lead_task.delay(str(lead.id))
+            except Exception as exc:
+                print(f"[sync_copper] enqueue failed for lead={lead.id} copper_id={copper_id} (will be picked up later): {exc!r}")
 
     print(
         f"[sync_copper] user={user.email} fetched={len(raw_leads)} imported={new_count} "

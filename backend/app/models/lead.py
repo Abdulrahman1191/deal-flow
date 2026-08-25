@@ -60,6 +60,11 @@ class Lead(Base):
     # dead-letters the lead to 'failed' instead of running again, so a lead
     # that reliably crashes the worker can't loop forever.
     assessment_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # When this lead first started waiting for a deck (issue #149) -- set on
+    # import for a brand-new deck-less lead. Drives the grace-period fallback
+    # in app/tasks/promote_awaiting_deck.py; falls back to created_at when
+    # null (e.g. rows that entered awaiting_deck some other way).
+    deck_wait_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

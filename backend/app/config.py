@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # activities API on every 5-min sync cycle for every lead.
     prior_contact_refresh_days: int = 7
 
+    # How many days a freshly-imported deck-less lead waits in `awaiting_deck`
+    # before promote_awaiting_deck.py falls it back to the #144 website/
+    # description assessment (issue #149). Gives a deck that's about to be
+    # uploaded to the Drive folder a chance to be used instead of a premature
+    # deck-less verdict.
+    deck_grace_period_days: int = 5
+
     # --- Storage ---
     database_url: str                    # injected by platform/Khalid
     redis_url: str = "redis://redis:6379/0"
@@ -108,6 +115,12 @@ class Settings(BaseSettings):
     # Below the 1800s schedule on purpose: a legitimately-scheduled run must
     # never be skipped for clock jitter or a slightly-early beat tick. Set to 0
     # to disable the guard entirely. See app/services/task_guard.py.
+    #
+    # (issue #149) Kept at 1800s rather than shortened: a freshly-uploaded
+    # deck is picked up within ~30 minutes worst case, and the 2026-08-21
+    # incident above is exactly what shortening this interval would risk
+    # reproducing. 30 minutes is a fine latency against a multi-day
+    # deck_grace_period_days grace period.
     deck_sweep_min_interval_seconds: int = 1500
 
     # --- Pitch-deck LLM extraction (replaces the OCR fallback of issue #97) ---
