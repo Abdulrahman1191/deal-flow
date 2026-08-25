@@ -48,3 +48,23 @@ export interface CalibrationStats {
 
 export const fetchCalibrationStats = () =>
   client.get<CalibrationStats>("/overrides/calibration").then((r) => r.data);
+
+export interface LearnedReason {
+  text: string;
+  count: number;
+  last_used_at: string;
+  /** "personal" = the caller has used this reason before; "team" = a
+   * fallback shown only when the caller doesn't have enough of their own. */
+  source: "personal" | "team";
+}
+
+export interface MyReasons {
+  rating_up: LearnedReason[];
+  rating_down: LearnedReason[];
+  bucket_yes: LearnedReason[];
+  bucket_maybe: LearnedReason[];
+  bucket_reject: LearnedReason[];
+}
+
+export const fetchMyReasons = () =>
+  client.get<MyReasons>("/overrides/my-reasons").then((r) => r.data);
