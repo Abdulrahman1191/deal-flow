@@ -99,6 +99,7 @@ def _fake_lead(copper_id=None, copper_opportunity_id=None):
         raw_copper_data={"recipient_email": "founder@acme.test", "tags": ["existing-tag"]},
         pitch_deck_text=None,
         status="pending",
+        copper_unqualified_at=None,
     )
 
 
@@ -374,6 +375,102 @@ def test_reject_in_copper_includes_unqual_custom_fields_when_configured(monkeypa
         {"custom_field_definition_id": 244358, "value": [367300]},
         {"custom_field_definition_id": 244359, "value": "Out of our stage."},
     ]
+
+
+def test_send_rejection_sets_copper_unqualified_at_on_lead(override_auth, monkeypatch):
+    """Issue #157: sending a rejection must record that Copper now reads
+    Unqualified for this lead, so a later REJECT->YES/MAYBE override knows to
+    correct it."""
+    _configure_send(monkeypatch)
+    monkeypatch.setattr(copper_writer, "mark_approved_in_copper", lambda *a, **k: None)
+    monkeypatch.setattr(
+        claude_agent,
+        "generate_unqualification_reason",
+        lambda **kwargs: {"reason_option_ids": [367302], "detail_text": "Lack of traction."},
+    )
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: None)
+
+    card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
+    lead = _fake_lead(copper_id="98765")
+    assert lead.copper_unqualified_at is None
+    _override_db([(card, lead), None])
+    try:
+        response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert lead.copper_unqualified_at is not None
+
+
+def test_restore_from_unqualified_reopens_status_clears_fields_and_swaps_tag(monkeypatch):
+    """Unit test of copper_writer.restore_from_unqualified itself (issue #157):
+    the enqueued outbox row must reopen the status, clear both unqual custom
+    fields, drop raed:archived, and add the new raed:bucket:* tag -- all in a
+    single write."""
+    monkeypatch.setattr(copper_writer.settings, "copper_open_status_id", 737640)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_reason_id", 244358)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_detail_id", 244359)
+
+    enqueued = []
+    monkeypatch.setattr(
+        copper_writer,
+        "_enqueue",
+        lambda copper_id, endpoint, body, method="PUT": enqueued.append(
+            {"copper_id": copper_id, "endpoint": endpoint, "body": body, "method": method}
+        ),
+    )
+
+    copper_writer.restore_from_unqualified(
+        "55555", "YES", ["raed:archived", "raed:bucket:reject", "some-other-tag"]
+    )
+
+    assert len(enqueued) == 1
+    call = enqueued[0]
+    assert call["copper_id"] == "55555"
+    assert call["endpoint"] == "/leads/55555"
+    assert call["method"] == "PUT"
+    body = call["body"]
+    assert body["status_id"] == 737640
+    assert "raed:archived" not in body["tags"]
+    assert "raed:bucket:reject" not in body["tags"]
+    assert "raed:bucket:yes" in body["tags"]
+    assert "some-other-tag" in body["tags"]
+    assert body["custom_fields"] == [
+        {"custom_field_definition_id": 244358, "value": []},
+        {"custom_field_definition_id": 244359, "value": ""},
+    ]
+
+
+def test_restore_from_unqualified_degrades_when_open_status_id_unset(monkeypatch):
+    """Reopening the status is best-effort: if copper_open_status_id isn't
+    configured, the tag swap + field clear must still go through instead of
+    the whole write being skipped."""
+    monkeypatch.setattr(copper_writer.settings, "copper_open_status_id", 0)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_reason_id", 244358)
+    monkeypatch.setattr(copper_writer.settings, "copper_cf_unqual_detail_id", 244359)
+
+    enqueued = []
+    monkeypatch.setattr(
+        copper_writer, "_enqueue",
+        lambda copper_id, endpoint, body, method="PUT": enqueued.append(body),
+    )
+
+    copper_writer.restore_from_unqualified("55555", "MAYBE", ["raed:archived"])
+
+    assert len(enqueued) == 1
+    assert "status_id" not in enqueued[0]
+    assert "raed:bucket:maybe" in enqueued[0]["tags"]
+    assert enqueued[0]["custom_fields"]
+
+
+def test_restore_from_unqualified_no_copper_id_is_a_no_op(monkeypatch):
+    enqueued = []
+    monkeypatch.setattr(copper_writer, "_enqueue", lambda *a, **k: enqueued.append(a))
+
+    copper_writer.restore_from_unqualified(None, "YES", [])
+
+    assert enqueued == []
 
 
 def test_send_rejection_no_copper_id_skips_write_and_does_not_error(override_auth, monkeypatch):
