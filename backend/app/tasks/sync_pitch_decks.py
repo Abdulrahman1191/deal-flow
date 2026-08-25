@@ -19,9 +19,12 @@ ingest_pitch_decks.py locally. Every cycle:
      local scripts) and stores it on the lead. A single file's download/
      extraction failure is caught and logged so it doesn't abort the rest of
      the run.
-  4. Queues a re-assessment ONLY if the lead already had an assessment card
-     — a brand-new lead gets assessed with its deck via the normal
-     sync_copper import flow, so re-queuing here would just duplicate work.
+  4. Queues a re-assessment if the lead already had an assessment card, or
+     if it's parked in `awaiting_deck` (issue #149) -- a brand-new deck-less
+     lead is parked there at import time without ever being assessed, so it
+     still needs its first, deck-backed assessment once a deck shows up.
+     Re-queuing is skipped only for a lead that's neither of those (e.g.
+     still mid-assessment) to avoid duplicate work.
 
 Gracefully no-ops (logs one line, returns) when GOOGLE_SERVICE_ACCOUNT_JSON
 isn't set — expected until a maintainer adds the secret post-merge.
@@ -209,13 +212,14 @@ async def _ingest_from_drive(
     """Download, extract, and store a matched Drive file on its lead.
 
     Returns True if a re-assessment was queued. When `require_existing_card`
-    is True (the scheduled sweep's behavior), that only happens if the lead
-    already had an assessment card -- a brand-new lead gets its first
-    assessment (with the deck) via the normal sync_copper import flow, so
-    re-queuing here would just duplicate work. The on-demand per-lead endpoint
-    passes `require_existing_card=False` since a user explicitly asking to
-    fetch a deck always wants the resulting re-score, regardless of whether
-    an assessment already exists.
+    is True (the scheduled sweep's behavior), that happens if the lead
+    already had an assessment card, or if it's sitting in `awaiting_deck`
+    (issue #149) -- a brand-new deck-less lead is parked there at import time
+    without ever being assessed, so it still needs its first, deck-backed
+    assessment. The on-demand per-lead endpoint passes
+    `require_existing_card=False` since a user explicitly asking to fetch a
+    deck always wants the resulting re-score, regardless of the lead's
+    current status.
 
     `deck_text` lets a caller that already downloaded+extracted this file for
     match verification (issue #74) pass the text through instead of
@@ -235,7 +239,14 @@ async def _ingest_from_drive(
             existing_card = await db.execute(
                 select(AssessmentCard.id).where(AssessmentCard.lead_id == lead.id).limit(1)
             )
-            should_requeue = existing_card.scalar_one_or_none() is not None
+            # awaiting_deck leads (issue #149) are parked deck-less on
+            # purpose at import time -- they never got a first assessment,
+            # so "already had a card" alone would wrongly skip queuing their
+            # first-ever, deck-backed assessment now that one has finally
+            # shown up.
+            should_requeue = (
+                existing_card.scalar_one_or_none() is not None or lead.status == "awaiting_deck"
+            )
         else:
             should_requeue = True
 

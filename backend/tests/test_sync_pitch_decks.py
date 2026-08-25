@@ -199,6 +199,31 @@ def test_ingest_queues_reassessment_for_deckless_assessed_lead(monkeypatch):
     assert lead.pitch_deck_text == "clean deck text"
 
 
+def test_ingest_queues_reassessment_for_awaiting_deck_lead_without_card(monkeypatch):
+    """Issue #149, acceptance criterion 2: a brand-new lead parked in
+    awaiting_deck at import time has no AssessmentCard yet (it was never
+    assessed), but it still needs its first, deck-backed assessment once a
+    deck is auto-matched and attached -- this is the fix for the root cause
+    of the manual-Refetch complaint (require_existing_card silently skipped
+    exactly this case)."""
+    monkeypatch.setattr(spd, "_download_pdf", lambda service, file_id, dest: dest.write_bytes(b"%PDF-fake"))
+    monkeypatch.setattr(spd, "extract_text_from_pdf", lambda path: "clean deck text")
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    lead = _fake_lead(status="awaiting_deck")
+    db = _FakeSession(has_card=False)
+    drive_file = {"id": "file123", "name": "Acme.pdf"}
+
+    requeued = asyncio.run(spd._ingest_from_drive(db, None, lead, drive_file))
+
+    assert requeued is True
+    assert queued == [str(lead.id)]
+    assert lead.pitch_deck_text == "clean deck text"
+    assert lead.pitch_deck_drive_id == "file123"
+
+
 def test_ingest_skips_reassessment_when_never_assessed(monkeypatch):
     lead, requeued, queued = _run_ingest(monkeypatch, has_card=False, extracted_text="clean deck text")
 

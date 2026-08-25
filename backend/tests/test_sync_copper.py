@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.event import LeadEvent
+from app.models.lead import Lead
 from app.tasks import sync_copper as sc
 
 
@@ -78,11 +79,14 @@ def _user(email="teammate@raed.vc", copper_user_id=555):
     return SimpleNamespace(email=email, copper_user_id=copper_user_id)
 
 
-def _fake_map(bad_ids=()):
+def _fake_map(bad_ids=(), pitch_deck_text=None):
     def _map(raw):
         if raw["id"] in bad_ids:
             raise ValueError(f"malformed field on {raw['id']}")
-        return {"copper_id": raw["id"], "company_name": raw["id"]}
+        mapped = {"copper_id": raw["id"], "company_name": raw["id"]}
+        if pitch_deck_text is not None:
+            mapped["pitch_deck_text"] = pitch_deck_text
+        return mapped
     return _map
 
 
@@ -101,18 +105,73 @@ def test_one_bad_lead_does_not_abort_the_rest_of_the_batch(monkeypatch):
     assert result["synced"] == 2
     assert result["failed"] == 1
     assert result["skipped_existing"] == 0
-    assert len(db.added) == 2
-    assert queued == [str(lead.id) for lead in db.added]
-    # One rollback for the bad lead, one commit per good lead, plus the final
-    # archive-step commit.
+    new_leads = [obj for obj in db.added if isinstance(obj, Lead)]
+    assert len(new_leads) == 2
+    # Deck-less brand-new leads (issue #149) are parked in awaiting_deck
+    # instead of assessed immediately, so nothing gets queued here.
+    assert queued == []
+    assert all(lead.status == "awaiting_deck" for lead in new_leads)
+    assert all(lead.deck_wait_started_at is not None for lead in new_leads)
+    # One rollback for the bad lead; each good lead now commits twice (create
+    # + awaiting_deck park), plus the final archive-step commit.
     assert db.rollbacks == 1
-    assert db.commits == 3
+    assert db.commits == 5
+
+
+def test_new_deckless_lead_is_parked_awaiting_deck_not_assessed_immediately(monkeypatch):
+    """Issue #149, acceptance criterion 1: a brand-new lead with no
+    pitch_deck_text must land in awaiting_deck on import rather than being
+    website-assessed right away -- giving a deck that's about to be uploaded
+    a chance to be used instead of a premature deck-less verdict."""
+    raw_leads = [{"id": "no-deck-co"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
+
+    queued = []
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    db = _FakeSyncSession([None, []])
+    result = asyncio.run(sc.sync_one_user(db, _user()))
+
+    assert result["synced"] == 1
+    lead = next(obj for obj in db.added if isinstance(obj, Lead))
+    assert lead.status == "awaiting_deck"
+    assert lead.deck_wait_started_at is not None
+    assert queued == []
+
+    events = [obj for obj in db.added if isinstance(obj, LeadEvent)]
+    assert len(events) == 1
+    assert events[0].event_type == "awaiting_deck"
+
+
+def test_new_lead_with_deck_already_present_is_assessed_immediately(monkeypatch):
+    """Contrast case: a lead that already carries deck text at import time
+    (e.g. mapped from a Copper field) is assessed right away like before --
+    the awaiting_deck park only applies to genuinely deck-less new leads."""
+    raw_leads = [{"id": "has-deck-co"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(sc, "map_copper_lead", _fake_map(pitch_deck_text="deck contents"))
+
+    queued = []
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    db = _FakeSyncSession([None, []])
+    result = asyncio.run(sc.sync_one_user(db, _user()))
+
+    assert result["synced"] == 1
+    lead = next(obj for obj in db.added if isinstance(obj, Lead))
+    assert lead.status != "awaiting_deck"
+    assert queued == [str(lead.id)]
 
 
 def test_enqueue_failure_does_not_lose_the_committed_lead(monkeypatch):
+    """A lead that already carries deck text (unusual for a brand-new Copper
+    import, but exercises the enqueue path deterministically) takes the
+    immediate-assessment branch rather than parking in awaiting_deck, so a
+    broker hiccup on the enqueue is the thing under test here."""
     raw_leads = [{"id": "flaky-broker"}]
     monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
-    monkeypatch.setattr(sc, "map_copper_lead", _fake_map())
+    monkeypatch.setattr(sc, "map_copper_lead", _fake_map(pitch_deck_text="already have a deck"))
 
     def _boom(lead_id):
         raise RuntimeError("redis unreachable")
