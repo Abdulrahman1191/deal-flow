@@ -18,6 +18,10 @@ class AssessmentOut(BaseModel):
     draft_subject: Optional[str]
     draft_body: Optional[str]
     draft_type: Optional[str]
+    # Defaults to None (unlike the other fields above) so pre-existing card
+    # objects/test doubles built before this column existed (issue #150)
+    # don't need updating just to satisfy response serialization.
+    draft_bucket: Optional[str] = None
     research_sources: Optional[List]
     assessed_without_deck: bool
     user_override: Optional[str]

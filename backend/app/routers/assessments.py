@@ -79,6 +79,33 @@ def _require_rating(card: AssessmentCard) -> None:
         )
 
 
+# The draft_type a draft must have to be sendable for a given effective bucket.
+# MAYBE has no sendable draft (regenerate-draft already refuses to write one
+# for MAYBE) — None here means "no draft_type is valid to send".
+_EXPECTED_DRAFT_TYPE = {"YES": "meeting_request", "REJECT": "rejection", "MAYBE": None}
+
+
+def _assert_draft_matches_bucket(card: AssessmentCard) -> None:
+    """Issue #150 safety net: a lead moved REJECT→YES (or vice versa) must
+    never send a draft written for the bucket it *used to be*. Compares
+    `card.draft_type` against what the **effective** bucket
+    (`card.user_override or card.bucket`) requires and refuses with 409 on any
+    mismatch — including a draft that failed to regenerate and was nulled out.
+    Called at every approve/send/mark-sent entry point, not just once, since
+    each is independently reachable."""
+    effective_bucket = card.user_override or card.bucket
+    expected = _EXPECTED_DRAFT_TYPE.get(effective_bucket)
+    if card.draft_type != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This draft is stale: it was written as "
+                f"'{card.draft_type or 'no draft'}' but the lead's current bucket is "
+                f"{effective_bucket}. Regenerate the draft before approving or sending."
+            ),
+        )
+
+
 @router.get("/send-queue")
 async def get_send_queue(
     request: Request,
@@ -143,6 +170,7 @@ async def approve_assessment(
     block_if_impersonating(request, user)
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     _require_rating(card)
+    _assert_draft_matches_bucket(card)
 
     if card.approved_at:
         return {"status": "already_approved"}
@@ -180,6 +208,7 @@ async def _finalize_sent(
       - meeting_request  → app archived + Copper Lead converted to Opportunity,
         assigned to `user` (the acting user) so it lands on their Kanban
     Shared by /mark-sent (external sender) and /send (in-app sender)."""
+    _assert_draft_matches_bucket(card)
     card.sent_at = datetime.now(timezone.utc)
     if not lead:
         await db.commit()
@@ -258,6 +287,7 @@ async def mark_sent(
     block_if_impersonating(request, user)
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     _require_rating(card)
+    _assert_draft_matches_bucket(card)
     return await _finalize_sent(db, card, lead, user)
 
 
@@ -277,6 +307,7 @@ async def send_assessment(
     block_if_impersonating(request, user)
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     _require_rating(card)
+    _assert_draft_matches_bucket(card)
 
     if not email_sender.is_configured():
         raise HTTPException(
@@ -366,7 +397,45 @@ async def update_draft(
     return card
 
 
-@router.post("/{lead_id}/override", response_model=AssessmentOut)
+def _regenerate_draft_for_bucket(lead: Lead, bucket: str, summary: str, owner_fields: dict) -> dict:
+    """Calls claude_agent.regenerate_draft with up to
+    _DRAFT_REGEN_MAX_ATTEMPTS tries so one transient LLM hiccup doesn't leave
+    a stale draft in place (issue #150). Raises the last exception once every
+    attempt has failed."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, _DRAFT_REGEN_MAX_ATTEMPTS + 1):
+        try:
+            return claude_agent.regenerate_draft(
+                {
+                    "company_name": lead.company_name,
+                    "founder_names": lead.founder_names,
+                    "description": lead.description,
+                    "pitch_deck_text": lead.pitch_deck_text,
+                },
+                bucket,
+                summary,
+                **owner_fields,
+            )
+        except Exception as exc:
+            last_exc = exc
+            print(f"[draft_regen] attempt {attempt}/{_DRAFT_REGEN_MAX_ATTEMPTS} failed for lead {lead.id}: {exc!r}")
+    raise last_exc
+
+
+def _override_response(card: AssessmentCard, draft_regen_failed: bool) -> dict:
+    """AssessmentOut plus a `draft_regen_failed` flag (issue #150) so the
+    caller can tell "draft matches the new bucket" from "regen failed and the
+    draft was nulled out — go regenerate it" instead of guessing from the
+    (now-empty) draft fields."""
+    data = AssessmentOut.model_validate(card).model_dump(mode="json")
+    data["draft_regen_failed"] = draft_regen_failed
+    return data
+
+
+_DRAFT_REGEN_MAX_ATTEMPTS = 3
+
+
+@router.post("/{lead_id}/override")
 async def override_bucket(
     lead_id: str,
     body: BucketOverride,
@@ -379,7 +448,7 @@ async def override_bucket(
         raise HTTPException(status_code=400, detail="bucket must be YES, MAYBE, or REJECT")
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     if card.bucket == body.bucket and not card.user_override:
-        return card  # no-op
+        return _override_response(card, draft_regen_failed=False)  # no-op
 
     prior_bucket = card.user_override or card.bucket
     # `ai_bucket_at_override` = the AI's most recent calculation. If this is the
@@ -402,25 +471,28 @@ async def override_bucket(
         EVENT_BUCKET_OVERRIDDEN,
         {"from": prior_bucket, "to": body.bucket},
     )
+    draft_regen_failed = False
     try:
         owner_fields = await _load_owner_draft_fields(db, lead)
-        new_draft = claude_agent.regenerate_draft(
-            {
-                "company_name": lead.company_name,
-                "founder_names": lead.founder_names,
-                "description": lead.description,
-                "pitch_deck_text": lead.pitch_deck_text,
-            },
-            body.bucket,
-            card.summary or "",
-            **owner_fields,
-        )
+        new_draft = _regenerate_draft_for_bucket(lead, body.bucket, card.summary or "", owner_fields)
         card.draft_type = new_draft.get("draft_type")
         card.draft_subject = new_draft.get("draft_subject")
         card.draft_body = new_draft.get("draft_body")
+        card.draft_bucket = body.bucket
     except Exception as exc:
-        # Don't fail the override if the LLM call hiccups — user can hit "Re-assess".
-        print(f"[override_bucket] draft regen failed for lead {lead_id}: {exc!r}")
+        # Every retry failed. Don't fail the override request itself — but do
+        # NOT leave the previous bucket's draft in place: that's exactly how a
+        # stale rejection got sent to a lead moved to YES (issue #150). Null
+        # the draft out so it's unmistakably stale, and surface the failure so
+        # the caller can show "needs regenerating" instead of a contradictory
+        # draft. The send-time guard (_assert_draft_matches_bucket) also
+        # refuses to send a None draft_type against a YES/REJECT bucket.
+        print(f"[override_bucket] draft regen failed for lead {lead_id} after retries: {exc!r}")
+        draft_regen_failed = True
+        card.draft_type = None
+        card.draft_subject = None
+        card.draft_body = None
+        card.draft_bucket = None
 
     await db.commit()
     await db.refresh(card)
@@ -448,7 +520,7 @@ async def override_bucket(
         acted_by_email=user.email,
     )
 
-    return card
+    return _override_response(card, draft_regen_failed)
 
 
 @router.post("/{lead_id}/rate", response_model=AssessmentOut)
@@ -514,20 +586,11 @@ async def regenerate_draft(
 
     try:
         owner_fields = await _load_owner_draft_fields(db, lead)
-        new_draft = claude_agent.regenerate_draft(
-            {
-                "company_name": lead.company_name,
-                "founder_names": lead.founder_names,
-                "description": lead.description,
-                "pitch_deck_text": lead.pitch_deck_text,
-            },
-            effective_bucket,
-            card.summary or "",
-            **owner_fields,
-        )
+        new_draft = _regenerate_draft_for_bucket(lead, effective_bucket, card.summary or "", owner_fields)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc!r}")
 
+    card.draft_bucket = effective_bucket
     card.draft_type = new_draft.get("draft_type")
     card.draft_subject = new_draft.get("draft_subject")
     card.draft_body = new_draft.get("draft_body")
