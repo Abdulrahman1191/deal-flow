@@ -80,8 +80,11 @@ def _strip_raed_state_tags(tags: Optional[list]) -> list:
     return out
 
 
-def _enqueue(copper_id: str, endpoint: str, body: dict, method: str = "PUT") -> None:
-    """Insert a pending outbox row. Uses a sync session since callers are often sync."""
+def _enqueue(copper_id: str, endpoint: str, body: dict, method: str = "PUT") -> str:
+    """Insert a pending outbox row. Uses a sync session since callers are often
+    sync. Returns the new row's id (as a string) so callers that may need to
+    cancel/supersede this exact write later (e.g. an undo reversing it before
+    it's drained) can hold onto a precise reference."""
     from sqlalchemy.orm import Session
     from app.models.copper_outbox import CopperOutbox
 
@@ -95,8 +98,36 @@ def _enqueue(copper_id: str, endpoint: str, body: dict, method: str = "PUT") -> 
         )
         session.add(row)
         session.commit()
+        row_id = str(row.id)
     engine.dispose()
     register_outbound_write(copper_id, body)
+    return row_id
+
+
+def cancel_pending_outbox(outbox_id: Optional[str]) -> bool:
+    """Cancel a still-`pending` outbox row so a delayed original write can
+    never land after a reversal supersedes it (ordering safety for undo).
+    No-op (returns False) if the id is empty, the row is missing, or it has
+    already moved past `pending` (done/failed) — those have either already
+    taken effect or are mid-retry and must not be silently dropped.
+    `drain_copper_outbox_task` only ever selects `status == "pending"`, so a
+    row flipped to `cancelled` here is permanently skipped."""
+    if not outbox_id:
+        return False
+    from sqlalchemy.orm import Session
+    from app.models.copper_outbox import CopperOutbox
+
+    engine = _sync_engine()
+    try:
+        with Session(engine) as session:
+            row = session.get(CopperOutbox, outbox_id)
+            if not row or row.status != "pending":
+                return False
+            row.status = "cancelled"
+            session.commit()
+            return True
+    finally:
+        engine.dispose()
 
 
 def _record_skipped_write(copper_id: str, endpoint: str, method: str, reason: str) -> None:
@@ -236,22 +267,63 @@ def archive_in_copper(
     existing_tags: Optional[list],
     reason_option_ids: Optional[list] = None,
     detail_text: Optional[str] = None,
-) -> None:
+) -> Optional[str]:
+    """Returns the new outbox row's id (or None if skipped) so callers that
+    snapshot this action for undo (issue #153) can cancel it later if it's
+    still pending when the undo runs."""
     if not copper_id:
-        return
+        return None
     if not settings.copper_unqualified_status_id:
         _record_skipped_write(
             copper_id, f"/leads/{copper_id}", "PUT",
             "skipped archive_in_copper: copper_unqualified_status_id unset",
         )
-        return
+        return None
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + ["raed:archived"]
     payload = {"tags": new_tags, "status_id": settings.copper_unqualified_status_id}
     custom_fields = _unqual_custom_fields(reason_option_ids, detail_text)
     if custom_fields:
         payload["custom_fields"] = custom_fields
-    _enqueue(copper_id, f"/leads/{copper_id}", payload)
+    return _enqueue(copper_id, f"/leads/{copper_id}", payload)
+
+
+def reverse_archive_in_copper(
+    copper_id: str,
+    prior_tags: Optional[list],
+    pending_outbox_id: Optional[str] = None,
+) -> Optional[str]:
+    """Reverses `archive_in_copper` for an undo (issue #153): restores the
+    Copper lead's status back to open/New, restores the EXACT prior tag set
+    (not the reserved-tag-stripped version other writers use — undo must put
+    back what was really there, including any non-Raed tags), and clears the
+    AI-written Unqualification Reasons/Details custom fields.
+
+    Cancels `pending_outbox_id` first (if given) so the original archive
+    write can never land after this reversal and re-archive the lead —
+    ordering safety when the original write is still sitting in the outbox.
+
+    Returns the new outbox row's id, or None if there's nothing to do
+    (no copper_id) or the open-status id isn't configured yet.
+    """
+    if not copper_id:
+        return None
+    cancel_pending_outbox(pending_outbox_id)
+    if not settings.copper_open_status_id:
+        _record_skipped_write(
+            copper_id, f"/leads/{copper_id}", "PUT",
+            "skipped reverse_archive_in_copper: copper_open_status_id unset",
+        )
+        return None
+    payload: dict = {"tags": list(prior_tags or []), "status_id": settings.copper_open_status_id}
+    custom_fields = []
+    if settings.copper_cf_unqual_reason_id:
+        custom_fields.append({"custom_field_definition_id": settings.copper_cf_unqual_reason_id, "value": []})
+    if settings.copper_cf_unqual_detail_id:
+        custom_fields.append({"custom_field_definition_id": settings.copper_cf_unqual_detail_id, "value": ""})
+    if custom_fields:
+        payload["custom_fields"] = custom_fields
+    return _enqueue(copper_id, f"/leads/{copper_id}", payload)
 
 
 def reject_in_copper(

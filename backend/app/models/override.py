@@ -51,3 +51,8 @@ class AssessmentOverride(Base):
     human_reason: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Set when the action that produced this row (archive, override, ...) was
+    # later undone (issue #153) -- an undone action was a mistake, not a real
+    # team verdict, so it must never teach the model anything. Excluded from
+    # feedback_patterns.retrieve_labeled_exemplars and (future) calibration stats.
+    reverted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
