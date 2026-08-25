@@ -65,6 +65,12 @@ class Lead(Base):
     # in app/tasks/promote_awaiting_deck.py; falls back to created_at when
     # null (e.g. rows that entered awaiting_deck some other way).
     deck_wait_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Set when a rejection draft is sent and Copper is written back as
+    # Unqualified (app/routers/assessments.py::_finalize_sent). Cleared when
+    # override_bucket later corrects that disposition on a REJECT->YES/MAYBE
+    # transition (issue #157) -- lets that correction fire only once per
+    # Unqualified write instead of re-sending it on every later override.
+    copper_unqualified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

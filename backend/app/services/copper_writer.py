@@ -149,6 +149,44 @@ def set_bucket_tag(copper_id: str, new_bucket: str, existing_tags: Optional[list
     _enqueue(copper_id, f"/leads/{copper_id}", {"tags": new_tags})
 
 
+def restore_from_unqualified(copper_id: str, new_bucket: str, existing_tags: Optional[list]) -> None:
+    """Issue #157: a lead moved out of REJECT after already being written back
+    to Copper as Unqualified (archive_in_copper). Corrects the disposition in
+    the same write as the usual bucket-tag swap -- reopens the status, clears
+    the AI-written Unqualification Reasons/Details custom fields, and drops
+    `raed:archived` -- rather than two writes racing to set `tags` on the same
+    Copper lead. Reopening the status is best-effort: if
+    copper_open_status_id isn't configured, the tag swap + field clear still
+    go through and a warning is logged, matching how other config-gated
+    fields degrade elsewhere in this module."""
+    if not copper_id:
+        return
+    base = _strip_raed_state_tags(existing_tags)
+    new_tags = base + [f"raed:bucket:{new_bucket.lower()}", "raed:override"]
+    payload: dict = {"tags": new_tags}
+    if settings.copper_open_status_id:
+        payload["status_id"] = settings.copper_open_status_id
+    else:
+        logger.warning(
+            "[copper_writer][config_unset] restore_from_unqualified: "
+            "copper_open_status_id unset, writing tags/custom_fields only"
+        )
+    custom_fields = []
+    if settings.copper_cf_unqual_reason_id:
+        custom_fields.append({
+            "custom_field_definition_id": settings.copper_cf_unqual_reason_id,
+            "value": [],
+        })
+    if settings.copper_cf_unqual_detail_id:
+        custom_fields.append({
+            "custom_field_definition_id": settings.copper_cf_unqual_detail_id,
+            "value": "",
+        })
+    if custom_fields:
+        payload["custom_fields"] = custom_fields
+    _enqueue(copper_id, f"/leads/{copper_id}", payload)
+
+
 def push_assessment(copper_id: str, bucket: str, existing_tags: Optional[list]) -> None:
     """Called after AI assessment completes — pushes bucket tag to Copper."""
     if not copper_id:

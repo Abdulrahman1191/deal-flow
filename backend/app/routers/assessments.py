@@ -259,6 +259,9 @@ async def _finalize_sent(
                 lead.copper_id, existing_tags,
                 reason_option_ids=reason_option_ids, detail_text=detail_text,
             )
+            # issue #157 — remember Copper now reads Unqualified so a later
+            # REJECT->YES/MAYBE override knows to correct it back.
+            lead.copper_unqualified_at = datetime.now(timezone.utc)
         elif lead.copper_id:
             copper_writer.mark_sent_in_copper(lead.copper_id, existing_tags)
     except Exception as exc:
@@ -497,11 +500,27 @@ async def override_bucket(
     await db.commit()
     await db.refresh(card)
 
-    # Mirror to Copper (best-effort): tag swap only.
+    # Mirror to Copper (best-effort). Usually just the bucket-tag swap -- but
+    # if this transition takes the lead out of REJECT after it was already
+    # written back as Unqualified (issue #157), correct that disposition in
+    # the same write instead: reopen the Copper status, clear the AI-written
+    # Unqualification Reasons/Details fields, and drop `raed:archived`. Only
+    # fires once per Unqualified write (copper_unqualified_at is cleared
+    # below), so a later YES<->MAYBE override doesn't resend it.
     if lead.copper_id:
+        needs_unqualified_correction = (
+            prior_bucket == "REJECT"
+            and body.bucket in ("YES", "MAYBE")
+            and lead.copper_unqualified_at is not None
+        )
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.set_bucket_tag(lead.copper_id, body.bucket, existing_tags)
+            if needs_unqualified_correction:
+                copper_writer.restore_from_unqualified(lead.copper_id, body.bucket, existing_tags)
+                lead.copper_unqualified_at = None
+                await db.commit()
+            else:
+                copper_writer.set_bucket_tag(lead.copper_id, body.bucket, existing_tags)
         except Exception as exc:
             print(f"[override_bucket] Copper write failed (local commit succeeded): {exc!r}")
 
