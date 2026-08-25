@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -66,8 +67,13 @@ async def _run(lead_id: str) -> dict:
                 )
 
         existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-        copper_writer.archive_in_copper(
+        wrote_unqualified = copper_writer.archive_in_copper(
             lead.copper_id, existing_tags,
             reason_option_ids=reason_option_ids, detail_text=detail_text,
         )
+        # issue #157 — remember Copper now reads Unqualified so a later
+        # REJECT->YES/MAYBE override knows to correct it back.
+        if wrote_unqualified:
+            lead.copper_unqualified_at = datetime.now(timezone.utc)
+            await db.commit()
         return {"lead_id": lead_id, "status": "written_back"}

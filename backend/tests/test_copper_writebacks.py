@@ -388,7 +388,7 @@ def test_send_rejection_sets_copper_unqualified_at_on_lead(override_auth, monkey
         "generate_unqualification_reason",
         lambda **kwargs: {"reason_option_ids": [367302], "detail_text": "Lack of traction."},
     )
-    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: None)
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: True)
 
     card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
     lead = _fake_lead(copper_id="98765")
@@ -401,6 +401,34 @@ def test_send_rejection_sets_copper_unqualified_at_on_lead(override_auth, monkey
 
     assert response.status_code == 200
     assert lead.copper_unqualified_at is not None
+
+
+def test_send_rejection_skips_copper_unqualified_at_when_write_skipped(override_auth, monkeypatch):
+    """fix-round-1 (issue #157): if archive_in_copper didn't actually enqueue
+    an Unqualified write (e.g. copper_unqualified_status_id unset), the lead
+    must NOT be stamped with copper_unqualified_at -- otherwise a later
+    REJECT->YES/MAYBE override would fire a pointless correction write for a
+    lead whose Copper record was never touched."""
+    _configure_send(monkeypatch)
+    monkeypatch.setattr(copper_writer, "mark_approved_in_copper", lambda *a, **k: None)
+    monkeypatch.setattr(
+        claude_agent,
+        "generate_unqualification_reason",
+        lambda **kwargs: {"reason_option_ids": [367302], "detail_text": "Lack of traction."},
+    )
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: False)
+
+    card = _fake_card(rated=True, bucket="REJECT", draft_type="rejection")
+    lead = _fake_lead(copper_id="98765")
+    assert lead.copper_unqualified_at is None
+    _override_db([(card, lead), None])
+    try:
+        response = client.post(f"/api/v1/assessments/{card.lead_id}/send")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert lead.copper_unqualified_at is None
 
 
 def test_restore_from_unqualified_reopens_status_clears_fields_and_swaps_tag(monkeypatch):
@@ -572,6 +600,46 @@ def test_archive_no_reply_enqueues_unqual_custom_fields_when_configured(override
     assert detail_field["value"] == "Traction and market size don't fit our thesis right now."
 
 
+def test_archive_no_reply_sets_copper_unqualified_at_on_lead(override_auth, monkeypatch):
+    """fix-round-1 (issue #157): archive-no-reply is one of the paths (besides
+    sending a rejection) that writes a lead back to Copper as Unqualified, so
+    it must also stamp copper_unqualified_at -- otherwise a later
+    REJECT->YES/MAYBE override leaves the lead stale Unqualified in Copper."""
+    monkeypatch.setattr(
+        claude_agent,
+        "generate_unqualification_reason",
+        lambda **kwargs: {"reason_option_ids": [367311], "detail_text": "Not a fit for now."},
+    )
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: True)
+
+    lead = _fake_lead(copper_id="11122")
+    card = _fake_card(rated=True, bucket="MAYBE", draft_type=None)
+    assert lead.copper_unqualified_at is None
+    _override_db([lead, card])
+    try:
+        response = client.post(f"/api/v1/leads/{lead.id}/archive-no-reply")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert lead.copper_unqualified_at is not None
+
+
+def test_archive_no_reply_skips_copper_unqualified_at_when_write_skipped(override_auth, monkeypatch):
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: False)
+
+    lead = _fake_lead(copper_id="11122")
+    card = _fake_card(rated=True, bucket="MAYBE", draft_type=None)
+    _override_db([lead, card])
+    try:
+        response = client.post(f"/api/v1/leads/{lead.id}/archive-no-reply")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert lead.copper_unqualified_at is None
+
+
 def test_archive_no_reply_no_copper_id_skips_write(override_auth, monkeypatch):
     calls = []
     monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: calls.append(a))
@@ -604,6 +672,43 @@ def test_archive_no_reply_already_converted_skips_copper_write(override_auth, mo
 
     assert response.status_code == 200
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# 3b. DELETE /leads/{id} (manual archive) -> archive_in_copper
+# ---------------------------------------------------------------------------
+
+def test_delete_lead_sets_copper_unqualified_at_on_lead(override_auth, monkeypatch):
+    """fix-round-1 (issue #157): manually deleting/archiving a lead also
+    writes it back to Copper as Unqualified, so it must stamp
+    copper_unqualified_at too -- not just the rejection-send path -- so a
+    later REJECT->YES/MAYBE override corrects the stale disposition."""
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: True)
+
+    lead = _fake_lead(copper_id="33344")
+    assert lead.copper_unqualified_at is None
+    _override_db([lead])
+    try:
+        response = client.delete(f"/api/v1/leads/{lead.id}")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 204
+    assert lead.copper_unqualified_at is not None
+
+
+def test_delete_lead_skips_copper_unqualified_at_when_write_skipped(override_auth, monkeypatch):
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: False)
+
+    lead = _fake_lead(copper_id="33344")
+    _override_db([lead])
+    try:
+        response = client.delete(f"/api/v1/leads/{lead.id}")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 204
+    assert lead.copper_unqualified_at is None
 
 
 # ---------------------------------------------------------------------------
@@ -899,13 +1004,29 @@ def test_archive_in_copper_records_skip_marker_when_status_id_unset(monkeypatch)
     enqueued = []
     monkeypatch.setattr(copper_writer, "_enqueue", lambda *a, **k: enqueued.append(a))
 
-    copper_writer.archive_in_copper("55555", ["some-tag"])
+    result = copper_writer.archive_in_copper("55555", ["some-tag"])
 
     assert enqueued == []  # no real write attempted
+    assert result is False  # issue #157 fix-round-1: signals "nothing written"
     assert len(recorded) == 1
     assert recorded[0]["copper_id"] == "55555"
     assert recorded[0]["endpoint"] == "/leads/55555"
     assert "copper_unqualified_status_id unset" in recorded[0]["reason"]
+
+
+def test_archive_in_copper_returns_false_when_no_copper_id(monkeypatch):
+    enqueued = []
+    monkeypatch.setattr(copper_writer, "_enqueue", lambda *a, **k: enqueued.append(a))
+
+    assert copper_writer.archive_in_copper(None, ["some-tag"]) is False
+    assert enqueued == []
+
+
+def test_archive_in_copper_returns_true_when_write_enqueued(monkeypatch):
+    monkeypatch.setattr(copper_writer.settings, "copper_unqualified_status_id", 999)
+    monkeypatch.setattr(copper_writer, "_enqueue", lambda *a, **k: None)
+
+    assert copper_writer.archive_in_copper("55555", ["some-tag"]) is True
 
 
 def test_reject_in_copper_records_skip_marker_when_status_id_unset(monkeypatch):

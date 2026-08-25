@@ -274,15 +274,20 @@ def archive_in_copper(
     existing_tags: Optional[list],
     reason_option_ids: Optional[list] = None,
     detail_text: Optional[str] = None,
-) -> None:
+) -> bool:
+    """Returns True iff an Unqualified write was actually enqueued -- callers
+    use this to decide whether to stamp lead.copper_unqualified_at (issue #157
+    fix-round-1: don't record an Unqualified disposition that was never
+    written, or a later REJECT->YES/MAYBE override sends a pointless
+    correction)."""
     if not copper_id:
-        return
+        return False
     if not settings.copper_unqualified_status_id:
         _record_skipped_write(
             copper_id, f"/leads/{copper_id}", "PUT",
             "skipped archive_in_copper: copper_unqualified_status_id unset",
         )
-        return
+        return False
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + ["raed:archived"]
     payload = {"tags": new_tags, "status_id": settings.copper_unqualified_status_id}
@@ -290,6 +295,7 @@ def archive_in_copper(
     if custom_fields:
         payload["custom_fields"] = custom_fields
     _enqueue(copper_id, f"/leads/{copper_id}", payload)
+    return True
 
 
 def reject_in_copper(

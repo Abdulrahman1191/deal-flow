@@ -1,5 +1,6 @@
 from __future__ import annotations
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from pathlib import Path
@@ -412,7 +413,12 @@ async def delete_lead(
     elif lead.copper_id:
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.archive_in_copper(lead.copper_id, existing_tags)
+            wrote_unqualified = copper_writer.archive_in_copper(lead.copper_id, existing_tags)
+            # issue #157 — remember Copper now reads Unqualified so a later
+            # REJECT->YES/MAYBE override knows to correct it back.
+            if wrote_unqualified:
+                lead.copper_unqualified_at = datetime.now(timezone.utc)
+                await db.commit()
         except Exception as exc:
             print(f"[delete_lead] Copper write failed (local commit succeeded): {exc!r}")
 
@@ -610,10 +616,15 @@ async def archive_no_reply(
                 print(f"[archive_no_reply] Unqualification-reason AI call failed (archiving anyway): {exc!r}")
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.archive_in_copper(
+            wrote_unqualified = copper_writer.archive_in_copper(
                 lead.copper_id, existing_tags,
                 reason_option_ids=reason_option_ids, detail_text=detail_text,
             )
+            # issue #157 — remember Copper now reads Unqualified so a later
+            # REJECT->YES/MAYBE override knows to correct it back.
+            if wrote_unqualified:
+                lead.copper_unqualified_at = datetime.now(timezone.utc)
+                await db.commit()
         except Exception as exc:
             print(f"[archive_no_reply] Copper write failed (local commit succeeded): {exc!r}")
 

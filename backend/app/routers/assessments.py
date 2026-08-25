@@ -255,13 +255,16 @@ async def _finalize_sent(
                 detail_text = unqual.get("detail_text")
             except Exception as exc:
                 print(f"[finalize_sent] Unqualification-reason AI call failed (archiving anyway): {exc!r}")
-            copper_writer.archive_in_copper(
+            wrote_unqualified = copper_writer.archive_in_copper(
                 lead.copper_id, existing_tags,
                 reason_option_ids=reason_option_ids, detail_text=detail_text,
             )
             # issue #157 — remember Copper now reads Unqualified so a later
-            # REJECT->YES/MAYBE override knows to correct it back.
-            lead.copper_unqualified_at = datetime.now(timezone.utc)
+            # REJECT->YES/MAYBE override knows to correct it back. Only when
+            # the write actually happened (fix-round-1): otherwise Copper was
+            # never touched and a later override must not fire a correction.
+            if wrote_unqualified:
+                lead.copper_unqualified_at = datetime.now(timezone.utc)
         elif lead.copper_id:
             copper_writer.mark_sent_in_copper(lead.copper_id, existing_tags)
     except Exception as exc:

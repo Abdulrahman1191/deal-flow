@@ -42,6 +42,9 @@ class _FakeTaskSession:
     async def __aexit__(self, *exc_info):
         return False
 
+    async def commit(self):
+        pass
+
     async def execute(self, query):
         entity = query.column_descriptions[0]["entity"]
         if entity is Lead:
@@ -57,6 +60,7 @@ def _fake_lead(copper_id="7", copper_opportunity_id=None, lead_id=None):
         copper_opportunity_id=copper_opportunity_id,
         company_name="Acme Deep Tech",
         raw_copper_data={"tags": ["existing-tag"]},
+        copper_unqualified_at=None,
     )
 
 
@@ -135,6 +139,45 @@ def test_writeback_task_no_card_still_writes_back_without_reason(monkeypatch):
 
     assert result == {"lead_id": str(lead.id), "status": "written_back"}
     assert calls == [("7", ["existing-tag"], {"reason_option_ids": None, "detail_text": None})]
+
+
+def test_writeback_task_sets_copper_unqualified_at_when_write_enqueued(monkeypatch):
+    """fix-round-1 (issue #157): a lead archived through the bulk-archive
+    path must also be stamped with copper_unqualified_at, so a later
+    REJECT->YES/MAYBE override knows to correct the disposition -- not just
+    leads unqualified via the single rejection-send path."""
+    lead = _fake_lead()
+    card = _fake_card()
+    session = _FakeTaskSession(lead, card=card)
+    monkeypatch.setattr(bulk_archive_writeback, "CelerySessionLocal", lambda: session)
+    monkeypatch.setattr(
+        claude_agent,
+        "generate_unqualification_reason",
+        lambda **kwargs: {"reason_option_ids": [367301], "detail_text": "Out of region."},
+    )
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: True)
+
+    assert lead.copper_unqualified_at is None
+    result = asyncio.run(bulk_archive_writeback._run(str(lead.id)))
+
+    assert result == {"lead_id": str(lead.id), "status": "written_back"}
+    assert lead.copper_unqualified_at is not None
+
+
+def test_writeback_task_skips_copper_unqualified_at_when_write_not_enqueued(monkeypatch):
+    """The inverse: when archive_in_copper reports no write happened (e.g.
+    copper_unqualified_status_id unset), the flag must stay unset so a later
+    override doesn't fire a pointless correction."""
+    lead = _fake_lead()
+    card = _fake_card()
+    session = _FakeTaskSession(lead, card=card)
+    monkeypatch.setattr(bulk_archive_writeback, "CelerySessionLocal", lambda: session)
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: False)
+
+    result = asyncio.run(bulk_archive_writeback._run(str(lead.id)))
+
+    assert result == {"lead_id": str(lead.id), "status": "written_back"}
+    assert lead.copper_unqualified_at is None
 
 
 def test_writeback_task_skips_when_lead_not_found(monkeypatch):
