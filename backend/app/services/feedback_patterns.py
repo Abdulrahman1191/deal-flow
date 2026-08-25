@@ -44,6 +44,9 @@ async def retrieve_labeled_exemplars(
         await db.execute(
             select(AssessmentOverride, Lead.company_name)
             .join(Lead, AssessmentOverride.lead_id == Lead.id)
+            # Reverted rows (issue #153) came from an action the team undid --
+            # a mistake, not a real verdict. Must never train the model.
+            .where(AssessmentOverride.reverted_at.is_(None))
             .order_by(desc(AssessmentOverride.created_at))
             .limit(pool)
         )

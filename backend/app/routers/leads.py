@@ -588,10 +588,13 @@ async def archive_no_reply(
     if card:
         _require_rating(card)
 
+    prior_status = lead.status
     lead.status = "archived"
     await log_event(db, lead.id, EVENT_ARCHIVED_NO_REPLY, {})
     await db.commit()
 
+    existing_tags = None
+    outbox_id = None
     if lead.copper_id and not lead.copper_opportunity_id:
         # AI-generated reason/detail are additive and best-effort: a failed AI
         # call must never block the archive write below (status=Unqualified).
@@ -610,12 +613,22 @@ async def archive_no_reply(
                 print(f"[archive_no_reply] Unqualification-reason AI call failed (archiving anyway): {exc!r}")
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.archive_in_copper(
+            outbox_id = copper_writer.archive_in_copper(
                 lead.copper_id, existing_tags,
                 reason_option_ids=reason_option_ids, detail_text=detail_text,
             )
         except Exception as exc:
             print(f"[archive_no_reply] Copper write failed (local commit succeeded): {exc!r}")
+
+    # Snapshot for undo (issue #153) -- prior status + Copper tag set, so
+    # POST /leads/{lead_id}/undo can restore exactly what this overwrote.
+    from app.services.undo import ACTION_ARCHIVE_NO_REPLY, record_archive_action
+    await record_archive_action(
+        db, lead=lead, action_type=ACTION_ARCHIVE_NO_REPLY,
+        prior_status=prior_status, prior_tags=existing_tags,
+        actor_email=user.email, copper_outbox_id=outbox_id,
+    )
+    await db.commit()
 
     # Capture for training — Skip is an implicit REJECT (the human is saying
     # "I don't want to do anything with this lead"). Only meaningful when the
@@ -628,6 +641,75 @@ async def archive_no_reply(
         )
 
     return {"status": "archived", "outcome": "no_reply"}
+
+
+@router.post("/{lead_id}/undo")
+async def undo_last_action(
+    lead_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Reverses the most recent undoable action for this lead -- currently
+    archive-no-reply or the rejection-send archive (issue #153; bucket
+    override / approve / bulk-archive undo are deferred follow-ups).
+    Restores app `status` and enqueues a Copper write-back reversing the
+    status + tags + clearing the AI-written Unqualification fields, through
+    the same outbox every other write-back uses.
+
+    Owner-scoped, refused while impersonating. Idempotent: undoing an
+    already-undone action returns `already_undone` rather than erroring.
+    Refuses (409) if the lead was converted to a Copper Opportunity
+    (un-converting is out of scope) or if the lead's status has drifted from
+    what the logged action produced -- e.g. it was re-synced or acted on
+    again since -- so undo never clobbers newer state.
+
+    A sent email can never be unsent: for a rejection-send archive, undo
+    still restores app/Copper state but the response's `email_sent` flag
+    (and accompanying `note`) makes clear the email already went out, and
+    nothing here re-arms sending (the assessment card's `sent_at` is never
+    touched).
+    """
+    block_if_impersonating(request, user)
+
+    result = await db.execute(select(Lead).where(Lead.id == lead_id, Lead.owner_email == user.email))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    from app.models.lead_action_log import LeadActionLog
+    from app.services import undo as undo_service
+
+    log_result = await db.execute(
+        select(LeadActionLog)
+        .where(LeadActionLog.lead_id == lead.id)
+        .where(LeadActionLog.action_type.in_(list(undo_service.UNDOABLE_ACTIONS)))
+        .order_by(LeadActionLog.created_at.desc())
+        .limit(1)
+    )
+    action = log_result.scalar_one_or_none()
+    if not action:
+        raise HTTPException(status_code=404, detail="Nothing to undo for this lead")
+
+    if action.undone_at:
+        return {"status": "already_undone", "action_type": action.action_type}
+
+    if lead.copper_opportunity_id:
+        raise HTTPException(
+            status_code=409,
+            detail="This lead was converted to a Copper Opportunity — un-converting isn't supported. "
+                   "Reverse it manually in Copper if needed.",
+        )
+
+    if lead.status != "archived":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Lead status has changed since this action (now '{lead.status}') — "
+                   "refusing to undo a stale action.",
+        )
+
+    return await undo_service.undo_action(db, lead=lead, action=action)
 
 
 @router.post("/{lead_id}/find-linkedin")

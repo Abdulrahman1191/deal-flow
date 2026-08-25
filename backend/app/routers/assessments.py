@@ -219,6 +219,7 @@ async def _finalize_sent(
     converted_payload: Optional[dict] = None
     existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
     effective_bucket = card.user_override or card.bucket
+    rejection_outbox_id: Optional[str] = None
 
     try:
         if card.draft_type == "meeting_request" and effective_bucket == "YES" and lead.copper_id and not lead.copper_opportunity_id:
@@ -255,7 +256,7 @@ async def _finalize_sent(
                 detail_text = unqual.get("detail_text")
             except Exception as exc:
                 print(f"[finalize_sent] Unqualification-reason AI call failed (archiving anyway): {exc!r}")
-            copper_writer.archive_in_copper(
+            rejection_outbox_id = copper_writer.archive_in_copper(
                 lead.copper_id, existing_tags,
                 reason_option_ids=reason_option_ids, detail_text=detail_text,
             )
@@ -264,8 +265,23 @@ async def _finalize_sent(
     except Exception as exc:
         print(f"[finalize_sent] Copper write failed (local commit succeeded): {exc!r}")
 
+    prior_status = lead.status
     lead.status = "archived"
     await log_event(db, lead.id, EVENT_ARCHIVED, {"reason": card.draft_type or "sent"})
+
+    # Snapshot for undo (issue #153) -- a sent rejection email can't be
+    # unsent, but the app/Copper disposition it triggered can be reversed.
+    # Not logged for the meeting_request/converted branch above: un-converting
+    # a Copper Opportunity is explicitly out of scope for now.
+    if card.draft_type == "rejection" and not converted_payload:
+        from app.services.undo import ACTION_ARCHIVE_AFTER_SEND, record_archive_action
+        await record_archive_action(
+            db, lead=lead, action_type=ACTION_ARCHIVE_AFTER_SEND,
+            prior_status=prior_status, prior_tags=existing_tags,
+            actor_email=getattr(user, "email", None), email_sent=True,
+            copper_outbox_id=rejection_outbox_id,
+        )
+
     await db.commit()
     return {
         "status": "sent",
