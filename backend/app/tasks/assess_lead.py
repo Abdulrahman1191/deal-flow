@@ -85,6 +85,60 @@ def _mark_failed(lead_id: str, error: str, attempt: int = 0) -> None:
     print(f"[assess_lead] marked lead {lead_id} as failed (attempt {attempt}): {error}")
 
 
+def _record_retry_error(lead_id: str, error: str, attempt: int) -> None:
+    """Persists last_assessment_error/_at on the *retry* path (issue #163 item
+    1) without flipping status to 'failed' -- a retry is still pending, so
+    this is a diagnostic breadcrumb, not a terminal write. Without this, the
+    only thing that ever reached the DB for a lead that fails every attempt
+    was the generic attempts-cap counter message from _mark_failed, since
+    self.retry() discards the exception `assess_lead_task` had just caught.
+
+    Same status guard as _mark_failed, for the same reason: only touch a lead
+    that's still an active assessment attempt.
+    """
+    from sqlalchemy import create_engine
+    from app.config import settings
+
+    trimmed_error = error[:MAX_ERROR_CHARS]
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(settings.database_url)
+    engine = create_engine(url, connect_args=connect_args)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE leads SET last_assessment_error=:err, last_assessment_error_at=now() "
+                "WHERE id=:lid AND status IN ('processing','pending','awaiting_deck')"
+            ),
+            {"lid": lead_id, "err": trimmed_error},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO lead_events (lead_id, event_type, payload) "
+                "VALUES (:lid, 'assessment_failed', CAST(:payload AS JSONB))"
+            ),
+            {"lid": lead_id, "payload": json.dumps({"error": trimmed_error, "attempt": attempt, "retrying": True})},
+        )
+    print(f"[assess_lead] lead {lead_id} attempt {attempt} failed, retrying:\n{error}")
+
+
+def _get_last_assessment_error(lead_id: str) -> str | None:
+    """Reads back whatever _record_retry_error last persisted for this lead,
+    so the attempts-cap dead-letter path (below) can preserve the real
+    exception instead of clobbering it with the generic cap-counter message
+    -- the two are separate task executions, so there's no Python variable
+    connecting them."""
+    from sqlalchemy import create_engine
+    from app.config import settings
+
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(settings.database_url)
+    engine = create_engine(url, connect_args=connect_args)
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT last_assessment_error FROM leads WHERE id=:lid"),
+            {"lid": lead_id},
+        ).first()
+    return row[0] if row else None
+
+
 def _increment_attempts(lead_id: str) -> int:
     """Sync DB write: atomically bump leads.assessment_attempts and return the
     new count. Called at the very start of every task attempt -- including a
@@ -122,7 +176,12 @@ def _increment_attempts(lead_id: str) -> int:
 def assess_lead_task(self, lead_id: str) -> dict:
     attempts = _increment_attempts(lead_id)
     if attempts > MAX_ASSESS_ATTEMPTS:
-        error = f"exceeded {MAX_ASSESS_ATTEMPTS} assessment attempts (attempt #{attempts})"
+        cap_message = f"exceeded {MAX_ASSESS_ATTEMPTS} assessment attempts (attempt #{attempts})"
+        # The retry path below persists the real exception on every attempt
+        # up to this one -- don't let this dead-letter write clobber it with
+        # just the generic counter message (issue #163 fix-round-1).
+        prior_error = _get_last_assessment_error(lead_id)
+        error = f"{prior_error}\n\n{cap_message}" if prior_error else cap_message
         _mark_failed(lead_id, error, attempt=attempts)
         return {"lead_id": lead_id, "status": "failed", "error": error}
 
@@ -149,6 +208,7 @@ def assess_lead_task(self, lead_id: str) -> dict:
         # describe that instead of the real failure.
         error = _format_error(exc)
         print(f"[assess_lead] lead {lead_id} attempt {attempts} failed:\n{traceback.format_exc()}")
+        _record_retry_error(lead_id, error, attempt=attempts)
         try:
             raise self.retry(exc=exc)
         except MaxRetriesExceededError:

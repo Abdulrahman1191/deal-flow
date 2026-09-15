@@ -58,6 +58,50 @@ def _patch_engine(monkeypatch) -> _FakeConn:
     return conn
 
 
+class _StatefulFakeConn:
+    """Unlike _FakeConn (which only records statements), this mirrors a
+    single leads row's last_assessment_error across multiple sync-engine
+    calls -- needed to prove the retry path's writes actually survive to be
+    read back by the attempts-cap guard's _get_last_assessment_error call in
+    a *later*, separate task execution."""
+
+    def __init__(self):
+        self.last_error: dict[str, str] = {}
+        self.events: list[dict] = []
+
+    def execute(self, stmt, params=None):
+        sql = str(stmt)
+        params = params or {}
+        if sql.strip().startswith("SELECT"):
+            lid = params["lid"]
+            value = self.last_error.get(lid)
+            return SimpleNamespace(first=lambda: (value,) if lid in self.last_error else None)
+        if "UPDATE leads" in sql:
+            self.last_error[params["lid"]] = params["err"]
+            return None
+        if "INSERT INTO lead_events" in sql:
+            self.events.append(params)
+            return None
+        raise AssertionError(f"unexpected SQL in stateful fake: {sql}")
+
+
+def _patch_stateful_engine(monkeypatch) -> _StatefulFakeConn:
+    conn = _StatefulFakeConn()
+
+    class _StatefulFakeEngine:
+        def begin(self):
+            return self
+
+        def __enter__(self):
+            return conn
+
+        def __exit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(sqlalchemy, "create_engine", lambda *a, **k: _StatefulFakeEngine())
+    return conn
+
+
 # ---------------------------------------------------------------------------
 # _format_error: repr(exc) + trimmed traceback tail
 # ---------------------------------------------------------------------------
@@ -153,6 +197,83 @@ def test_soft_time_limit_exceeded_persists_formatted_error(monkeypatch):
     payload = json.loads(insert_params["payload"])
     assert payload["attempt"] == 1
     assert "SoftTimeLimitExceeded" in payload["error"]
+
+
+# ---------------------------------------------------------------------------
+# _record_retry_error / _get_last_assessment_error (fix-round-1): the retry
+# path (executions 1-3, before the attempts cap) must persist the real
+# error, and the cap guard (execution 4) must read it back instead of
+# clobbering it with the generic counter message.
+# ---------------------------------------------------------------------------
+
+
+def test_record_retry_error_persists_without_marking_failed(monkeypatch):
+    lead_id = str(uuid.uuid4())
+    conn = _patch_engine(monkeypatch)
+
+    assess_lead._record_retry_error(lead_id, "ValueError('boom')\ntraceback tail", attempt=1)
+
+    update_sql, update_params = conn.statements[0]
+    assert "UPDATE leads" in update_sql
+    assert "status='failed'" not in update_sql
+    assert "last_assessment_error" in update_sql
+    assert update_params["err"] == "ValueError('boom')\ntraceback tail"
+
+    insert_sql, insert_params = conn.statements[1]
+    assert "lead_events" in insert_sql
+    payload = json.loads(insert_params["payload"])
+    assert payload == {"error": "ValueError('boom')\ntraceback tail", "attempt": 1, "retrying": True}
+
+
+def test_plain_exception_every_attempt_preserves_real_error_through_cap(monkeypatch):
+    """Reproduces the exact incident flow flagged in fix-round-1 review: a
+    lead whose _run raises a plain exception on every attempt executes 4
+    times, since MAX_ASSESS_ATTEMPTS == celery's max_retries == 3. The first
+    3 executions hit the retry path (self.retry() re-raises the original
+    exception immediately here because the task is called directly rather
+    than through a worker/broker -- see celery.app.task.Task.retry's
+    `request.called_directly` branch); the 4th is stopped by the
+    attempts-cap guard before _run ever runs again. The real exception text
+    -- not just the generic cap-counter message -- must be what remains in
+    last_assessment_error."""
+    lead_id = str(uuid.uuid4())
+    conn = _patch_stateful_engine(monkeypatch)
+
+    counter = {"n": 0}
+
+    def _increment(_lid):
+        counter["n"] += 1
+        return counter["n"]
+
+    monkeypatch.setattr(assess_lead, "_increment_attempts", _increment)
+
+    async def _fake_run(_lid):
+        raise RuntimeError("deepseek 500: upstream error")
+
+    monkeypatch.setattr(assess_lead, "_run", _fake_run)
+
+    for _ in range(assess_lead.MAX_ASSESS_ATTEMPTS):
+        try:
+            assess_lead.assess_lead_task(lead_id)
+        except RuntimeError as exc:
+            assert "deepseek 500" in str(exc)
+        else:
+            raise AssertionError("expected the retry path to re-raise the original exception")
+
+    result = assess_lead.assess_lead_task(lead_id)
+
+    assert result["status"] == "failed"
+    assert "RuntimeError" in result["error"]
+    assert "deepseek 500" in result["error"]
+    assert f"exceeded {assess_lead.MAX_ASSESS_ATTEMPTS} assessment attempts" in result["error"]
+
+    persisted = conn.last_error[lead_id]
+    assert "RuntimeError" in persisted
+    assert "deepseek 500" in persisted
+    assert f"exceeded {assess_lead.MAX_ASSESS_ATTEMPTS} assessment attempts" in persisted
+
+    retry_events = [e for e in conn.events if json.loads(e["payload"]).get("retrying")]
+    assert len(retry_events) == assess_lead.MAX_ASSESS_ATTEMPTS
 
 
 # ---------------------------------------------------------------------------
