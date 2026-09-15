@@ -21,6 +21,7 @@ EVENT_COPPER_UPDATED = "copper_updated"
 EVENT_REASSIGNED = "reassigned"
 EVENT_AWAITING_DECK = "awaiting_deck"
 EVENT_ACTION_UNDONE = "action_undone"
+EVENT_ASSESSMENT_FAILED = "assessment_failed"
 
 
 async def log_event(

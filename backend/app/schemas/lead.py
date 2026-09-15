@@ -44,6 +44,9 @@ class LeadOut(BaseModel):
     prior_contact: Optional[bool] = None
     prior_contact_count: Optional[int] = None
     prior_contact_last_at: Optional[datetime] = None
+    # Persisted failure reason (issue #163) -- populated when status=='failed',
+    # null otherwise (including after a subsequent successful assessment).
+    last_assessment_error: Optional[str] = None
     status: str
     created_at: datetime
     updated_at: datetime

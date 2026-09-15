@@ -34,7 +34,7 @@ def test_attempt_cap_exceeded_dead_letters_without_running(monkeypatch):
     monkeypatch.setattr(assess_lead, "_run", _boom)
 
     failed = []
-    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error: failed.append((lid, error)))
+    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error, **kw: failed.append((lid, error)))
 
     result = assess_lead.assess_lead_task(lead_id)
 
@@ -72,7 +72,7 @@ def test_soft_time_limit_exceeded_marks_failed_instead_of_crashing(monkeypatch):
     monkeypatch.setattr(assess_lead, "_run", _fake_run)
 
     failed = []
-    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error: failed.append((lid, error)))
+    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error, **kw: failed.append((lid, error)))
 
     result = assess_lead.assess_lead_task(lead_id)
 

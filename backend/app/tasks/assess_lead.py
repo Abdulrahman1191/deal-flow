@@ -1,5 +1,7 @@
 from __future__ import annotations
 import asyncio
+import json
+import traceback
 import uuid
 from datetime import datetime, timezone
 
@@ -28,21 +30,59 @@ MAX_ASSESS_ATTEMPTS = 3
 # awaiting_deck gate below.
 MIN_DESCRIPTION_CHARS = 40
 
+# Persisted failure reason (issue #163) is trimmed to this many characters so
+# a runaway traceback can't bloat the leads row -- repr(exc) plus the last
+# TRACEBACK_TAIL_LINES lines comfortably fits well under this.
+MAX_ERROR_CHARS = 4000
+TRACEBACK_TAIL_LINES = 20
 
-def _mark_failed(lead_id: str, error: str) -> None:
-    """Sync DB write to flip a stuck 'processing' lead to 'failed'.
-    Called when retries are exhausted so the UI doesn't show a spinner forever."""
+
+def _format_error(exc: Exception) -> str:
+    """repr(exc) plus the last ~20 lines of the *current* exception's
+    traceback (call this from inside the except block that's handling `exc`,
+    before anything else -- e.g. self.retry() -- changes what
+    traceback.format_exc() sees), trimmed to MAX_ERROR_CHARS. Issue #163: the
+    real exception was previously only print()ed by _mark_failed, so a
+    failure couldn't be diagnosed from the app or DB."""
+    tb_lines = traceback.format_exc().strip().splitlines()
+    tail = "\n".join(tb_lines[-TRACEBACK_TAIL_LINES:])
+    return f"{exc!r}\n{tail}"[:MAX_ERROR_CHARS]
+
+
+def _mark_failed(lead_id: str, error: str, attempt: int = 0) -> None:
+    """Sync DB write to flip a stuck lead to 'failed', persisting *why*
+    (issue #163) so it's diagnosable from the app/DB instead of a print()
+    that only ever reached container logs, and logging an
+    `assessment_failed` LeadEvent alongside it.
+
+    The status guard includes 'awaiting_deck' as well as 'processing'/
+    'pending': a lead promoted straight from awaiting_deck
+    (promote_awaiting_deck.py) that crashes before _run() ever flips it to
+    'processing' would otherwise silently stay parked instead of landing in
+    'failed' with the reason recorded."""
     from sqlalchemy import create_engine
     from app.config import settings
 
+    trimmed_error = error[:MAX_ERROR_CHARS]
     url, connect_args = copper_writer._psycopg2_url_and_connect_args(settings.database_url)
     engine = create_engine(url, connect_args=connect_args)
     with engine.begin() as conn:
         conn.execute(
-            text("UPDATE leads SET status='failed' WHERE id=:lid AND status IN ('processing','pending')"),
-            {"lid": lead_id},
+            text(
+                "UPDATE leads SET status='failed', last_assessment_error=:err, "
+                "last_assessment_error_at=now() "
+                "WHERE id=:lid AND status IN ('processing','pending','awaiting_deck')"
+            ),
+            {"lid": lead_id, "err": trimmed_error},
         )
-    print(f"[assess_lead] marked lead {lead_id} as failed: {error}")
+        conn.execute(
+            text(
+                "INSERT INTO lead_events (lead_id, event_type, payload) "
+                "VALUES (:lid, 'assessment_failed', CAST(:payload AS JSONB))"
+            ),
+            {"lid": lead_id, "payload": json.dumps({"error": trimmed_error, "attempt": attempt})},
+        )
+    print(f"[assess_lead] marked lead {lead_id} as failed (attempt {attempt}): {error}")
 
 
 def _increment_attempts(lead_id: str) -> int:
@@ -83,7 +123,7 @@ def assess_lead_task(self, lead_id: str) -> dict:
     attempts = _increment_attempts(lead_id)
     if attempts > MAX_ASSESS_ATTEMPTS:
         error = f"exceeded {MAX_ASSESS_ATTEMPTS} assessment attempts (attempt #{attempts})"
-        _mark_failed(lead_id, error)
+        _mark_failed(lead_id, error, attempt=attempts)
         return {"lead_id": lead_id, "status": "failed", "error": error}
 
     try:
@@ -94,16 +134,25 @@ def assess_lead_task(self, lead_id: str) -> dict:
         finally:
             loop.close()
     except SoftTimeLimitExceeded as exc:
-        _mark_failed(lead_id, repr(exc))
+        error = _format_error(exc)
+        print(f"[assess_lead] lead {lead_id} soft time limit exceeded:\n{traceback.format_exc()}")
+        _mark_failed(lead_id, error, attempt=attempts)
         return {"lead_id": lead_id, "status": "failed", "error": "soft time limit exceeded"}
     except MaxRetriesExceededError as exc:
-        _mark_failed(lead_id, repr(exc))
+        error = _format_error(exc)
+        print(f"[assess_lead] lead {lead_id} max retries exceeded:\n{traceback.format_exc()}")
+        _mark_failed(lead_id, error, attempt=attempts)
         return {"lead_id": lead_id, "status": "failed", "error": "max retries exceeded"}
     except Exception as exc:
+        # Captured now, while `exc` is still the active exception -- self.retry()
+        # below raises a new one, which would make a later traceback.format_exc()
+        # describe that instead of the real failure.
+        error = _format_error(exc)
+        print(f"[assess_lead] lead {lead_id} attempt {attempts} failed:\n{traceback.format_exc()}")
         try:
             raise self.retry(exc=exc)
         except MaxRetriesExceededError:
-            _mark_failed(lead_id, repr(exc))
+            _mark_failed(lead_id, error, attempt=attempts)
             return {"lead_id": lead_id, "status": "failed", "error": repr(exc)}
 
 
@@ -139,6 +188,8 @@ async def _run(lead_id: str) -> dict:
         if not has_deck and not has_website_content and not has_substantial_description:
             lead.status = "awaiting_deck"
             lead.assessment_attempts = 0
+            lead.last_assessment_error = None
+            lead.last_assessment_error_at = None
             await log_event(db, lead.id, EVENT_AWAITING_DECK)
             await db.commit()
             return {"lead_id": lead_id, "status": "awaiting_deck"}
@@ -255,6 +306,8 @@ async def _run(lead_id: str) -> dict:
         if lead.status != "archived":
             lead.status = "assessed"
         lead.assessment_attempts = 0
+        lead.last_assessment_error = None
+        lead.last_assessment_error_at = None
         await log_event(
             db,
             lead.id,

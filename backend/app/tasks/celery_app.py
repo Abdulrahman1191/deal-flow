@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox", "app.tasks.bulk_archive_writeback", "app.tasks.promote_awaiting_deck"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox", "app.tasks.bulk_archive_writeback", "app.tasks.promote_awaiting_deck", "app.tasks.redrive_failed_assessments"],
 )
 
 celery.conf.update(
@@ -42,6 +42,7 @@ celery.conf.update(
         "app.tasks.promote_awaiting_deck.*": {"queue": "default"},
         "app.tasks.drain_outbox.*": {"queue": "default"},
         "app.tasks.reap_stuck_leads.*": {"queue": "default"},
+        "app.tasks.redrive_failed_assessments.*": {"queue": "default"},
         "app.tasks.reconcile_ownership.*": {"queue": "default"},
         "app.tasks.dedupe_leads.*": {"queue": "default"},
         "app.tasks.generate_briefing.*": {"queue": "default"},
@@ -115,6 +116,15 @@ celery.conf.update(
         # times a day is plenty for a day-granularity grace period.
         "promote-awaiting-deck": {
             "task": "app.tasks.promote_awaiting_deck.promote_stale_awaiting_deck_task",
+            "schedule": 21600.0,  # every 6 hours
+        },
+        # Self-healing backstop for leads dead-lettered to 'failed' (issue
+        # #163): re-queues 'failed' leads whose last_assessment_error_at is
+        # older than redrive_failed_assessments.REDRIVE_AFTER_HOURS, capped
+        # per-lead by settings.assessment_failed_max_redrives. See
+        # app/tasks/redrive_failed_assessments.py.
+        "redrive-failed-assessments": {
+            "task": "app.tasks.redrive_failed_assessments.redrive_failed_assessments_task",
             "schedule": 21600.0,  # every 6 hours
         },
     },
