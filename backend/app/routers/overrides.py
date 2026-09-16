@@ -92,7 +92,12 @@ async def override_stats(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Aggregate metrics for the LLM-tuning loop. Cheap query — uses indexes."""
+    """Aggregate metrics for the LLM-tuning loop. Cheap query — uses indexes.
+
+    Excludes rows with `reverted_at IS NOT NULL` (issue #159): an override
+    undone via POST /leads/{lead_id}/undo was a mistake, not a real
+    AI-vs-team signal, and must not count toward agreement/disagreement.
+    """
     if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -109,12 +114,14 @@ async def override_stats(
           COUNT(*) FILTER (WHERE trigger = 're-override') AS re_overrides,
           COUNT(*) FILTER (WHERE research_snap IS NOT NULL) AS with_research_snap
         FROM assessment_overrides
+        WHERE reverted_at IS NULL
     """))).first()
 
     by_pair = (await db.execute(text("""
         SELECT ai_bucket || '→' || human_bucket AS pair, COUNT(*) AS n
         FROM assessment_overrides
         WHERE trigger IN ('override','re-override')
+          AND reverted_at IS NULL
         GROUP BY 1 ORDER BY 2 DESC
     """))).all()
 
@@ -175,7 +182,9 @@ async def calibration_stats(
     improving over time, and which partners give articulated ratings vs
     vague ones. Read-only, owner-only. Every aggregate here excludes
     `settings.non_client_facing_email_set()` (issue #127) — those accounts'
-    leads are QA/engineer test data, not real deal flow.
+    leads are QA/engineer test data, not real deal flow — AND rows with
+    `reverted_at IS NOT NULL` (issue #159): an override undone via
+    POST /leads/{lead_id}/undo was a mistake, not a real AI-vs-team signal.
     """
     if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -186,9 +195,9 @@ async def calibration_stats(
     params = {f"excl_email{i}": email for i, email in enumerate(excluded_emails)}
     if params:
         placeholders = ", ".join(f":{key}" for key in params)
-        exclusion_clause = f"(acted_by_email IS NULL OR acted_by_email NOT IN ({placeholders}))"
+        exclusion_clause = f"(acted_by_email IS NULL OR acted_by_email NOT IN ({placeholders})) AND reverted_at IS NULL"
     else:
-        exclusion_clause = "TRUE"
+        exclusion_clause = "reverted_at IS NULL"
 
     overall = (await db.execute(text(f"""
         SELECT

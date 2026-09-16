@@ -172,12 +172,33 @@ def execute_copper_request(endpoint: str, method: str, body: dict) -> Optional[d
         raise exc
 
 
-def set_bucket_tag(copper_id: str, new_bucket: str, existing_tags: Optional[list]) -> None:
+def set_bucket_tag(copper_id: str, new_bucket: str, existing_tags: Optional[list]) -> Optional[str]:
+    """Returns the new outbox row's id (or None if skipped) so callers that
+    snapshot this write for undo (issue #159) can cancel it later if it's
+    still pending when the undo runs."""
     if not copper_id:
-        return
+        return None
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + [f"raed:bucket:{new_bucket.lower()}", "raed:override"]
-    _enqueue(copper_id, f"/leads/{copper_id}", {"tags": new_tags})
+    return _enqueue(copper_id, f"/leads/{copper_id}", {"tags": new_tags})
+
+
+def reverse_bucket_tag(
+    copper_id: str,
+    prior_tags: Optional[list],
+    pending_outbox_id: Optional[str] = None,
+) -> Optional[str]:
+    """Reverses set_bucket_tag for an undo (issue #159): restores the EXACT
+    prior tag set (not the reserved-tag-stripped version set_bucket_tag
+    itself writes -- undo must put back what was really there). Cancels
+    `pending_outbox_id` first (if given) so the original override write can
+    never land after this reversal. Unlike reverse_archive_in_copper there's
+    no status_id to restore -- a bucket override never changes the Copper
+    lead's status."""
+    if not copper_id:
+        return None
+    cancel_pending_outbox(pending_outbox_id)
+    return _enqueue(copper_id, f"/leads/{copper_id}", {"tags": list(prior_tags or [])})
 
 
 def push_assessment(copper_id: str, bucket: str, existing_tags: Optional[list]) -> None:
@@ -212,11 +233,13 @@ def push_draft_edit(copper_id: str, draft_subject: Optional[str], draft_body: Op
     _enqueue(copper_id, f"/leads/{copper_id}", {"custom_fields": custom_fields})
 
 
-def mark_approved_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:
+def mark_approved_in_copper(copper_id: str, existing_tags: Optional[list]) -> Optional[str]:
     """F9 — sync analyst approval to Copper. Adds the `raed:approved` tag and,
-    if the `Raed App Status` custom field is configured, sets it to 'approved'."""
+    if the `Raed App Status` custom field is configured, sets it to 'approved'.
+    Returns the new outbox row's id (or None if skipped) so callers that
+    snapshot this write for undo (issue #159) can cancel it later."""
     if not copper_id:
-        return
+        return None
     base = _strip_raed_state_tags(existing_tags)
     new_tags = base + ["raed:approved"]
     payload: dict = {"tags": new_tags}
@@ -225,7 +248,28 @@ def mark_approved_in_copper(copper_id: str, existing_tags: Optional[list]) -> No
             "custom_field_definition_id": settings.copper_cf_app_status_id,
             "value": "approved",
         }]
-    _enqueue(copper_id, f"/leads/{copper_id}", payload)
+    return _enqueue(copper_id, f"/leads/{copper_id}", payload)
+
+
+def reverse_approve_in_copper(
+    copper_id: str,
+    prior_tags: Optional[list],
+    pending_outbox_id: Optional[str] = None,
+) -> Optional[str]:
+    """Reverses mark_approved_in_copper for an undo (issue #159): restores the
+    exact prior tag set and clears the `Raed App Status` custom field (if
+    configured) back to empty. Cancels `pending_outbox_id` first so a delayed
+    original approve write can never land after this reversal."""
+    if not copper_id:
+        return None
+    cancel_pending_outbox(pending_outbox_id)
+    payload: dict = {"tags": list(prior_tags or [])}
+    if settings.copper_cf_app_status_id:
+        payload["custom_fields"] = [{
+            "custom_field_definition_id": settings.copper_cf_app_status_id,
+            "value": "",
+        }]
+    return _enqueue(copper_id, f"/leads/{copper_id}", payload)
 
 
 def mark_sent_in_copper(copper_id: str, existing_tags: Optional[list]) -> None:

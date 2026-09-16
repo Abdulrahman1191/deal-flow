@@ -170,6 +170,17 @@ class Settings(BaseSettings):
     # "redrive-failed-copper-outbox" beat schedule entry in celery_app.py.
     outbox_redrive_interval_seconds: int = 1800  # 30 minutes
 
+    # --- Undo window (issue #159) ---
+    # POST /leads/{lead_id}/undo and POST /leads/bulk-archive/{batch_id}/undo
+    # refuse to reverse an action older than this many hours -- a quick-undo
+    # that fires days later is more likely to clobber unrelated state that
+    # changed in the meantime than to fix a slip of the finger. This is
+    # deliberately NOT applied to the separate Archive-page restore flow
+    # (browsing archived leads and restoring one deliberately, frontend UI --
+    # out of scope for this issue): that's an intentional lookup-and-restore,
+    # not a reflexive "oops" undo, so there's no reason to time-box it.
+    undo_window_hours: int = 72
+
     # --- Owner / identity ---
     # Email that gets owner-level access to Portfolio + Feedback tabs.
     # On the platform, this is the @raed.vc identity. Falls back to legacy

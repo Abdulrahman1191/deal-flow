@@ -284,6 +284,46 @@ def test_calibration_exclusion_set_empty_does_not_break_query(monkeypatch):
         assert params == {}
 
 
+def test_calibration_excludes_reverted_rows_in_every_query():
+    """issue #159: an override undone via POST /leads/{lead_id}/undo is a
+    mistake, not a real AI-vs-team signal -- every one of the four aggregate
+    queries must filter out reverted_at IS NOT NULL rows."""
+    overall_row = (0, 0, 0)
+
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([overall_row, [], [], []])
+    try:
+        response = client.get("/api/v1/overrides/calibration")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    assert len(session.queries) == 4
+    for sql in session.queries:
+        assert "reverted_at IS NULL" in sql
+
+
+def test_calibration_excludes_reverted_rows_alongside_test_account_exclusion():
+    """The reverted_at filter must combine with the non-client-facing-email
+    exclusion (issue #127), not replace it."""
+    overall_row = (0, 0, 0)
+
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([overall_row, [], [], []])
+    try:
+        response = client.get("/api/v1/overrides/calibration")
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    for sql, params in zip(session.queries, session.params):
+        assert "NOT IN (:excl_email0)" in sql
+        assert "reverted_at IS NULL" in sql
+        assert params == {"excl_email0": "almuhammed@raed.vc"}
+
+
 def test_calibration_overall_rate_none_when_no_rows():
     overall_row = (0, 0, 0)
 

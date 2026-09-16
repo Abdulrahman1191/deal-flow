@@ -175,6 +175,7 @@ async def approve_assessment(
     if card.approved_at:
         return {"status": "already_approved"}
 
+    prior_status = lead.status
     card.approved_at = datetime.now(timezone.utc)
     lead.status = "approved"
     await log_event(db, lead.id, EVENT_DRAFT_APPROVED, {"draft_type": card.draft_type})
@@ -182,12 +183,23 @@ async def approve_assessment(
     await db.commit()
 
     # F9 — sync approval to Copper via outbox (best-effort; don't fail the local commit)
+    outbox_id = None
+    existing_tags = None
     if lead.copper_id:
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.mark_approved_in_copper(lead.copper_id, existing_tags)
+            outbox_id = copper_writer.mark_approved_in_copper(lead.copper_id, existing_tags)
         except Exception as exc:
             print(f"[approve_assessment] Copper write failed: {exc!r}")
+
+    # Snapshot for undo (issue #159) -- prior status + Copper tag set, so
+    # POST /leads/{lead_id}/undo can restore exactly what this overwrote.
+    from app.services.undo import record_approve_action
+    await record_approve_action(
+        db, lead=lead, card=card, prior_status=prior_status, prior_tags=existing_tags,
+        actor_email=user.email, copper_outbox_id=outbox_id,
+    )
+    await db.commit()
 
     # Capture as training data — Approve is an implicit confirmation of the
     # effective bucket (user_override or bucket). human_bucket == that value.
@@ -476,6 +488,17 @@ async def override_bucket(
     ai_bucket_snapshot = card.bucket if card.user_override is None else (card.user_override or card.bucket)
     was_first_override = card.user_override is None
 
+    # Snapshot for undo (issue #159) -- everything this action is about to
+    # overwrite: the card's bucket/override AND its draft fields (a bucket
+    # override always regenerates or nulls the draft below, so undo has to
+    # restore that too, not just the bucket).
+    prior_user_override = card.user_override
+    prior_card_bucket = card.bucket
+    prior_draft_type = card.draft_type
+    prior_draft_subject = card.draft_subject
+    prior_draft_body = card.draft_body
+    prior_draft_bucket = card.draft_bucket
+
     card.user_override = body.bucket
     card.user_override_at = datetime.now(timezone.utc)
     card.bucket = body.bucket
@@ -514,12 +537,27 @@ async def override_bucket(
     await db.refresh(card)
 
     # Mirror to Copper (best-effort): tag swap only.
+    outbox_id = None
+    existing_tags = None
     if lead.copper_id:
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.set_bucket_tag(lead.copper_id, body.bucket, existing_tags)
+            outbox_id = copper_writer.set_bucket_tag(lead.copper_id, body.bucket, existing_tags)
         except Exception as exc:
             print(f"[override_bucket] Copper write failed (local commit succeeded): {exc!r}")
+
+    # Snapshot for undo (issue #159) -- see the prior_* capture above the
+    # mutations for what's restored.
+    from app.services.undo import record_bucket_override_action
+    await record_bucket_override_action(
+        db, lead=lead, card=card,
+        prior_bucket=prior_card_bucket, prior_user_override=prior_user_override,
+        prior_draft_type=prior_draft_type, prior_draft_subject=prior_draft_subject,
+        prior_draft_body=prior_draft_body, prior_draft_bucket=prior_draft_bucket,
+        prior_tags=existing_tags, resulting_bucket=body.bucket,
+        actor_email=user.email, copper_outbox_id=outbox_id,
+    )
+    await db.commit()
 
     # Capture for training. We record the AI's view at the moment of override —
     # for re-overrides this is the previous human bucket, which the downstream

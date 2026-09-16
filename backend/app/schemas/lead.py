@@ -100,6 +100,17 @@ class BulkArchiveResult(BaseModel):
     failed: List[BulkArchiveFailure]
 
 
+class BulkUndoFailure(BaseModel):
+    lead_id: str
+    error: str
+
+
+class BulkUndoResult(BaseModel):
+    undone: int
+    already_undone: int
+    failed: List[BulkUndoFailure]
+
+
 class PitchDeckSyncResult(BaseModel):
     """Structured diagnostic returned by POST /leads/{id}/sync-pitch-deck --
     never a bare 500, so the "Fetch pitch deck" button can always show the

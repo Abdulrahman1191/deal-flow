@@ -171,7 +171,7 @@ def test_writeback_task_wrapper_catches_exceptions_and_returns_failed(monkeypatc
     def _boom(_lead_id):
         raise RuntimeError("db exploded")
 
-    monkeypatch.setattr(bulk_archive_writeback, "_run", lambda lead_id: _boom(lead_id))
+    monkeypatch.setattr(bulk_archive_writeback, "_run", lambda lead_id, batch_id=None: _boom(lead_id))
 
     result = bulk_archive_writeback.bulk_archive_writeback_task("some-lead-id")
 

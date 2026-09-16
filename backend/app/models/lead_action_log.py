@@ -13,13 +13,13 @@ from app.database import Base
 class LeadActionLog(Base):
     """Snapshot of a reversible disposition, so POST /leads/{id}/undo can
     restore exactly what it overwrote rather than guessing a default
-    (issue #153). One row per undoable action.
+    (issue #153, extended in #159). One row per undoable action.
 
-    Scoped for now to the archive paths: `archive_no_reply` (leads.py) and
-    `archive_after_send` (the rejection-send archive in
-    assessments.py::_finalize_sent). Bucket-override/approve/bulk-archive
-    undo, and a full multi-step undo history, are deferred follow-ups --
-    /undo only ever reverses the single most recent row per lead.
+    Covers the archive paths (`archive_no_reply`, `archive_after_send`,
+    `bulk_archive`), `bucket_override`, and `approve` -- see
+    app/services/undo.py for the action_type constants and per-type restore
+    logic. A full multi-step undo history is still out of scope: /undo only
+    ever reverses the single most recent row per lead.
     """
 
     __tablename__ = "lead_action_log"
@@ -28,6 +28,17 @@ class LeadActionLog(Base):
     lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True)
     action_type: Mapped[str] = mapped_column(String(32), nullable=False)
     actor_email: Mapped[Optional[str]] = mapped_column(String(255))
+
+    # The assessment card a bucket_override/approve action changed (null for
+    # archive-shaped actions, which don't touch a card). Lets undo restore
+    # the EXACT card the action mutated and detect drift if a reassessment
+    # created a newer one since (issue #159).
+    card_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("assessment_cards.id", ondelete="SET NULL"))
+
+    # Groups the per-lead rows one POST /leads/bulk-archive call writes, so
+    # POST /leads/bulk-archive/{batch_id}/undo can reverse the whole batch
+    # (issue #159). Null for every other action type.
+    batch_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), index=True)
 
     # lead.status + the exact Copper tag set, captured right before the
     # action overwrote them. Undo restores from here instead of a default.

@@ -91,17 +91,19 @@ def _fake_card(rated: bool, bucket: str = "YES"):
 
 
 def _fake_action(lead_id, action_type="archive_no_reply", prior_status="assessed",
-                  prior_tags=None, email_sent=False, copper_outbox_id=None, undone_at=None):
+                  prior_tags=None, email_sent=False, copper_outbox_id=None, undone_at=None,
+                  card_id=None, created_at=None):
     return SimpleNamespace(
         id=uuid.uuid4(),
         lead_id=lead_id,
+        card_id=card_id,
         action_type=action_type,
         actor_email="reviewer@raed.vc",
         prior_state={"status": prior_status, "copper_id": None, "copper_tags": prior_tags or []},
         email_sent=email_sent,
         copper_outbox_id=copper_outbox_id,
         undone_at=undone_at,
-        created_at=datetime.now(timezone.utc),
+        created_at=created_at or datetime.now(timezone.utc),
     )
 
 

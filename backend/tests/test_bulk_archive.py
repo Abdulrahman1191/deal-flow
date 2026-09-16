@@ -105,8 +105,14 @@ def _clear_db_override():
 
 
 def _record_delay(monkeypatch):
+    """Records (lead_id, batch_id) pairs -- issue #159 added batch_id as a
+    second positional arg to bulk_archive_writeback_task.delay so the task
+    can patch its Copper outbox id back onto the right lead_action_log row."""
     calls = []
-    monkeypatch.setattr(bulk_archive_writeback_task, "delay", lambda lead_id: calls.append(lead_id))
+    monkeypatch.setattr(
+        bulk_archive_writeback_task, "delay",
+        lambda lead_id, batch_id=None: calls.append((lead_id, batch_id)),
+    )
     return calls
 
 
@@ -129,7 +135,12 @@ def test_bulk_archive_sets_all_leads_archived_and_dispatches_one_writeback_task_
     body = response.json()
     assert body == {"archived": 3, "copper_enqueued": 3, "failed": []}
     assert all(lead.status == "archived" for lead in leads)
-    assert sorted(calls) == sorted(str(lead.id) for lead in leads)
+    assert sorted(lead_id for lead_id, _ in calls) == sorted(str(lead.id) for lead in leads)
+    # Every lead in the batch gets the SAME batch_id (issue #159) so
+    # POST /leads/bulk-archive/{batch_id}/undo can reverse them together.
+    batch_ids = {batch_id for _, batch_id in calls}
+    assert len(batch_ids) == 1
+    assert batch_ids != {None}
 
 
 def test_bulk_archive_no_rating_required_unlike_single_archive(override_auth, monkeypatch):
@@ -149,7 +160,7 @@ def test_bulk_archive_no_rating_required_unlike_single_archive(override_auth, mo
     assert response.status_code == 200
     assert response.json() == {"archived": 1, "copper_enqueued": 1, "failed": []}
     assert lead.status == "archived"
-    assert calls == [str(lead.id)]
+    assert [lead_id for lead_id, _ in calls] == [str(lead.id)]
 
 
 def test_bulk_archive_one_failing_lead_does_not_abort_the_batch(override_auth, monkeypatch):
@@ -194,7 +205,7 @@ def test_bulk_archive_one_failing_lead_does_not_abort_the_batch(override_auth, m
     assert good_lead_1.status == "archived"
     assert good_lead_2.status == "archived"
     assert session.rollbacks == 1
-    assert sorted(calls) == sorted([str(good_lead_1.id), str(good_lead_2.id)])
+    assert sorted(lead_id for lead_id, _ in calls) == sorted([str(good_lead_1.id), str(good_lead_2.id)])
 
 
 def test_bulk_archive_not_found_lead_is_isolated_as_a_failure(override_auth):

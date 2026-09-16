@@ -19,6 +19,7 @@ from app.routers.assessments import _require_rating
 from app.schemas.lead import (
     BulkArchiveRequest,
     BulkArchiveResult,
+    BulkUndoResult,
     LeadOut,
     LeadUpdate,
     LeadWithAssessment,
@@ -551,6 +552,13 @@ async def bulk_archive_leads(
     block_if_impersonating(request, user)
 
     from app.tasks.bulk_archive_writeback import bulk_archive_writeback_task
+    from app.services.undo import ACTION_BULK_ARCHIVE, record_archive_action
+
+    # One id for the whole call, stamped on every log row it writes --
+    # POST /leads/bulk-archive/{batch_id}/undo undoes them all together
+    # (issue #159). Already-archived leads (skipped below) get no row and so
+    # aren't part of the undoable batch.
+    batch_id = uuid.uuid4()
 
     archived = 0
     copper_enqueued = 0
@@ -576,19 +584,110 @@ async def bulk_archive_leads(
                 archived += 1
                 continue
 
+            prior_status = lead.status
+            existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
             lead.status = "archived"
             await log_event(db, lead.id, EVENT_ARCHIVED, {"reason": "bulk_archive"})
+
+            # Snapshot for undo (issue #159) -- the Copper write-back itself
+            # (and its outbox id) happens later in bulk_archive_writeback_task,
+            # which patches copper_outbox_id onto this row once it runs.
+            await record_archive_action(
+                db, lead=lead, action_type=ACTION_BULK_ARCHIVE,
+                prior_status=prior_status, prior_tags=existing_tags,
+                actor_email=user.email, batch_id=batch_id,
+            )
             await db.commit()
             archived += 1
 
             if lead.copper_id and not lead.copper_opportunity_id:
-                bulk_archive_writeback_task.delay(str(lead.id))
+                bulk_archive_writeback_task.delay(str(lead.id), str(batch_id))
                 copper_enqueued += 1
         except Exception as exc:
             await db.rollback()
             failed.append({"lead_id": str(raw_lead_id), "error": repr(exc)})
 
     return BulkArchiveResult(archived=archived, copper_enqueued=copper_enqueued, failed=failed)
+
+
+@router.post("/bulk-archive/{batch_id}/undo", response_model=BulkUndoResult)
+async def undo_bulk_archive_batch(
+    batch_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Reverses an entire POST /leads/bulk-archive batch in one call (issue
+    #159): every not-yet-undone lead_action_log row stamped with this
+    `batch_id` gets restored to its prior status + Copper tags, the same way
+    POST /leads/{lead_id}/undo reverses a single archive.
+
+    Per-lead isolation, mirroring bulk_archive_leads itself: each row is
+    processed in its own try/except, so one lead that's out of the undo
+    window, converted to a Copper Opportunity, already undone, drifted to a
+    different status since, or hits a DB hiccup never blocks the rest of the
+    batch from undoing -- it's recorded in `failed` and the loop moves on.
+    Owner-scoped per lead (a batch can only ever contain the caller's own
+    leads, since bulk_archive_leads itself is owner-scoped), refused while
+    impersonating.
+    """
+    block_if_impersonating(request, user)
+
+    from app.models.lead_action_log import LeadActionLog
+    from app.services import undo as undo_service
+
+    try:
+        batch_uuid = uuid.UUID(batch_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid batch id")
+
+    log_result = await db.execute(
+        select(LeadActionLog)
+        .where(LeadActionLog.batch_id == batch_uuid)
+        .where(LeadActionLog.action_type == undo_service.ACTION_BULK_ARCHIVE)
+    )
+    actions = log_result.scalars().all()
+    if not actions:
+        raise HTTPException(status_code=404, detail="No bulk-archive batch found with that id")
+
+    undone = 0
+    already_undone = 0
+    failed: list[dict] = []
+
+    for action in actions:
+        try:
+            lead_result = await db.execute(
+                select(Lead).where(Lead.id == action.lead_id, Lead.owner_email == user.email)
+            )
+            lead = lead_result.scalar_one_or_none()
+            if not lead:
+                failed.append({"lead_id": str(action.lead_id), "error": "not_found"})
+                continue
+
+            if action.undone_at:
+                already_undone += 1
+                continue
+
+            if not undo_service.is_within_undo_window(action):
+                failed.append({"lead_id": str(action.lead_id), "error": "undo_window_expired"})
+                continue
+
+            if lead.copper_opportunity_id:
+                failed.append({"lead_id": str(action.lead_id), "error": "converted_to_opportunity"})
+                continue
+
+            if lead.status != "archived":
+                failed.append({"lead_id": str(action.lead_id), "error": "status_drifted"})
+                continue
+
+            await undo_service.undo_action(db, lead=lead, action=action)
+            undone += 1
+        except Exception as exc:
+            await db.rollback()
+            failed.append({"lead_id": str(action.lead_id), "error": repr(exc)})
+
+    return {"undone": undone, "already_undone": already_undone, "failed": failed}
 
 
 @router.post("/{lead_id}/archive-no-reply")
@@ -688,19 +787,23 @@ async def undo_last_action(
     user: User = Depends(get_current_user),
 ):
     """
-    Reverses the most recent undoable action for this lead -- currently
-    archive-no-reply or the rejection-send archive (issue #153; bucket
-    override / approve / bulk-archive undo are deferred follow-ups).
-    Restores app `status` and enqueues a Copper write-back reversing the
-    status + tags + clearing the AI-written Unqualification fields, through
-    the same outbox every other write-back uses.
+    Reverses the most recent undoable action for this lead -- archive
+    (single or bulk), bucket-override, or approve (issue #153, extended in
+    #159). Restores whatever that action overwrote (lead status, or the
+    assessment card's bucket/override/draft/approval fields) and enqueues a
+    Copper write-back reversing it, through the same outbox every other
+    write-back uses.
 
     Owner-scoped, refused while impersonating. Idempotent: undoing an
     already-undone action returns `already_undone` rather than erroring.
-    Refuses (409) if the lead was converted to a Copper Opportunity
-    (un-converting is out of scope) or if the lead's status has drifted from
-    what the logged action produced -- e.g. it was re-synced or acted on
-    again since -- so undo never clobbers newer state.
+    Refuses (409) if: the action is older than `settings.undo_window_hours`
+    (issue #159 -- the Archive-page restore flow, if/when it exists, is
+    separate and not bound by this window); the lead was converted to a
+    Copper Opportunity (un-converting is out of scope); the card a
+    bucket-override/approve action changed no longer exists (a reassessment
+    replaced it); or current state has drifted from what the logged action
+    produced -- e.g. re-synced, re-overridden, or acted on again since -- so
+    undo never clobbers newer state.
 
     A sent email can never be unsent: for a rejection-send archive, undo
     still restores app/Copper state but the response's `email_sent` flag
@@ -715,6 +818,7 @@ async def undo_last_action(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
+    from app.models.assessment import AssessmentCard
     from app.models.lead_action_log import LeadActionLog
     from app.services import undo as undo_service
 
@@ -732,21 +836,59 @@ async def undo_last_action(
     if action.undone_at:
         return {"status": "already_undone", "action_type": action.action_type}
 
-    if lead.copper_opportunity_id:
+    if not undo_service.is_within_undo_window(action):
         raise HTTPException(
             status_code=409,
-            detail="This lead was converted to a Copper Opportunity — un-converting isn't supported. "
-                   "Reverse it manually in Copper if needed.",
+            detail=f"This action is more than {settings.undo_window_hours}h old — too old to undo.",
         )
 
-    if lead.status != "archived":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Lead status has changed since this action (now '{lead.status}') — "
-                   "refusing to undo a stale action.",
-        )
+    card: Optional[AssessmentCard] = None
+    if action.card_id is not None:
+        card_result = await db.execute(select(AssessmentCard).where(AssessmentCard.id == action.card_id))
+        card = card_result.scalar_one_or_none()
+        if card is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The assessment this action changed no longer exists (a reassessment replaced "
+                       "it) — refusing to undo a stale action.",
+            )
 
-    return await undo_service.undo_action(db, lead=lead, action=action)
+    if action.action_type in undo_service.ARCHIVE_ACTIONS:
+        if lead.copper_opportunity_id:
+            raise HTTPException(
+                status_code=409,
+                detail="This lead was converted to a Copper Opportunity — un-converting isn't supported. "
+                       "Reverse it manually in Copper if needed.",
+            )
+        if lead.status != "archived":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Lead status has changed since this action (now '{lead.status}') — "
+                       "refusing to undo a stale action.",
+            )
+    elif action.action_type == undo_service.ACTION_BUCKET_OVERRIDE:
+        resulting_bucket = (action.prior_state or {}).get("resulting_bucket")
+        if card.bucket != resulting_bucket:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This lead's bucket has changed since this override (now '{card.bucket}') — "
+                       "refusing to undo a stale action.",
+            )
+    elif action.action_type == undo_service.ACTION_APPROVE:
+        if card.sent_at:
+            raise HTTPException(
+                status_code=409,
+                detail="An email was already sent for this approval — un-sending isn't supported. "
+                       "Undo the archive/send action instead if you meant to reverse that.",
+            )
+        if lead.status != "approved":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Lead status has changed since this action (now '{lead.status}') — "
+                       "refusing to undo a stale action.",
+            )
+
+    return await undo_service.undo_action(db, lead=lead, action=action, card=card)
 
 
 @router.post("/{lead_id}/find-linkedin")
