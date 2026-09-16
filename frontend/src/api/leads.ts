@@ -20,6 +20,24 @@ export const archiveLead = (id: string) =>
 export const archiveNoReply = (id: string) =>
   client.post(`/leads/${id}/archive-no-reply`).then((r) => r.data);
 
+export interface UndoResult {
+  status: "undone" | "already_undone";
+  action_type: string;
+  restored_status?: string;
+  copper_enqueued?: boolean;
+  email_sent?: boolean;
+  note?: string;
+}
+
+export const undoLastAction = (id: string) =>
+  client.post<UndoResult>(`/leads/${id}/undo`).then((r) => r.data);
+
+/** Shared toast copy for an undo result — the email-sent case needs its own wording since app/Copper state is restored but the email itself can't be unsent. */
+export const describeUndoResult = (result: UndoResult, companyName: string) =>
+  result.email_sent
+    ? `Restored ${companyName} — but the email it already sent can't be unsent.`
+    : `Restored ${companyName} to ${result.restored_status ?? "its original bucket"}.`;
+
 export interface BulkArchiveResult {
   archived: number;
   copper_enqueued: number;
