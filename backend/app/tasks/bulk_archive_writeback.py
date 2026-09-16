@@ -66,8 +66,22 @@ async def _run(lead_id: str) -> dict:
                 )
 
         existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-        copper_writer.archive_in_copper(
+        outbox_id = copper_writer.archive_in_copper(
             lead.copper_id, existing_tags,
             reason_option_ids=reason_option_ids, detail_text=detail_text,
         )
+
+        # Snapshot so override_bucket can correct a stale Unqualified
+        # disposition later (issue #157) -- same lead_action_log mechanism
+        # the single-lead archive paths use. Not an UNDOABLE_ACTIONS member,
+        # so /undo never restores prior_status from this row -- the router
+        # already flipped status=archived before dispatching this task, so
+        # there's no pre-archive value left to capture here.
+        from app.services.undo import ACTION_BULK_ARCHIVE, record_archive_action
+        await record_archive_action(
+            db, lead=lead, action_type=ACTION_BULK_ARCHIVE,
+            prior_status="assessed", prior_tags=existing_tags,
+            actor_email=None, copper_outbox_id=outbox_id,
+        )
+        await db.commit()
         return {"lead_id": lead_id, "status": "written_back"}

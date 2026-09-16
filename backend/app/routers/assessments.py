@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
+from app.models.lead_action_log import LeadActionLog
 from app.models.user import User
 from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverride, DraftUpdate
 from app.services import claude_agent, copper_writer, email_sender
@@ -513,11 +514,43 @@ async def override_bucket(
     await db.commit()
     await db.refresh(card)
 
-    # Mirror to Copper (best-effort): tag swap only.
+    # Mirror to Copper (best-effort). Usually just the bucket-tag swap -- but
+    # if this transition takes the lead out of REJECT after it was already
+    # written back to Copper as Unqualified (issue #157), correct that
+    # disposition instead: reopen the Copper status, clear the AI-written
+    # Unqualification Reasons/Details fields, and swap in the new bucket tag.
+    # "Already written back as Unqualified" is read off lead_action_log (the
+    # issue #153 undo-snapshot table) rather than a dedicated Lead column --
+    # it's already the source of truth for "an Unqualified write happened and
+    # hasn't been reversed yet", so dedup/webhook-mirror archives (which never
+    # touch Copper and never log here) can't be mistaken for one.
     if lead.copper_id:
+        pending_correction = None
+        if prior_bucket == "REJECT" and body.bucket in ("YES", "MAYBE"):
+            from app.services.undo import UNQUALIFIED_WRITE_ACTIONS
+            action_result = await db.execute(
+                select(LeadActionLog)
+                .where(LeadActionLog.lead_id == lead.id)
+                .where(LeadActionLog.action_type.in_(list(UNQUALIFIED_WRITE_ACTIONS)))
+                .where(LeadActionLog.undone_at.is_(None))
+                .order_by(LeadActionLog.created_at.desc())
+                .limit(1)
+            )
+            pending_correction = action_result.scalar_one_or_none()
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.set_bucket_tag(lead.copper_id, body.bucket, existing_tags)
+            if pending_correction:
+                copper_writer.correct_unqualified_override(
+                    lead.copper_id, body.bucket, existing_tags,
+                    pending_outbox_id=pending_correction.copper_outbox_id,
+                )
+                # Consumed: this correction supersedes the archive, so /undo
+                # must no longer offer to reverse it, and a later YES<->MAYBE
+                # re-override must not resend the correction.
+                pending_correction.undone_at = datetime.now(timezone.utc)
+                await db.commit()
+            else:
+                copper_writer.set_bucket_tag(lead.copper_id, body.bucket, existing_tags)
         except Exception as exc:
             print(f"[override_bucket] Copper write failed (local commit succeeded): {exc!r}")
 

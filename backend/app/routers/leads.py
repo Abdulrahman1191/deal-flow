@@ -436,6 +436,7 @@ async def delete_lead(
     lead = result.scalar_one_or_none()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+    prior_status = lead.status
     lead.status = "archived"
     await log_event(db, lead.id, EVENT_ARCHIVED, {"reason": "manual_delete"})
     await db.commit()
@@ -447,11 +448,24 @@ async def delete_lead(
             f"(opportunity {lead.copper_opportunity_id}); skipping Copper archive write"
         )
     elif lead.copper_id:
+        existing_tags = None
+        outbox_id = None
         try:
             existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
-            copper_writer.archive_in_copper(lead.copper_id, existing_tags)
+            outbox_id = copper_writer.archive_in_copper(lead.copper_id, existing_tags)
         except Exception as exc:
             print(f"[delete_lead] Copper write failed (local commit succeeded): {exc!r}")
+
+        # Snapshot so override_bucket can correct a stale Unqualified
+        # disposition later (issue #157) -- same lead_action_log mechanism
+        # archive_no_reply's undo snapshot uses below.
+        from app.services.undo import ACTION_DELETE, record_archive_action
+        await record_archive_action(
+            db, lead=lead, action_type=ACTION_DELETE,
+            prior_status=prior_status, prior_tags=existing_tags,
+            actor_email=user.email, copper_outbox_id=outbox_id,
+        )
+        await db.commit()
 
 
 @router.get("/archive/list")

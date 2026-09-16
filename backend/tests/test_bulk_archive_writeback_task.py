@@ -35,6 +35,8 @@ class _FakeTaskSession:
     def __init__(self, lead, card=None):
         self.lead = lead
         self.card = card
+        self.added: list = []
+        self.commits = 0
 
     async def __aenter__(self):
         return self
@@ -48,6 +50,12 @@ class _FakeTaskSession:
             return _FakeScalarResult(self.lead)
         assert entity is AssessmentCard
         return _FakeScalarResult(self.card)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def commit(self):
+        self.commits += 1
 
 
 def _fake_lead(copper_id="7", copper_opportunity_id=None, lead_id=None):
@@ -165,6 +173,36 @@ def test_writeback_task_skips_when_already_converted_to_opportunity(monkeypatch)
     result = asyncio.run(bulk_archive_writeback._run(str(lead.id)))
 
     assert result == {"lead_id": str(lead.id), "status": "skipped"}
+
+
+def test_writeback_task_snapshots_action_log_for_unqualified_correction(monkeypatch):
+    """Issue #157: bulk-archive must also leave a lead_action_log row behind,
+    same as archive_no_reply/the rejection-send archive, so a later
+    override_bucket REJECT->YES/MAYBE can find and correct a stale Unqualified
+    write for leads archived through this path too."""
+    lead = _fake_lead()
+    card = _fake_card()
+    session = _FakeTaskSession(lead, card=card)
+    monkeypatch.setattr(bulk_archive_writeback, "CelerySessionLocal", lambda: session)
+    monkeypatch.setattr(
+        claude_agent, "generate_unqualification_reason",
+        lambda **kwargs: {"reason_option_ids": [367301], "detail_text": "Out of region."},
+    )
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: "outbox-row-id")
+
+    asyncio.run(bulk_archive_writeback._run(str(lead.id)))
+
+    from app.models.lead_action_log import LeadActionLog
+    from app.services import undo as undo_service
+
+    logged = [o for o in session.added if isinstance(o, LeadActionLog)]
+    assert len(logged) == 1
+    row = logged[0]
+    assert row.action_type == undo_service.ACTION_BULK_ARCHIVE
+    assert row.copper_outbox_id == "outbox-row-id"
+    assert row.undone_at is None
+    assert undo_service.ACTION_BULK_ARCHIVE not in undo_service.UNDOABLE_ACTIONS
+    assert session.commits >= 1
 
 
 def test_writeback_task_wrapper_catches_exceptions_and_returns_failed(monkeypatch):
