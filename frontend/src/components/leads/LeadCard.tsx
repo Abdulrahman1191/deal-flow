@@ -11,7 +11,14 @@ import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { useToast } from "../shared/Toast";
 import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
-import { archiveNoReply, findLinkedin, syncPitchDeck, updateLead } from "../../api/leads";
+import {
+  archiveNoReply,
+  describeUndoResult,
+  findLinkedin,
+  syncPitchDeck,
+  undoLastAction,
+  updateLead,
+} from "../../api/leads";
 import ReasonModal from "./ReasonModal";
 import FeedbackModal from "./FeedbackModal";
 import SelectCheckbox from "../shared/SelectCheckbox";
@@ -171,9 +178,30 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
     },
   });
 
+  const undoMutation = useMutation({
+    mutationFn: () => undoLastAction(lead.id),
+    onSuccess: (data) => toast(describeUndoResult(data, lead.company_name)),
+    onError: (err: unknown) => {
+      const detail =
+        axios.isAxiosError(err) &&
+        (err.response?.status === 404 || err.response?.status === 409)
+          ? (err.response.data as { detail?: string } | undefined)?.detail
+          : undefined;
+      toast(detail ?? "Couldn't undo — please try again.");
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["archive"] });
+      qc.invalidateQueries({ queryKey: ["send-queue"] });
+    },
+  });
+
   const archiveMutation = useMutation({
     mutationFn: () => archiveNoReply(lead.id),
-    onSuccess: () => toast(`Archived ${lead.company_name} (no email sent)`),
+    onSuccess: () =>
+      toast(`Archived ${lead.company_name} (no email sent)`, {
+        action: { label: "Undo", onClick: () => undoMutation.mutate() },
+      }),
     onError: (err: unknown) => {
       // The backend re-checks the rating mandate (428 when unrated) as
       // defense-in-depth. Surface that message inline instead of a generic

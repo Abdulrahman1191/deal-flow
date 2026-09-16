@@ -1,13 +1,18 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import axios from "axios";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  describeUndoResult,
   fetchArchive,
   fetchLeadEvents,
+  undoLastAction,
   type ArchiveItem,
   type ArchiveOutcomes,
   type LeadEvent,
 } from "../api/leads";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
+import { useToast } from "../components/shared/Toast";
+import useAppStore from "../store/useAppStore";
 
 const SECTIONS: { key: ArchiveOutcomes; label: string; tone: string }[] = [
   { key: "sent_meeting_request", label: "Sent: Meeting Request", tone: "text-success" },
@@ -26,6 +31,7 @@ const EVENT_LABEL: Record<string, string> = {
   archived_no_reply: "Archived (no reply)",
   converted: "Converted to Opportunity",
   copper_updated: "Synced from Copper",
+  action_undone: "Archive undone",
 };
 
 function EventRow({ event }: { event: LeadEvent }) {
@@ -51,17 +57,40 @@ function ArchiveRow({ item }: { item: ArchiveItem }) {
     queryFn: () => fetchLeadEvents(item.id),
     enabled: expanded,
   });
+  const qc = useQueryClient();
+  const toast = useToast();
+  // Admin "view as" QA mode (issue #52): the backend already 403s mutations
+  // while impersonating (block_if_impersonating) — this just disables the
+  // control in the UI so it appears read-only instead of failing on click.
+  const readOnly = !!useAppStore((s) => s.viewAs);
+
+  const restoreMutation = useMutation({
+    mutationFn: () => undoLastAction(item.id),
+    onSuccess: (data) => toast(describeUndoResult(data, item.company_name)),
+    onError: (err: unknown) => {
+      const detail =
+        axios.isAxiosError(err) &&
+        (err.response?.status === 404 || err.response?.status === 409)
+          ? (err.response.data as { detail?: string } | undefined)?.detail
+          : undefined;
+      toast(detail ?? "Couldn't restore this lead — please try again.");
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["archive"] });
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
 
   return (
     <div
       className="bg-card border border-border rounded-lg"
       data-testid="archive-row"
     >
-      <button
-        className="w-full px-4 py-3 flex items-center justify-between gap-3 hover:bg-muted transition-colors text-left"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="min-w-0 flex-1">
+      <div className="w-full px-4 py-3 flex items-center justify-between gap-3 hover:bg-muted transition-colors">
+        <button
+          className="min-w-0 flex-1 text-left"
+          onClick={() => setExpanded(!expanded)}
+        >
           <div className="flex items-center gap-2">
             <span className="font-medium text-foreground text-sm truncate">
               {item.company_name}
@@ -93,11 +122,28 @@ function ArchiveRow({ item }: { item: ArchiveItem }) {
               </a>
             )}
           </div>
-        </div>
-        <span className="text-xs text-muted-foreground">
+        </button>
+        <button
+          onClick={() => {
+            if (confirm(`Restore ${item.company_name} to its original bucket?`)) {
+              restoreMutation.mutate();
+            }
+          }}
+          disabled={restoreMutation.isPending || readOnly}
+          title={readOnly ? "Read-only while viewing another user's board" : undefined}
+          data-testid="restore-archive-btn"
+          className="shrink-0 text-xs px-2.5 py-1.5 rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {restoreMutation.isPending ? "Restoring…" : "Restore"}
+        </button>
+        <button
+          className="shrink-0 text-xs text-muted-foreground px-1"
+          onClick={() => setExpanded(!expanded)}
+          aria-label={expanded ? "Collapse" : "Expand"}
+        >
           {expanded ? "▲" : "▼"}
-        </span>
-      </button>
+        </button>
+      </div>
       {expanded && (
         <div className="border-t border-border px-4 py-3">
           {events.length === 0 ? (
