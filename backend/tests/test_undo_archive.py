@@ -382,3 +382,51 @@ def test_retrieve_labeled_exemplars_excludes_reverted_rows():
     asyncio.run(feedback_patterns.retrieve_labeled_exemplars(session, "deep tech logistics robotics"))
 
     assert any("reverted_at" in q and "IS NULL" in q for q in session.queries)
+
+
+# ---------------------------------------------------------------------------
+# 5. delete_lead also snapshots for issue #157's correction lookup
+# ---------------------------------------------------------------------------
+
+def test_delete_lead_snapshots_action_log(override_auth, monkeypatch):
+    monkeypatch.setattr(
+        copper_writer, "archive_in_copper",
+        lambda *a, **k: "33333333-3333-3333-3333-333333333333",
+    )
+
+    lead = _fake_lead(status="assessed", copper_id="98765", raw_copper_data={"tags": ["existing-tag"]})
+    session = _override_db([lead])
+    try:
+        response = client.delete(f"/api/v1/leads/{lead.id}")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 204
+    assert lead.status == "archived"
+
+    from app.models.lead_action_log import LeadActionLog
+    logged = [o for o in session.added if isinstance(o, LeadActionLog)]
+    assert len(logged) == 1
+    row = logged[0]
+    assert row.action_type == undo_service.ACTION_DELETE
+    assert row.prior_state["status"] == "assessed"
+    assert row.prior_state["copper_tags"] == ["existing-tag"]
+    assert row.copper_outbox_id == "33333333-3333-3333-3333-333333333333"
+    assert undo_service.ACTION_DELETE not in undo_service.UNDOABLE_ACTIONS
+
+
+def test_delete_lead_skips_snapshot_when_already_converted(override_auth, monkeypatch):
+    calls = []
+    monkeypatch.setattr(copper_writer, "archive_in_copper", lambda *a, **k: calls.append(a))
+
+    lead = _fake_lead(status="assessed", copper_id="98765", copper_opportunity_id="opp-1")
+    session = _override_db([lead])
+    try:
+        response = client.delete(f"/api/v1/leads/{lead.id}")
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 204
+    assert calls == []
+    from app.models.lead_action_log import LeadActionLog
+    assert [o for o in session.added if isinstance(o, LeadActionLog)] == []

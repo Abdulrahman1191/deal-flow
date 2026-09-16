@@ -27,11 +27,27 @@ from app.services.events import EVENT_ACTION_UNDONE, log_event
 
 ACTION_ARCHIVE_NO_REPLY = "archive_no_reply"
 ACTION_ARCHIVE_AFTER_SEND = "archive_after_send"
+ACTION_DELETE = "delete"
+ACTION_BULK_ARCHIVE = "bulk_archive"
 
 # Action types POST /leads/{lead_id}/undo will reverse. Anything else logged
 # to lead_action_log in the future (bucket override, approve, ...) is
 # invisible to /undo until it's explicitly added here.
 UNDOABLE_ACTIONS = {ACTION_ARCHIVE_NO_REPLY, ACTION_ARCHIVE_AFTER_SEND}
+
+# All action types that represent a lead being written back to Copper as
+# Unqualified. Superset of UNDOABLE_ACTIONS -- delete_lead and bulk-archive
+# aren't wired into /undo yet, but they call copper_writer.archive_in_copper
+# exactly like archive_no_reply/archive_after_send do. override_bucket
+# (issue #157) queries this set instead of a dedicated Lead column to decide
+# whether a REJECT->YES/MAYBE override needs to correct a stale Unqualified
+# disposition: an unresolved (undone_at IS NULL) row here already means "we
+# wrote Unqualified and haven't reversed it", and reusing it means archives
+# that never touch Copper (dedup, the Copper-delete webhook mirror) can't be
+# mistaken for one, since they never log to this table.
+UNQUALIFIED_WRITE_ACTIONS = {
+    ACTION_ARCHIVE_NO_REPLY, ACTION_ARCHIVE_AFTER_SEND, ACTION_DELETE, ACTION_BULK_ARCHIVE,
+}
 
 
 async def record_archive_action(

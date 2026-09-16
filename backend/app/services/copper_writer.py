@@ -326,6 +326,28 @@ def reverse_archive_in_copper(
     return _enqueue(copper_id, f"/leads/{copper_id}", payload)
 
 
+def correct_unqualified_override(
+    copper_id: str,
+    new_bucket: str,
+    existing_tags: Optional[list],
+    pending_outbox_id: Optional[str] = None,
+) -> Optional[str]:
+    """Issue #157: a lead moved out of REJECT (via override_bucket) after
+    already being written back to Copper as Unqualified. Reopens the status
+    and clears the Unqualification Reasons/Details custom fields exactly like
+    reverse_archive_in_copper — but swaps in the new bucket tag instead of
+    restoring the pre-archive tag set, since this is a correction to a
+    different disposition rather than an undo back to where the lead started.
+    Cancels `pending_outbox_id` first for the same race-safety reason
+    reverse_archive_in_copper does — the original archive write must never
+    land after this correction and re-archive the lead."""
+    if not copper_id:
+        return None
+    base = _strip_raed_state_tags(existing_tags)
+    new_tags = base + [f"raed:bucket:{new_bucket.lower()}", "raed:override"]
+    return reverse_archive_in_copper(copper_id, new_tags, pending_outbox_id=pending_outbox_id)
+
+
 def reject_in_copper(
     copper_id: str,
     existing_tags: Optional[list],
