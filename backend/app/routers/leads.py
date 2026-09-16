@@ -353,6 +353,43 @@ async def outbox_health(
     }
 
 
+@router.get("/failed-summary")
+async def failed_summary(
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only visibility into leads dead-lettered to 'failed' (issue
+    #163): total count, a breakdown by owner, and the most common distinct
+    `last_assessment_error` strings -- so a burst like the 2026-09-15
+    incident (367 leads stuck failed, root cause only ever print()ed to
+    worker logs) can be diagnosed and traced to a single root cause from the
+    app/DB instead of grepping container logs."""
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    total_result = await db.execute(select(func.count()).where(Lead.status == "failed"))
+    total = total_result.scalar_one()
+
+    by_owner_result = await db.execute(
+        select(Lead.owner_email, func.count())
+        .where(Lead.status == "failed")
+        .group_by(Lead.owner_email)
+    )
+    by_owner = {(owner or "unassigned"): count for owner, count in by_owner_result.all()}
+
+    by_error_result = await db.execute(
+        select(Lead.last_assessment_error, func.count())
+        .where(Lead.status == "failed", Lead.last_assessment_error.is_not(None))
+        .group_by(Lead.last_assessment_error)
+        .order_by(func.count().desc())
+        .limit(limit)
+    )
+    top_errors = [{"error": error, "count": count} for error, count in by_error_result.all()]
+
+    return {"total": total, "by_owner": by_owner, "top_errors": top_errors}
+
+
 @router.get("/{lead_id}", response_model=LeadWithAssessment)
 async def get_lead(
     lead_id: str,

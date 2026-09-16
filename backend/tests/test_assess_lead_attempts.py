@@ -32,14 +32,44 @@ def test_attempt_cap_exceeded_dead_letters_without_running(monkeypatch):
         raise AssertionError("must not run the assessment once the attempt cap is exceeded")
 
     monkeypatch.setattr(assess_lead, "_run", _boom)
+    # No error persisted by a prior retry attempt (issue #163 fix-round-1) --
+    # the cap message alone is what should land in last_assessment_error.
+    monkeypatch.setattr(assess_lead, "_get_last_assessment_error", lambda lid: None)
 
     failed = []
-    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error: failed.append((lid, error)))
+    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error, **kw: failed.append((lid, error)))
 
     result = assess_lead.assess_lead_task(lead_id)
 
     assert result["status"] == "failed"
     assert failed == [(lead_id, f"exceeded {assess_lead.MAX_ASSESS_ATTEMPTS} assessment attempts (attempt #4)")]
+
+
+def test_attempt_cap_exceeded_preserves_prior_retry_error(monkeypatch):
+    """A lead whose earlier attempts persisted a real exception (via
+    _record_retry_error, issue #163 fix-round-1) must not have that
+    diagnosis clobbered by the generic cap-counter message once the
+    attempts cap dead-letters it -- the real error is appended, not
+    discarded."""
+    lead_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        assess_lead, "_increment_attempts", lambda lid: assess_lead.MAX_ASSESS_ATTEMPTS + 1
+    )
+    monkeypatch.setattr(assess_lead, "_run", lambda _lid: (_ for _ in ()).throw(AssertionError("must not run")))
+    monkeypatch.setattr(
+        assess_lead, "_get_last_assessment_error", lambda lid: "RuntimeError('deepseek 500')\nold traceback"
+    )
+
+    failed = []
+    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error, **kw: failed.append((lid, error)))
+
+    result = assess_lead.assess_lead_task(lead_id)
+
+    assert result["status"] == "failed"
+    assert "RuntimeError" in result["error"]
+    assert "deepseek 500" in result["error"]
+    assert f"exceeded {assess_lead.MAX_ASSESS_ATTEMPTS} assessment attempts (attempt #4)" in result["error"]
+    assert failed == [(lead_id, result["error"])]
 
 
 def test_attempt_within_cap_runs_normally(monkeypatch):
@@ -72,7 +102,7 @@ def test_soft_time_limit_exceeded_marks_failed_instead_of_crashing(monkeypatch):
     monkeypatch.setattr(assess_lead, "_run", _fake_run)
 
     failed = []
-    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error: failed.append((lid, error)))
+    monkeypatch.setattr(assess_lead, "_mark_failed", lambda lid, error, **kw: failed.append((lid, error)))
 
     result = assess_lead.assess_lead_task(lead_id)
 

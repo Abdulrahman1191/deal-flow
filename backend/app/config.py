@@ -146,6 +146,17 @@ class Settings(BaseSettings):
     # above a normal assessment's runtime so an in-flight lead is never reaped.
     assessment_reap_after_minutes: int = 20
 
+    # --- Failed-assessment auto-recovery (issue #163) ---
+    # A lead dead-lettered to 'failed' (MAX_ASSESS_ATTEMPTS exceeded, or every
+    # Celery retry exhausted) would otherwise sit there forever -- nothing
+    # else ever re-queues it (reap_stuck_leads.py explicitly excludes
+    # 'failed'). redrive_failed_assessments_task resets eligible failed leads
+    # back to 'pending' at most this many times each (tracked per-lead via
+    # leads.assessment_failed_redrives) so a permanently broken lead can't
+    # loop forever; past the cap it stays 'failed' for good, still visible
+    # via GET /leads/failed-summary.
+    assessment_failed_max_redrives: int = 3
+
     # --- Copper outbox re-drive (issue #131) ---
     # A Copper write-back that exhausts drain_outbox's 5 delivery attempts
     # lands in status='failed' and would otherwise never be retried again --

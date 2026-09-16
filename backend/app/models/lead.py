@@ -60,6 +60,20 @@ class Lead(Base):
     # dead-letters the lead to 'failed' instead of running again, so a lead
     # that reliably crashes the worker can't loop forever.
     assessment_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Persisted failure reason (issue #163) -- repr(exc) + the last ~20 lines
+    # of traceback from the exception that dead-lettered this lead to
+    # 'failed'. Previously only ever print()ed by assess_lead._mark_failed,
+    # so a failure couldn't be diagnosed from the app or DB. Cleared on the
+    # next clean outcome (assessed / awaiting_deck).
+    last_assessment_error: Mapped[Optional[str]] = mapped_column(Text)
+    last_assessment_error_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # How many times redrive_failed_assessments_task has re-queued this lead
+    # after it dead-lettered to 'failed' (issue #163). Capped by
+    # settings.assessment_failed_max_redrives so a lead broken by something
+    # the redrive can't fix (bad payload, dead website) doesn't loop forever
+    # -- past the cap it's left 'failed' for good, still visible via
+    # GET /leads/failed-summary.
+    assessment_failed_redrives: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # When this lead first started waiting for a deck (issue #149) -- set on
     # import for a brand-new deck-less lead. Drives the grace-period fallback
     # in app/tasks/promote_awaiting_deck.py; falls back to created_at when
