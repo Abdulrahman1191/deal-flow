@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 from celery.exceptions import MaxRetriesExceededError, SoftTimeLimitExceeded
 from sqlalchemy import select, text
 
+from app.config import settings
 from app.database import CelerySessionLocal
 from app.models.lead import Lead
 from app.models.assessment import AssessmentCard
 from app.models.user import User
-from app.services import claude_agent, research
+from app.services import claude_agent, copper_service, research
 from app.services import copper_writer
 from app.services.events import EVENT_ASSESSED, EVENT_AWAITING_DECK, log_event
 from app.tasks.celery_app import celery
@@ -284,6 +285,12 @@ async def _run(lead_id: str) -> dict:
             "linkedin_urls": lead.linkedin_urls,
             "company_linkedin_url": lead.company_linkedin_url,
             "pitch_deck_text": lead.pitch_deck_text,
+            # Applicant-authored language signal (issue #168) -- the original
+            # inbound email subject, often Arabic even when `description` is
+            # our own English enrichment. See claude_agent.detect_applicant_language.
+            "source_detail": copper_service.get_custom_field_value(
+                lead.raw_copper_data, settings.copper_cf_source_detail_id
+            ),
         }
 
         research_data = research.research_company(lead_data)

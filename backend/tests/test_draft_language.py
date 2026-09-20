@@ -59,6 +59,87 @@ def test_uses_pitch_deck_text_not_only_description():
     assert claude_agent.detect_applicant_language(lead_data) == "ar"
 
 
+# ---------- issue #168: English enrichment must not outvote a real Arabic applicant ----------
+
+# ~2,500 Latin characters -- mimics the AI/team-written English enrichment
+# that lands in `lead.description` (issue #168), which must not count toward
+# the Latin side of detection.
+ENGLISH_ENRICHMENT_NOTE = (
+    "A cloud-based SaaS booking and property-management system for short-term "
+    "rentals across the MENA region. Follow-up inbound email received from the "
+    "founder describing the product roadmap and current traction metrics. "
+) * 15
+
+
+def test_arabic_submission_survives_lopsided_english_enrichment_note():
+    # Real failure case from the issue: Arabic company name + a long
+    # English AI-written note must still resolve to "ar".
+    lead_data = {
+        "company_name": "كليفر ديزاين لخدمات مواقع",
+        "description": ENGLISH_ENRICHMENT_NOTE,
+    }
+    assert len(claude_agent._LATIN_CHAR_RE.findall(ENGLISH_ENRICHMENT_NOTE)) > 2000
+    assert claude_agent.detect_applicant_language(lead_data) == "ar"
+
+
+def test_arabic_email_subject_only_via_source_detail():
+    # Latin company name + English enrichment, but the Copper "Source detail"
+    # CF (the original inbound email subject) is Arabic -- applicant-authored,
+    # so it must be enough on its own.
+    lead_data = {
+        "company_name": "CleverDesign",
+        "description": ENGLISH_ENRICHMENT_NOTE,
+        "source_detail": "استفسار أهلية التقديم – مشروع SaaS قائم في مرحلة MVP",
+    }
+    assert claude_agent.detect_applicant_language(lead_data) == "ar"
+
+
+def test_arabic_quoted_inside_english_note_still_detected():
+    lead_data = {
+        "company_name": "Acme",
+        "description": ARABIC_DESCRIPTION * 9 + " " + ENGLISH_ENRICHMENT_NOTE,
+    }
+    assert len(claude_agent._ARABIC_CHAR_RE.findall(lead_data["description"])) > 800
+    assert len(claude_agent._LATIN_CHAR_RE.findall(lead_data["description"])) > 2500
+    assert claude_agent.detect_applicant_language(lead_data) == "ar"
+
+
+def test_arabic_legal_name_signature_alone_stays_english():
+    # A handful of Arabic characters (well under the minimum signal floor)
+    # tucked inside an otherwise-English submission -- e.g. a legal-name
+    # signature block -- must not flip the whole email to Arabic.
+    lead_data = {
+        "company_name": "Acme Deep Tech",
+        "description": ENGLISH_ENRICHMENT_NOTE + " Regards, شركة أكمي المحدودة",
+    }
+    assert claude_agent.detect_applicant_language(lead_data) == "en"
+
+
+def test_arabic_deck_with_english_enrichment_note():
+    lead_data = {
+        "company_name": "Acme",
+        "description": ENGLISH_ENRICHMENT_NOTE,
+        "pitch_deck_text": ARABIC_DESCRIPTION * 5,
+    }
+    assert claude_agent.detect_applicant_language(lead_data) == "ar"
+
+
+def test_no_arabic_anywhere_including_source_detail_is_english():
+    lead_data = {
+        "company_name": "Acme Deep Tech",
+        "description": ENGLISH_ENRICHMENT_NOTE,
+        "source_detail": "Inquiry about eligibility for the MVP program",
+    }
+    assert claude_agent.detect_applicant_language(lead_data) == "en"
+
+
+def test_missing_source_detail_key_does_not_raise():
+    # Callers that never populated `source_detail` (or a lead whose
+    # raw_copper_data has no matching custom field) must degrade silently.
+    lead_data = {"company_name": "Acme Deep Tech", "description": ENGLISH_ENRICHMENT_NOTE}
+    assert claude_agent.detect_applicant_language(lead_data) == "en"
+
+
 # ---------- 2. assess_lead / regenerate_draft resolve + apply the instruction ----------
 
 

@@ -13,7 +13,8 @@ from app.models.lead import Lead
 from app.models.lead_action_log import LeadActionLog
 from app.models.user import User
 from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverride, DraftUpdate
-from app.services import claude_agent, copper_writer, email_sender
+from app.config import settings
+from app.services import claude_agent, copper_service, copper_writer, email_sender
 from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
 from app.services.override_capture import capture_override
 from app.tasks.sync_copper import resolve_copper_id
@@ -428,6 +429,11 @@ def _regenerate_draft_for_bucket(lead: Lead, bucket: str, summary: str, owner_fi
                     "founder_names": lead.founder_names,
                     "description": lead.description,
                     "pitch_deck_text": lead.pitch_deck_text,
+                    # Applicant-authored language signal (issue #168) -- see
+                    # claude_agent.detect_applicant_language.
+                    "source_detail": copper_service.get_custom_field_value(
+                        getattr(lead, "raw_copper_data", None), settings.copper_cf_source_detail_id
+                    ),
                 },
                 bucket,
                 summary,

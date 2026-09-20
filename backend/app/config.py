@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # in-Copper channel for attaching a deck, since Copper's own file
     # attachments aren't downloadable via its API. 0 = disabled/no-op.
     copper_cf_pitch_deck_url_id: int = 0
+    # [String] "Source detail" field -- holds the original inbound email
+    # subject line, which is often the applicant's own Arabic text even when
+    # our `description` enrichment is an English AI/team summary. Fed into
+    # claude_agent.detect_applicant_language (issue #168) as applicant-authored
+    # signal. 0 = disabled/no-op (detection degrades silently to today's
+    # behaviour, i.e. company_name + description + pitch_deck_text only).
+    copper_cf_source_detail_id: int = 244394
 
     # Prior-contact detection (issue #90): how often (in days) to re-fetch a
     # lead's Copper activity feed to refresh prior_contact/_count/_last_at.
