@@ -35,7 +35,13 @@ from app.services.auth import (
 from app.services import claude_agent, copper_writer
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
-from app.services.events import EVENT_ARCHIVED, EVENT_ARCHIVED_NO_REPLY, EVENT_COPPER_UPDATED, log_event
+from app.services.events import (
+    EVENT_ARCHIVED,
+    EVENT_ARCHIVED_NO_REPLY,
+    EVENT_COPPER_UPDATED,
+    EVENT_REASSIGNED,
+    log_event,
+)
 from app.tasks.assess_lead import assess_lead_task
 
 router = APIRouter(prefix="/leads", tags=["leads"])
@@ -56,6 +62,29 @@ async def _owner_for_assignee(db: AsyncSession, raw_payload: dict) -> str:
         except (ValueError, TypeError):
             pass
     return settings.owner_email
+
+
+async def _resolve_reassignment_owner(db: AsyncSession, fresh_payload: dict, lead: Lead) -> Optional[str]:
+    """Resolves a webhook `update` payload's assignee_id to a known app
+    user's email, for the reassignment case only. Returns None -- meaning
+    "leave owner_email alone" -- when there's no assignee_id on the payload,
+    it already matches the lead's current owner, or it doesn't resolve to a
+    known user. Unlike `_owner_for_assignee` (used for brand-new leads), this
+    never falls back to settings.owner_email: an unresolved assignee on an
+    *existing* lead must leave owner_email untouched (today's
+    reconcile_ownership behaviour), not blank it to the default owner.
+    """
+    assignee_id = fresh_payload.get("assignee_id")
+    if not assignee_id:
+        return None
+    try:
+        result = await db.execute(select(User).where(User.copper_user_id == int(assignee_id)))
+    except (ValueError, TypeError):
+        return None
+    user = result.scalar_one_or_none()
+    if not user or user.email == getattr(lead, "owner_email", None):
+        return None
+    return user.email
 
 
 def _parse_copper_payload(payload: dict) -> dict:
@@ -192,6 +221,17 @@ async def ingest_lead(
                 lead.raw_copper_data = merged
                 continue
             setattr(lead, k, v)
+
+        # Reassignment: assignee_id isn't in `watched` above on purpose --
+        # moving a lead between partners is an ownership change, not an
+        # assessment-relevant edit, and must never re-queue/re-verdict it.
+        new_owner = await _resolve_reassignment_owner(db, fresh, lead)
+        if new_owner:
+            from_owner = lead.owner_email
+            lead.owner_email = new_owner
+            await log_event(db, lead.id, EVENT_REASSIGNED,
+                             {"from_owner": from_owner, "to_owner": new_owner, "source": "webhook"})
+
         await log_event(db, lead.id, EVENT_COPPER_UPDATED, {"material": material_change})
         await db.commit()
 

@@ -196,6 +196,15 @@ class Settings(BaseSettings):
     # "redrive-failed-copper-outbox" beat schedule entry in celery_app.py.
     outbox_redrive_interval_seconds: int = 1800  # 30 minutes
 
+    # --- Ownership reconcile cadence (issue #171) ---
+    # How often (seconds) reconcile_ownership_task runs. This is the fallback
+    # safety net for Copper reassignments -- the webhook `update` branch
+    # (app/routers/leads.py) now handles reassignment immediately, so this
+    # cadence only bounds the worst case when a webhook is missed/unregistered.
+    # Lowered from the original hard-coded 900s (issue #123) to 300s now that
+    # it's a backstop rather than the primary mechanism.
+    ownership_reconcile_interval_seconds: int = 300
+
     # --- Owner / identity ---
     # Email that gets owner-level access to Portfolio + Feedback tabs.
     # On the platform, this is the @raed.vc identity. Falls back to legacy

@@ -60,8 +60,17 @@ def record(
     state: str,
     runtime_seconds: Optional[float] = None,
     error: Optional[str] = None,
+    result: Optional[dict] = None,
 ) -> None:
-    """Store the outcome of one task run. Never raises."""
+    """Store the outcome of one task run. Never raises.
+
+    `result` is whatever small dict the task itself returned (e.g.
+    reconcile_ownership_task's {"mismatches", "fixed", "unresolved"}) -- kept
+    generic rather than special-cased per task, the same way the SKIPPED
+    check above already reads retval structurally. It's what lets a count
+    like "corrections applied this run" surface on GET /api/v1/ops/queues
+    instead of only ever being visible in worker logs (issue #171).
+    """
     c = client(_LABEL)
     if c is None:
         return
@@ -72,6 +81,7 @@ def record(
         # Truncated: this is a status line, not a log. The full traceback is in
         # the worker log, which is where you go once this tells you where to look.
         "error": (error or "")[:300] or None,
+        "result": result,
     }
     try:
         c.hset(HASH_KEY, task_name, json.dumps(payload))
