@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     # signal. 0 = disabled/no-op (detection degrades silently to today's
     # behaviour, i.e. company_name + description + pitch_deck_text only).
     copper_cf_source_detail_id: int = 244394
+    # Application inbox address (issue #170): when "Source detail" reads
+    # "Emailed <address>: <subject>" and <address> is this inbox (or the
+    # field just begins with "Emailed"), a deck-less new lead skips the
+    # awaiting_deck grace period entirely and is assessed immediately --
+    # founders emailing the inbox directly usually attach nothing and never
+    # will, so waiting for a Drive deck is pointless for them. See
+    # app/tasks/sync_copper.py _is_email_sourced.
+    application_inbox_email: str = "info@raed.vc"
 
     # Prior-contact detection (issue #90): how often (in days) to re-fetch a
     # lead's Copper activity feed to refresh prior_contact/_count/_last_at.
@@ -64,8 +72,19 @@ class Settings(BaseSettings):
     # before promote_awaiting_deck.py falls it back to the #144 website/
     # description assessment (issue #149). Gives a deck that's about to be
     # uploaded to the Drive folder a chance to be used instead of a premature
-    # deck-less verdict.
-    deck_grace_period_days: int = 5
+    # deck-less verdict. Shortened 5 -> 2 (issue #170): live evidence showed
+    # 32/34 awaiting_deck leads arrived by email and will never receive a
+    # deck, so a long grace period only delays their fallback assessment.
+    deck_grace_period_days: int = 2
+    # Caps how many times promote_awaiting_deck.py may re-park a deck-less
+    # lead (leads.deck_promotion_count) before assess_lead._run gives up and
+    # writes a MAYBE placeholder card instead of re-parking again (issue
+    # #170). Without this, a lead with genuinely no usable context (no deck,
+    # no website, blank description) got a fresh grace period on every
+    # promotion and cycled through awaiting_deck forever with no signal to
+    # the partner. Never REJECTs for absent data (issue #147 rule still
+    # holds) -- the placeholder bucket is always MAYBE.
+    max_deck_promotions: int = 2
 
     # --- Storage ---
     database_url: str                    # injected by platform/Khalid

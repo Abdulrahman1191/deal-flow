@@ -339,6 +339,7 @@ def _fake_lead_with_stale_error(**overrides):
         assessment_attempts=2,
         last_assessment_error="RuntimeError('boom')\nold traceback",
         last_assessment_error_at=datetime.now(timezone.utc),
+        deck_promotion_count=0,
     )
     base.update(overrides)
     return SimpleNamespace(**base)

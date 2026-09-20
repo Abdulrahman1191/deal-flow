@@ -64,7 +64,7 @@ class _FakeSession:
         self.committed += 1
 
 
-def _fake_lead(pitch_deck_text=None, status="pending", owner_email=None, website="https://acme.test", description="A deep-tech startup."):
+def _fake_lead(pitch_deck_text=None, status="pending", owner_email=None, website="https://acme.test", description="A deep-tech startup.", deck_promotion_count=0):
     return SimpleNamespace(
         id=uuid.uuid4(),
         status=status,
@@ -84,6 +84,10 @@ def _fake_lead(pitch_deck_text=None, status="pending", owner_email=None, website
         # (issue #129) -- a lead that eventually succeeds must not stay
         # poisoned by earlier transient-failure attempts.
         assessment_attempts=2,
+        # Issue #170: bounds how many times a context-less lead gets
+        # re-parked before assess_lead._run gives up and writes a MAYBE
+        # placeholder instead.
+        deck_promotion_count=deck_promotion_count,
     )
 
 
@@ -274,6 +278,165 @@ def test_awaiting_deck_lead_leaves_awaiting_deck_once_deck_text_is_attached(monk
     assert result["bucket"] == "MAYBE"
     cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
     assert cards[0].assessed_without_deck is False
+
+
+def test_lead_past_promotion_cap_with_no_context_gets_maybe_placeholder_not_reparked(monkeypatch):
+    """Issue #170, acceptance criterion 2: once a deck-less lead has been
+    promoted past settings.max_deck_promotions (default 2) with still no
+    usable context, assess_lead._run must stop re-parking it and instead
+    write a MAYBE placeholder card, set status='assessed', and never
+    REJECT (issue #147)."""
+    lead = _fake_lead(pitch_deck_text=None, website=None, description="", deck_promotion_count=3)
+    session = _FakeSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
+    monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", _boom)
+    monkeypatch.setattr(assess_lead.research, "research_company", _boom)
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", lambda website: "")
+
+    result = asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert result == {"lead_id": str(lead.id), "bucket": "MAYBE", "confidence_score": 0, "status": "assessed"}
+    assert lead.status == "assessed"
+    cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
+    assert len(cards) == 1
+    assert cards[0].bucket == "MAYBE"
+    assert cards[0].confidence_score == 0
+    assert cards[0].assessed_without_deck is True
+    assert cards[0].data_gaps
+
+
+def test_maybe_placeholder_is_idempotent_on_a_second_run(monkeypatch):
+    """Issue #170, acceptance criterion 2: a second run for the same
+    still-context-less lead must update the existing MAYBE card in place,
+    not create a duplicate."""
+    lead = _fake_lead(pitch_deck_text=None, website=None, description="", deck_promotion_count=3)
+    session1 = _FakeSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session1)
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", lambda website: "")
+
+    asyncio.run(assess_lead._run(str(lead.id)))
+    card = next(obj for obj in session1.added if isinstance(obj, AssessmentCard))
+
+    session2 = _FakeSession(lead, card=card)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session2)
+
+    asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert [obj for obj in session2.added if isinstance(obj, AssessmentCard)] == []
+    assert card.bucket == "MAYBE"
+    assert card.confidence_score == 0
+
+
+def test_lead_with_only_source_detail_subject_is_assessed_not_parked(monkeypatch):
+    """Issue #170, item 4 / acceptance criterion 3: a lead whose only
+    content is a meaningful Copper "Source detail" subject line must be
+    scored -- not parked, and not dumped straight to a MAYBE placeholder."""
+    raw_copper_data = {
+        "custom_fields": [{
+            "custom_field_definition_id": 244394,
+            "value": "Emailed info@raed.vc: IREP-Group, RWA tokenisation, GCC-first (Pre-Seed)",
+        }]
+    }
+    lead = _fake_lead(pitch_deck_text=None, website=None, description="")
+    lead.raw_copper_data = raw_copper_data
+    session = _FakeSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session)
+    # No website -> scrape_website_content must not even be called.
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", _boom)
+    monkeypatch.setattr(assess_lead.research, "research_company", lambda lead_data: {})
+
+    assessment_result = {
+        "bucket": "MAYBE",
+        "confidence_score": 35,
+        "summary": "Subject-only assessment.",
+        "positive_signals": [],
+        "red_flags": [],
+        "data_gaps": [],
+        "scoring_breakdown": {},
+        "draft_subject": None,
+        "draft_body": None,
+        "draft_type": None,
+        "research_sources": [],
+        "precedents_cited": [],
+    }
+    captured_lead_data = {}
+
+    def _fake_assess(lead_data, research_data, **kwargs):
+        captured_lead_data.update(lead_data)
+        return assessment_result
+
+    monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", _fake_assess)
+
+    import app.services.feedback_patterns as feedback_patterns
+
+    async def _fake_exemplars(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(feedback_patterns, "retrieve_labeled_exemplars", _fake_exemplars)
+
+    result = asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert result["bucket"] == "MAYBE"
+    assert lead.status == "assessed"
+    assert "IREP-Group" in captured_lead_data["source_detail"]
+    cards = [obj for obj in session.added if isinstance(obj, AssessmentCard)]
+    assert len(cards) == 1
+    assert cards[0].assessed_without_deck is True
+
+
+def test_deck_arriving_after_maybe_placeholder_triggers_deck_backed_reassessment_and_resets_counter(monkeypatch):
+    """Issue #170, acceptance criterion 4: once a MAYBE placeholder has been
+    written for a promotion-capped, context-less lead, a deck attaching
+    later must still trigger the normal deck-backed re-assessment -- which
+    replaces the placeholder card in place and resets deck_promotion_count
+    so the lead isn't one promotion away from being placeholder'd again."""
+    lead = _fake_lead(pitch_deck_text=None, website=None, description="", deck_promotion_count=3)
+    session1 = _FakeSession(lead, card=None)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session1)
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", lambda website: "")
+
+    asyncio.run(assess_lead._run(str(lead.id)))
+    placeholder_card = next(obj for obj in session1.added if isinstance(obj, AssessmentCard))
+    assert placeholder_card.bucket == "MAYBE"
+
+    # A deck attaches (e.g. via the Drive sweep) and re-queues this task.
+    lead.pitch_deck_text = "Deck contents go here " * 50
+    session2 = _FakeSession(lead, card=placeholder_card)
+    monkeypatch.setattr(assess_lead, "CelerySessionLocal", lambda: session2)
+    monkeypatch.setattr(assess_lead.research, "research_company", lambda lead_data: {"sources": []})
+    monkeypatch.setattr(assess_lead.research, "scrape_website_content", _boom)
+
+    assessment_result = {
+        "bucket": "YES",
+        "confidence_score": 80,
+        "summary": "Deck-backed assessment.",
+        "positive_signals": [],
+        "red_flags": [],
+        "data_gaps": [],
+        "scoring_breakdown": {},
+        "draft_subject": None,
+        "draft_body": None,
+        "draft_type": None,
+        "research_sources": [],
+        "precedents_cited": [],
+    }
+    monkeypatch.setattr(assess_lead.claude_agent, "assess_lead", lambda *a, **k: assessment_result)
+
+    import app.services.feedback_patterns as feedback_patterns
+
+    async def _fake_exemplars(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(feedback_patterns, "retrieve_labeled_exemplars", _fake_exemplars)
+
+    result = asyncio.run(assess_lead._run(str(lead.id)))
+
+    assert result["bucket"] == "YES"
+    assert lead.status == "assessed"
+    assert lead.deck_promotion_count == 0
+    assert [obj for obj in session2.added if isinstance(obj, AssessmentCard)] == []
+    assert placeholder_card.bucket == "YES"
+    assert placeholder_card.assessed_without_deck is False
 
 
 def test_lead_with_deck_text_scores_normally_and_lands_on_assessed(monkeypatch):

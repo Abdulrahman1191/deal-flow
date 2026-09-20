@@ -12,8 +12,12 @@ settings.deck_grace_period_days.
 If nothing shows up in time, this periodic task re-queues assess_lead_task
 for the lead so it falls through to the #144 website/description assessment
 path instead of staying parked forever -- assess_lead._run's own gate still
-re-parks it in awaiting_deck if there's genuinely no usable website or
-description content either.
+re-parks it in awaiting_deck if there's genuinely no usable website,
+description, or email-subject content either. Each promotion increments
+leads.deck_promotion_count (issue #170); once that exceeds
+settings.max_deck_promotions, assess_lead._run stops re-parking and writes a
+MAYBE placeholder card instead, so a lead with genuinely no usable context
+can't loop through here forever.
 
 Runs a few times a day (see the "promote-awaiting-deck" beat schedule in
 celery_app.py) -- there's no need to poll more often than that for a
@@ -43,8 +47,12 @@ async def _run() -> dict:
             # Reset the clock on every promotion attempt so a lead that gets
             # re-parked in awaiting_deck (still no usable context) isn't
             # re-promoted again on the very next beat tick -- it gets another
-            # full grace period before this task looks at it again.
+            # full grace period before this task looks at it again. The
+            # promotion counter (issue #170) is what actually bounds the
+            # loop: assess_lead._run stops honoring the reset clock once it's
+            # been promoted past settings.max_deck_promotions times.
             lead.deck_wait_started_at = datetime.now(timezone.utc)
+            lead.deck_promotion_count = (lead.deck_promotion_count or 0) + 1
             await db.commit()
             try:
                 assess_lead_task.delay(str(lead.id))

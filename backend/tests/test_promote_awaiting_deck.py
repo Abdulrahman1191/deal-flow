@@ -56,6 +56,7 @@ def _lead(**overrides):
         status="awaiting_deck",
         deck_wait_started_at=None,
         created_at=datetime.now(timezone.utc),
+        deck_promotion_count=0,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -76,6 +77,24 @@ def test_promotes_lead_past_grace_period(monkeypatch):
     # The clock is reset on promotion so the very next sweep doesn't
     # immediately re-promote it again.
     assert stale.deck_wait_started_at > datetime.now(timezone.utc) - timedelta(minutes=1)
+    # Issue #170: each promotion increments the bounded counter that caps
+    # the otherwise-unbounded awaiting_deck loop.
+    assert stale.deck_promotion_count == 1
+
+
+def test_promotion_increments_deck_promotion_count_each_cycle(monkeypatch):
+    """Issue #170: repeated promotions of the same lead across multiple
+    sweeps keep incrementing deck_promotion_count -- this is what
+    assess_lead._run compares against settings.max_deck_promotions to decide
+    when to stop re-parking and write a MAYBE placeholder instead."""
+    stale = _lead(deck_wait_started_at=datetime.now(timezone.utc) - timedelta(days=6), deck_promotion_count=1)
+
+    monkeypatch.setattr(pad, "CelerySessionLocal", lambda: _FakeSession([stale]))
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: None)
+
+    asyncio.run(pad._run())
+
+    assert stale.deck_promotion_count == 2
 
 
 def test_no_stale_leads_is_a_clean_no_op(monkeypatch):
