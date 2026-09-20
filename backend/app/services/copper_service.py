@@ -345,3 +345,22 @@ def map_copper_lead(p: dict) -> dict:
         "company_linkedin_url": company_linkedin_url,
         "raw_copper_data": {**p, "recipient_email": recipient_email},
     }
+
+
+def get_custom_field_value(raw_copper_data: Optional[dict], field_id: int) -> str:
+    """Reads a single Copper custom-field value out of a raw Copper lead
+    dict's `custom_fields` list, by definition id.
+
+    Degrades silently to "" (never raises) when `raw_copper_data` is missing/
+    blank, `field_id` is unset (0), or no field matches -- callers should
+    treat a blank result as "not available" rather than an error. Used e.g. by
+    claude_agent.detect_applicant_language to read the "Source detail" field
+    (issue #168).
+    """
+    if not field_id or not raw_copper_data:
+        return ""
+    for cf in raw_copper_data.get("custom_fields") or []:
+        if cf.get("custom_field_definition_id") == field_id:
+            value = cf.get("value")
+            return value.strip() if isinstance(value, str) and value.strip() else ""
+    return ""

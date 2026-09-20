@@ -36,29 +36,53 @@ _LANGUAGE_INSTRUCTIONS = {
 }
 
 
+# Minimum number of Arabic-script letters required before detection can
+# resolve to "ar" at all (issue #168) -- without this floor, a single Arabic
+# word/name/signature anywhere in the submission (including in `description`,
+# see below) would flip an otherwise-English lead's whole email.
+_MIN_ARABIC_CHARS = 20
+
+
 def detect_applicant_language(lead_data: dict) -> str:
     """Deterministically detect whether the applicant's ORIGINAL submission is
-    primarily Arabic or English (the two application-form languages), from
-    company name + raw description + pitch deck text -- never from an
-    enriched/translated field. Mixed or unclear signal defaults to "en".
+    primarily Arabic or English (the two application-form languages). Mixed or
+    unclear signal defaults to "en".
+
+    `company_name`, `pitch_deck_text`, and `source_detail` (the Copper
+    "Source detail" custom field -- the original inbound email subject, see
+    assess_lead.py / routers/assessments.py) are applicant-authored: their
+    Latin and Arabic characters both count fully.
+
+    `description` is enrichment, NOT the applicant's own words --
+    copper_service.map_copper_lead maps it from Copper's `details`, which in
+    our data is frequently an English summary written by our own AI/team
+    (issue #168). Its Latin characters must never be allowed to outvote a
+    genuinely-Arabic applicant, so they are excluded from the Latin count.
+    Arabic characters found in it still count toward the Arabic side, though
+    -- they're usually the applicant's own text quoted inside our note.
     """
-    text = " ".join(
+    applicant_text = " ".join(
         filter(
             None,
             [
                 lead_data.get("company_name") or "",
-                lead_data.get("description") or "",
                 (lead_data.get("pitch_deck_text") or "")[:3000],
+                lead_data.get("source_detail") or "",
             ],
         )
     )
-    arabic_chars = len(_ARABIC_CHAR_RE.findall(text))
-    if arabic_chars == 0:
+    enriched_text = lead_data.get("description") or ""
+
+    arabic_chars = len(_ARABIC_CHAR_RE.findall(applicant_text)) + len(
+        _ARABIC_CHAR_RE.findall(enriched_text)
+    )
+    # Require a real minimum of Arabic signal, then require it to dominate the
+    # applicant-authored (non-enriched) Latin count -- English enrichment text
+    # doesn't get a vote either way on the Latin side.
+    if arabic_chars <= _MIN_ARABIC_CHARS:
         return "en"
-    latin_chars = len(_LATIN_CHAR_RE.findall(text))
-    # Require Arabic to clearly dominate so a stray Arabic word/name in an
-    # otherwise-English submission doesn't flip the whole email.
-    return "ar" if arabic_chars > latin_chars else "en"
+    non_enriched_latin_chars = len(_LATIN_CHAR_RE.findall(applicant_text))
+    return "ar" if arabic_chars > non_enriched_latin_chars else "en"
 
 
 def _language_instruction(lead_data: dict) -> str:
