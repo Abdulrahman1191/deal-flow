@@ -79,6 +79,13 @@ class Lead(Base):
     # in app/tasks/promote_awaiting_deck.py; falls back to created_at when
     # null (e.g. rows that entered awaiting_deck some other way).
     deck_wait_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # How many times promote_awaiting_deck.py has re-parked this lead back
+    # into awaiting_deck (issue #170) -- incremented on each promotion.
+    # Bounds the otherwise-unbounded awaiting_deck loop: once this exceeds
+    # settings.max_deck_promotions, assess_lead._run stops re-parking a
+    # still-context-less lead and writes a MAYBE placeholder card instead.
+    # Reset to 0 the moment a real assessment succeeds (deck-backed or not).
+    deck_promotion_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

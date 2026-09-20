@@ -79,15 +79,30 @@ def _user(email="teammate@raed.vc", copper_user_id=555):
     return SimpleNamespace(email=email, copper_user_id=copper_user_id)
 
 
-def _fake_map(bad_ids=(), pitch_deck_text=None):
+def _fake_map(bad_ids=(), pitch_deck_text=None, raw_copper_data=None):
     def _map(raw):
         if raw["id"] in bad_ids:
             raise ValueError(f"malformed field on {raw['id']}")
         mapped = {"copper_id": raw["id"], "company_name": raw["id"]}
         if pitch_deck_text is not None:
             mapped["pitch_deck_text"] = pitch_deck_text
+        if raw_copper_data is not None:
+            mapped["raw_copper_data"] = raw_copper_data
         return mapped
     return _map
+
+
+def _source_detail_raw(value, field_id=None):
+    """Builds a raw_copper_data dict with a single "Source detail" custom
+    field (issue #170) -- mirrors the shape copper_service.get_custom_field_value
+    reads (a `custom_fields` list of {custom_field_definition_id, value})."""
+    from app.config import settings
+
+    return {
+        "custom_fields": [
+            {"custom_field_definition_id": field_id or settings.copper_cf_source_detail_id, "value": value}
+        ]
+    }
 
 
 def test_one_bad_lead_does_not_abort_the_rest_of_the_batch(monkeypatch):
@@ -142,6 +157,80 @@ def test_new_deckless_lead_is_parked_awaiting_deck_not_assessed_immediately(monk
     events = [obj for obj in db.added if isinstance(obj, LeadEvent)]
     assert len(events) == 1
     assert events[0].event_type == "awaiting_deck"
+
+
+def test_is_email_sourced_true_for_application_inbox():
+    raw = _source_detail_raw("Emailed info@raed.vc: RWA tokenisation, GCC-first")
+    assert sc._is_email_sourced(raw) is True
+
+
+def test_is_email_sourced_true_for_generic_emailed_prefix():
+    """Any "Emailed ..." value counts, even if the inbox address itself
+    differs from settings.application_inbox_email -- the field format is
+    "Emailed <address>: <subject>" and any inbound email is deck-pointless."""
+    raw = _source_detail_raw("Emailed someone-else@raed.vc: A subject")
+    assert sc._is_email_sourced(raw) is True
+
+
+def test_is_email_sourced_false_for_website_submission():
+    raw = _source_detail_raw("Website (EN) submission: A subject")
+    assert sc._is_email_sourced(raw) is False
+
+
+def test_is_email_sourced_false_when_field_absent():
+    assert sc._is_email_sourced(None) is False
+    assert sc._is_email_sourced({}) is False
+
+
+def test_new_deckless_email_sourced_lead_skips_awaiting_deck(monkeypatch):
+    """Issue #170, acceptance criterion 1: a brand-new deck-less lead whose
+    Copper "Source detail" marks it as inbound email to the application
+    inbox goes straight to assess_lead_task and is never parked in
+    awaiting_deck -- founders emailing the inbox directly usually attach
+    nothing and never will, so waiting for a deck is pointless for them."""
+    raw_leads = [{"id": "email-sourced-co"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(
+        sc, "map_copper_lead",
+        _fake_map(raw_copper_data=_source_detail_raw("Emailed info@raed.vc: RWA tokenisation, GCC-first")),
+    )
+
+    queued = []
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    db = _FakeSyncSession([None, []])
+    result = asyncio.run(sc.sync_one_user(db, _user()))
+
+    assert result["synced"] == 1
+    lead = next(obj for obj in db.added if isinstance(obj, Lead))
+    assert lead.status != "awaiting_deck"
+    assert queued == [str(lead.id)]
+
+    events = [obj for obj in db.added if isinstance(obj, LeadEvent)]
+    assert events == []
+
+
+def test_new_deckless_form_sourced_lead_still_parks(monkeypatch):
+    """Contrast case: a deck-less lead sourced from the website form (not
+    email) still parks in awaiting_deck as before -- the #170 skip is
+    specific to email-sourced leads."""
+    raw_leads = [{"id": "form-sourced-co"}]
+    monkeypatch.setattr(sc, "fetch_open_leads_for_user", lambda cid: raw_leads)
+    monkeypatch.setattr(
+        sc, "map_copper_lead",
+        _fake_map(raw_copper_data=_source_detail_raw("Website (EN) submission: RWA tokenisation")),
+    )
+
+    queued = []
+    monkeypatch.setattr(sc.assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    db = _FakeSyncSession([None, []])
+    result = asyncio.run(sc.sync_one_user(db, _user()))
+
+    assert result["synced"] == 1
+    lead = next(obj for obj in db.added if isinstance(obj, Lead))
+    assert lead.status == "awaiting_deck"
+    assert queued == []
 
 
 def test_new_lead_with_deck_already_present_is_assessed_immediately(monkeypatch):

@@ -14,6 +14,7 @@ from app.services.copper_service import (
     compute_prior_contact,
     fetch_lead_activities,
     fetch_open_leads_for_user,
+    get_custom_field_value,
     lookup_user_id,
     map_copper_lead,
 )
@@ -23,6 +24,20 @@ from app.tasks.assess_lead import assess_lead_task
 
 def _disabled() -> bool:
     return os.getenv("DISABLE_COPPER_SYNC", "").lower() in ("1", "true", "yes")
+
+
+def _is_email_sourced(raw_copper_data: dict | None) -> bool:
+    """True when Copper's "Source detail" custom field marks this lead as
+    inbound email to the application inbox (issue #170) -- founders emailing
+    info@raed.vc directly typically attach nothing and never will, so parking
+    them in awaiting_deck for a deck that's never coming is pointless.
+    Unreadable/absent field -> False, i.e. today's park-and-wait behaviour."""
+    value = get_custom_field_value(raw_copper_data, settings.copper_cf_source_detail_id)
+    if not value:
+        return False
+    lowered = value.lower()
+    inbox = settings.application_inbox_email.strip().lower()
+    return (bool(inbox) and inbox in lowered) or lowered.startswith("emailed")
 
 
 def _needs_prior_contact_refresh(lead: Lead) -> bool:
@@ -191,13 +206,15 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
 
         await maybe_refresh_prior_contact(db, lead, raw)
 
-        if is_new_lead and not lead.pitch_deck_text:
+        if is_new_lead and not lead.pitch_deck_text and not _is_email_sourced(lead.raw_copper_data):
             # A brand-new deck-less lead waits in awaiting_deck for the grace
             # period instead of getting an immediate deck-less verdict (issue
             # #149) -- the Drive sweep (sync_pitch_decks.py) auto-attaches a
             # deck and queues the real assessment if one shows up in time;
             # promote_awaiting_deck.py's periodic fallback queues the #144
             # website/description assessment once the grace period elapses.
+            # Skipped entirely for email-sourced leads (issue #170) -- they
+            # go straight to assess_lead_task below instead.
             lead.status = "awaiting_deck"
             lead.deck_wait_started_at = datetime.now(timezone.utc)
             try:

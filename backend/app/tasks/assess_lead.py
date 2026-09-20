@@ -28,8 +28,21 @@ MAX_ASSESS_ATTEMPTS = 3
 # Minimum length (issue #144) for a lead's freeform `description` to count as
 # "substantial" enough, on its own, to carry an assessment. Below this, a
 # deckless lead also needs usable scraped website content to escape the
-# awaiting_deck gate below.
+# awaiting_deck gate below. Also used (issue #170) for the Copper
+# "Source detail" subject line -- see _extract_source_detail_subject.
 MIN_DESCRIPTION_CHARS = 40
+
+
+def _extract_source_detail_subject(source_detail: str) -> str:
+    """Strips a leading "Emailed <addr>:" / "Website (..) submission:" label
+    off Copper's "Source detail" custom field, leaving just the subject/
+    content (issue #170) -- so the boilerplate prefix text alone can't pass
+    the substantiality check below. Falls back to the raw value when there's
+    no colon to split on."""
+    if not source_detail:
+        return ""
+    _, _, rest = source_detail.partition(":")
+    return (rest if rest else source_detail).strip()
 
 # Persisted failure reason (issue #163) is trimmed to this many characters so
 # a runaway traceback can't bloat the leads row -- repr(exc) plus the last
@@ -217,6 +230,78 @@ def assess_lead_task(self, lead_id: str) -> dict:
             return {"lead_id": lead_id, "status": "failed", "error": repr(exc)}
 
 
+async def write_no_context_maybe_placeholder(db, lead) -> dict:
+    """Issue #170: once a deck-less lead has been promoted past
+    settings.max_deck_promotions with still no usable context (no deck, no
+    website content, no substantial description, no meaningful Source-detail
+    subject), stop re-parking it in awaiting_deck forever -- write a MAYBE
+    placeholder card instead so a partner sees it and can review manually.
+    Never REJECT for absent data (issue #147 rule still holds).
+
+    Upserts by lead_id exactly like the normal assessment path below, so a
+    second call for the same lead (e.g. a stray re-queue, or the one-off
+    scripts/rebalance_awaiting_deck.py backfill) updates the same card
+    in-place rather than duplicating it. A deck arriving later re-queues
+    assess_lead_task, which takes the normal deck-backed path and overwrites
+    this same card while resetting deck_promotion_count to 0.
+    """
+    existing = await db.execute(
+        select(AssessmentCard).where(AssessmentCard.lead_id == lead.id)
+        .order_by(AssessmentCard.created_at.desc()).limit(1)
+    )
+    card = existing.scalar_one_or_none()
+    fields = dict(
+        bucket="MAYBE",
+        confidence_score=0,
+        summary=(
+            "No usable context was found for this lead -- no pitch deck, "
+            "website content, description, or email subject to assess. "
+            "Needs manual review."
+        ),
+        positive_signals=[],
+        red_flags=[],
+        data_gaps=[
+            "no pitch deck provided",
+            "no usable website content",
+            "no substantial description",
+            "no meaningful source-detail subject",
+        ],
+        scoring_breakdown=None,
+        draft_subject=None,
+        draft_body=None,
+        draft_type=None,
+        draft_bucket=None,
+        research_sources=[],
+        research_data=None,
+        precedents_cited=[],
+        assessed_without_deck=True,
+        user_override=None,
+        user_override_at=None,
+        approved_at=None,
+        sent_at=None,
+    )
+    if card:
+        for k, v in fields.items():
+            setattr(card, k, v)
+    else:
+        card = AssessmentCard(lead_id=lead.id, **fields)
+        db.add(card)
+
+    if lead.status != "archived":
+        lead.status = "assessed"
+    lead.assessment_attempts = 0
+    lead.last_assessment_error = None
+    lead.last_assessment_error_at = None
+    await log_event(
+        db,
+        lead.id,
+        EVENT_ASSESSED,
+        {"bucket": "MAYBE", "confidence_score": 0, "assessed_without_deck": True, "reason": "no_usable_context_promotion_cap"},
+    )
+    await db.commit()
+    return {"lead_id": str(lead.id), "bucket": "MAYBE", "confidence_score": 0, "status": "assessed"}
+
+
 async def _run(lead_id: str) -> dict:
     async with CelerySessionLocal() as db:
         result = await db.execute(select(Lead).where(Lead.id == uuid.UUID(lead_id)))
@@ -240,13 +325,32 @@ async def _run(lead_id: str) -> dict:
         has_substantial_description = bool(
             lead.description and len(lead.description.strip()) >= MIN_DESCRIPTION_CHARS
         )
+        # The Copper "Source detail" field is often the ONLY content held for
+        # an email-sourced lead -- e.g. the subject line is all we have when
+        # `description` is blank (issue #170). Computed once here and reused
+        # below for lead_data, so it's read from raw_copper_data exactly once.
+        source_detail = copper_service.get_custom_field_value(
+            lead.raw_copper_data, settings.copper_cf_source_detail_id
+        )
+        source_detail_subject = _extract_source_detail_subject(source_detail)
+        has_usable_subject = bool(
+            source_detail_subject and len(source_detail_subject) >= MIN_DESCRIPTION_CHARS
+        )
 
         # Park only when there's genuinely no usable context at all: no deck,
-        # no usable scraped website content, and a thin/empty description.
-        # sync_pitch_decks_task / the per-lead sync endpoint re-queue this
-        # task once pitch_deck_text is set, at which point a deck-backed
-        # re-assessment refines the score.
-        if not has_deck and not has_website_content and not has_substantial_description:
+        # no usable scraped website content, a thin/empty description, and no
+        # meaningful Source-detail subject either. sync_pitch_decks_task / the
+        # per-lead sync endpoint re-queue this task once pitch_deck_text is
+        # set, at which point a deck-backed re-assessment refines the score.
+        if not has_deck and not has_website_content and not has_substantial_description and not has_usable_subject:
+            # Issue #170: without a bound, a lead with genuinely no usable
+            # context gets a fresh grace period on every promotion and cycles
+            # through awaiting_deck forever with no signal to the partner.
+            # Once promote_awaiting_deck.py has re-parked it more times than
+            # max_deck_promotions, stop re-parking and hand it to a human
+            # instead -- never REJECT for absent data (issue #147).
+            if lead.deck_promotion_count > settings.max_deck_promotions:
+                return await write_no_context_maybe_placeholder(db, lead)
             lead.status = "awaiting_deck"
             lead.assessment_attempts = 0
             lead.last_assessment_error = None
@@ -288,9 +392,9 @@ async def _run(lead_id: str) -> dict:
             # Applicant-authored language signal (issue #168) -- the original
             # inbound email subject, often Arabic even when `description` is
             # our own English enrichment. See claude_agent.detect_applicant_language.
-            "source_detail": copper_service.get_custom_field_value(
-                lead.raw_copper_data, settings.copper_cf_source_detail_id
-            ),
+            # Also the only usable context for many email-sourced leads
+            # (issue #170) -- see has_usable_subject above.
+            "source_detail": source_detail,
         }
 
         research_data = research.research_company(lead_data)
@@ -375,6 +479,11 @@ async def _run(lead_id: str) -> dict:
         lead.assessment_attempts = 0
         lead.last_assessment_error = None
         lead.last_assessment_error_at = None
+        # A real assessment succeeded -- whatever awaiting_deck history this
+        # lead had no longer applies (issue #170). In particular, a deck
+        # attaching after a MAYBE placeholder was written must reset this so
+        # the lead isn't one promotion away from being placeholder'd again.
+        lead.deck_promotion_count = 0
         await log_event(
             db,
             lead.id,
