@@ -88,6 +88,10 @@ class TaskOut(BaseModel):
     last_at: Optional[str]
     last_runtime_seconds: Optional[float]
     last_error: Optional[str]
+    # Whatever small dict the task itself returned on its last successful run
+    # (e.g. reconcile_ownership_task's {"mismatches", "fixed", "unresolved"}).
+    # Generic across all tasks -- see task_heartbeat.record (issue #171).
+    last_result: Optional[dict]
     seconds_since: Optional[float]
     stale: Optional[bool]
 
@@ -231,6 +235,7 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
                 last_at=last_at,
                 last_runtime_seconds=beat.get("runtime_seconds"),
                 last_error=beat.get("error"),
+                last_result=beat.get("result"),
                 seconds_since=since,
                 stale=stale,
             )

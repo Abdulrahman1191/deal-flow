@@ -66,10 +66,13 @@ celery.conf.update(
         # Firm-wide, status-agnostic ownership reconcile against Copper's
         # current assignee_id (issue #123). Closes the gap left by
         # sync-copper-leads above, which only reassigns leads Copper reports
-        # as open-status-assigned to an actively-synced user.
+        # as open-status-assigned to an actively-synced user. Now a fallback
+        # behind the webhook `update` branch's immediate reassignment (issue
+        # #171) -- configurable so the worst-case lag when a webhook is
+        # missed/unregistered can be tightened without a code change.
         "reconcile-ownership": {
             "task": "app.tasks.reconcile_ownership.reconcile_ownership_task",
-            "schedule": 900.0,  # every 15 minutes
+            "schedule": settings.ownership_reconcile_interval_seconds,  # default 5 minutes
         },
         # Collapse duplicate-name leads automatically (archives extras, reversible).
         # Runs daily at 02:00 UTC; also safe to run the CLI (scripts/dedupe_leads.py)
@@ -185,6 +188,7 @@ def _record_task_end(task_id=None, task=None, state=None, retval=None, **_kwargs
             state=reported or "UNKNOWN",
             runtime_seconds=runtime,
             error=error,
+            result=retval if state == "SUCCESS" and isinstance(retval, dict) else None,
         )
     except Exception:
         pass
