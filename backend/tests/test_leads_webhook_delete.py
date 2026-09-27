@@ -14,6 +14,9 @@ Mirrors the TestClient + dependency-override + `_FakeSession` pattern used
 in test_leads_webhook_reassignment.py.
 """
 from __future__ import annotations
+import hashlib
+import hmac
+import json
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -225,6 +228,42 @@ def test_delete_unknown_copper_id_is_ignored(monkeypatch):
     assert response.json() == {"status": "ignored", "event": "delete"}
 
 
+def test_delete_batch_with_two_ids_archives_both_leads(monkeypatch):
+    """Copper aggregates notifications, so `ids` can carry several records at
+    once (e.g. a human bulk-merging duplicate pairs) -- every id in the batch
+    must be archived, not just the first."""
+    lead1 = _lead(
+        copper_id="copper-1", company_name="Acme Co",
+        raw_copper_data={"recipient_email": "founder@acme.com"},
+    )
+    lead2 = _lead(
+        id=uuid.uuid4(), copper_id="copper-2", company_name="Totally Unrelated Co",
+        raw_copper_data={"recipient_email": "founder@unrelated.com"},
+    )
+
+    monkeypatch.setattr(leads_router, "verify_webhook_signature", lambda *a, **k: True)
+    monkeypatch.setattr(leads_router, "is_recent_echo", lambda *a, **k: (False, None))
+    # Per id: one lookup by copper_id, then one merge-twin scan.
+    session = _FakeSession([lead1, [], lead2, []])
+    _wire_db(session)
+    try:
+        response = client.post(
+            "/api/v1/leads/ingest",
+            json={"event": "delete", "ids": ["copper-1", "copper-2"]},
+            headers={"X-Copper-Signature": "sig"},
+        )
+    finally:
+        _clear_db()
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "archived"
+    assert body["count"] == 2
+    assert {r["lead_id"] for r in body["results"]} == {str(lead1.id), str(lead2.id)}
+    assert lead1.status == "archived"
+    assert lead2.status == "archived"
+
+
 # --- signature gate ---------------------------------------------------------
 
 
@@ -261,6 +300,40 @@ def test_unconfigured_secret_fails_closed_returns_401(monkeypatch):
         _clear_db()
 
     assert response.status_code == 401
+
+
+def test_correctly_signed_delete_archives_lead_through_real_verification(monkeypatch):
+    """End-to-end through the real `verify_webhook_signature` path (not
+    monkeypatched) -- a signature-scheme regression here would pass every
+    other test in this file while production silently rejects every real
+    Copper webhook (issue #174, build item 5)."""
+    monkeypatch.setattr(settings, "copper_webhook_secret", "real-secret")
+    monkeypatch.setattr(leads_router, "is_recent_echo", lambda *a, **k: (False, None))
+
+    lead = _lead()
+    session = _FakeSession([lead, []])
+    _wire_db(session)
+
+    body = json.dumps({"event": "delete", "ids": ["copper-1"]}).encode()
+    signature = hmac.new(b"real-secret", body, hashlib.sha256).hexdigest()
+
+    try:
+        response = client.post(
+            "/api/v1/leads/ingest",
+            content=body,
+            headers={
+                "X-Copper-Signature": signature,
+                "Content-Type": "application/json",
+            },
+        )
+    finally:
+        _clear_db()
+
+    assert response.status_code == 202
+    result = response.json()
+    assert result["status"] == "archived"
+    assert result["reason"] == "deleted_in_copper"
+    assert lead.status == "archived"
 
 
 # --- GET /leads/orphans ------------------------------------------------------
