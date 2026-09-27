@@ -24,6 +24,11 @@ class Settings(BaseSettings):
 
     # --- Copper CRM ---
     copper_webhook_secret: str = ""
+    # Public URL Copper should POST lead webhook events to -- normally
+    # https://deal-flow.apps.raed.vc/api/v1/leads/ingest (issue #174).
+    # scripts/register_copper_webhooks.py refuses to run without this set,
+    # rather than registering a subscription that points nowhere useful.
+    copper_webhook_target_url: str = ""
     copper_api_key: str = ""             # provided by the platform
     copper_user_email: str = ""
     copper_user_id: int = 0

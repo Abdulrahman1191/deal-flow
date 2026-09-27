@@ -22,6 +22,12 @@ EVENT_REASSIGNED = "reassigned"
 EVENT_AWAITING_DECK = "awaiting_deck"
 EVENT_ACTION_UNDONE = "action_undone"
 EVENT_ASSESSMENT_FAILED = "assessment_failed"
+# A Copper `delete` webhook fired for a lead with no live twin (same company
+# name / contact email) to explain it away as a merge -- i.e. a
+# partner-visible lead's Copper record vanished for real. Logged alongside
+# the `archived` event so it's auditable via GET /leads/orphans rather than
+# only a print() (issue #174).
+EVENT_COPPER_RECORD_VANISHED = "copper_record_vanished"
 
 
 async def log_event(
