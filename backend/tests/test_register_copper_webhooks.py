@@ -115,3 +115,51 @@ def test_main_refuses_without_a_configured_signing_secret(monkeypatch):
     exit_code = rcw.main(["--url", URL, "--commit"])
 
     assert exit_code == 1
+
+
+def test_main_refuses_without_a_configured_target_url(monkeypatch, capsys):
+    """No --url and no COPPER_WEBHOOK_TARGET_URL configured must refuse
+    rather than register a subscription pointed at nothing (issue #174)."""
+    monkeypatch.setattr(rcw.settings, "copper_webhook_secret", "shh")
+    monkeypatch.setattr(rcw.settings, "copper_webhook_target_url", "")
+    monkeypatch.setattr(rcw, "list_subscriptions", lambda: (_ for _ in ()).throw(
+        AssertionError("must not call Copper when the target URL is unset")
+    ))
+
+    exit_code = rcw.main(["--commit"])
+
+    assert exit_code == 1
+    assert "COPPER_WEBHOOK_TARGET_URL" in capsys.readouterr().out
+
+
+def test_main_falls_back_to_configured_target_url_when_no_flag_given(monkeypatch, capsys):
+    """With no --url, the script uses COPPER_WEBHOOK_TARGET_URL rather than
+    a hardcoded default."""
+    monkeypatch.setattr(rcw.settings, "copper_webhook_secret", "shh")
+    monkeypatch.setattr(rcw.settings, "copper_webhook_target_url", URL)
+    monkeypatch.setattr(rcw, "list_subscriptions", lambda: [])
+    created = []
+    monkeypatch.setattr(rcw, "create_subscription", lambda *a, **k: created.append(a) or {"id": 1})
+
+    exit_code = rcw.main([])
+
+    assert exit_code == 0
+    assert "Dry run" in capsys.readouterr().out
+
+
+# --- --list --------------------------------------------------------------------
+
+def test_list_flag_prints_and_exits_without_planning_or_writes(monkeypatch, capsys):
+    monkeypatch.setattr(rcw.settings, "copper_webhook_secret", "")
+    monkeypatch.setattr(rcw.settings, "copper_webhook_target_url", "")
+    monkeypatch.setattr(rcw, "list_subscriptions", lambda: [_sub(1, "lead", "new")])
+    monkeypatch.setattr(rcw, "create_subscription", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("--list must never write")
+    ))
+
+    exit_code = rcw.main(["--list"])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "id=1" in out
+    assert "target=lead" in out

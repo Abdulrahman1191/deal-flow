@@ -35,9 +35,11 @@ from app.services.auth import (
 from app.services import claude_agent, copper_writer
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
+from app.services.dedup import normalize_name
 from app.services.events import (
     EVENT_ARCHIVED,
     EVENT_ARCHIVED_NO_REPLY,
+    EVENT_COPPER_RECORD_VANISHED,
     EVENT_COPPER_UPDATED,
     EVENT_REASSIGNED,
     log_event,
@@ -85,6 +87,73 @@ async def _resolve_reassignment_owner(db: AsyncSession, fresh_payload: dict, lea
     if not user or user.email == getattr(lead, "owner_email", None):
         return None
     return user.email
+
+
+async def _find_merge_twin(db: AsyncSession, lead: Lead) -> Optional[Lead]:
+    """A Copper `delete` fires for the losing side of a merge as well as for
+    a genuine delete. Look for another active local lead that is plausibly
+    the surviving record -- same normalized company name, or the same
+    contact email -- so a merge doesn't hide a company that's still live
+    under the other Copper id (issue #174: an audit found 36 leads silently
+    lost this exact way). Returns None when nothing matches, meaning this
+    delete is a true delete rather than a merge."""
+    name_key = normalize_name(lead.company_name)
+    email = ((lead.raw_copper_data or {}).get("recipient_email") or "").strip().lower()
+    if not name_key and not email:
+        return None
+
+    result = await db.execute(
+        select(Lead).where(Lead.status != "archived", Lead.id != lead.id)
+    )
+    for candidate in result.scalars().all():
+        if name_key and normalize_name(candidate.company_name) == name_key:
+            return candidate
+        if email:
+            candidate_email = ((candidate.raw_copper_data or {}).get("recipient_email") or "").strip().lower()
+            if candidate_email and candidate_email == email:
+                return candidate
+    return None
+
+
+async def _archive_deleted_lead(db: AsyncSession, copper_id: str) -> Optional[dict]:
+    """Archives a single local lead for one id out of a Copper `delete`
+    webhook's `ids` list (Copper batches merges/bulk-deletes into one
+    notification, so this runs once per id -- see `ingest_lead`). Returns
+    None when there's nothing to do: unknown copper_id, or already
+    archived."""
+    result = await db.execute(select(Lead).where(Lead.copper_id == copper_id))
+    lead = result.scalar_one_or_none()
+    if not lead or lead.status == "archived":
+        return None
+
+    twin = await _find_merge_twin(db, lead)
+    if twin:
+        lead.status = "archived"
+        await log_event(
+            db, lead.id, EVENT_ARCHIVED,
+            {"reason": "merged_in_copper", "surviving_lead_id": str(twin.id)},
+        )
+        await db.commit()
+        return {
+            "status": "archived",
+            "reason": "merged_in_copper",
+            "lead_id": str(lead.id),
+            "surviving_lead_id": str(twin.id),
+        }
+
+    # No twin -- this is either a true delete, or a merge whose surviving
+    # record we can't identify. Either way the lead disappearing must be
+    # auditable, not silent: archive as before, but also log
+    # copper_record_vanished so it surfaces via GET /leads/orphans instead
+    # of just vanishing.
+    lead.status = "archived"
+    await log_event(db, lead.id, EVENT_ARCHIVED, {"reason": "deleted_in_copper"})
+    await log_event(
+        db, lead.id, EVENT_COPPER_RECORD_VANISHED,
+        {"copper_id": copper_id, "company_name": lead.company_name},
+    )
+    await db.commit()
+    return {"status": "archived", "reason": "deleted_in_copper", "lead_id": str(lead.id)}
 
 
 def _parse_copper_payload(payload: dict) -> dict:
@@ -162,18 +231,25 @@ async def ingest_lead(
     event = raw.get("event", "new")
 
     # Handle delete: archive the local lead so it disappears from the kanban.
+    # Copper fires `delete` both for a true delete and for the losing side of
+    # a merge -- a merge must not archive-and-forget, since the company is
+    # still live under the other Copper id (issue #174). Copper also
+    # aggregates notifications, so a single webhook's `ids` can list several
+    # records (e.g. a human bulk-merging duplicate pairs) -- every id gets
+    # the same treatment so a batched delete never silently drops leads after
+    # the first.
     if event in ("delete", "deleted"):
         incoming_ids = raw.get("ids") or []
-        copper_id = str(incoming_ids[0]) if incoming_ids else None
-        if copper_id:
-            result = await db.execute(select(Lead).where(Lead.copper_id == copper_id))
-            lead = result.scalar_one_or_none()
-            if lead and lead.status != "archived":
-                lead.status = "archived"
-                await log_event(db, lead.id, EVENT_ARCHIVED, {"reason": "deleted_in_copper"})
-                await db.commit()
-                return {"status": "archived", "lead_id": str(lead.id)}
-        return {"status": "ignored", "event": event}
+        results = []
+        for raw_id in incoming_ids:
+            outcome = await _archive_deleted_lead(db, str(raw_id))
+            if outcome:
+                results.append(outcome)
+        if not results:
+            return {"status": "ignored", "event": event}
+        if len(results) == 1:
+            return results[0]
+        return {"status": "archived", "count": len(results), "results": results}
 
     # Handle update / edit: refresh the lead from Copper and merge changed fields
     # into our local row. Triggers reassessment only if assessment-relevant
@@ -389,6 +465,44 @@ async def outbox_health(
                 "created_at": row.created_at.isoformat(),
             }
             for row in recent_failed
+        ],
+    }
+
+
+@router.get("/orphans")
+async def list_orphans(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only visibility into leads whose Copper record vanished with no
+    live twin (same company name / contact email) to explain it away as a
+    merge (issue #174). Each row is a `copper_record_vanished` LeadEvent,
+    newest first -- the auditable trail for a partner-visible lead
+    disappearing, instead of it just silently dropping off the board."""
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    result = await db.execute(
+        select(LeadEvent, Lead)
+        .join(Lead, Lead.id == LeadEvent.lead_id)
+        .where(LeadEvent.event_type == EVENT_COPPER_RECORD_VANISHED)
+        .order_by(LeadEvent.created_at.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+
+    return {
+        "count": len(rows),
+        "orphans": [
+            {
+                "lead_id": str(lead.id),
+                "company_name": lead.company_name,
+                "owner_email": lead.owner_email,
+                "copper_id": (event.payload or {}).get("copper_id"),
+                "vanished_at": event.created_at.isoformat(),
+            }
+            for event, lead in rows
         ],
     }
 
