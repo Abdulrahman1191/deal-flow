@@ -16,7 +16,7 @@ from app.config import settings
 from app.services.copper_echo_guard import register_outbound_write
 from app.services.copper_service import COPPER_BASE, _headers
 
-RAED_RESERVED_TAGS = {"raed:override", "raed:approved", "raed:sent", "raed:archived"}
+RAED_RESERVED_TAGS = {"raed:override", "raed:approved", "raed:sent", "raed:archived", "raed:duplicate"}
 
 MAX_ATTEMPTS = 5
 # Backoff: 30s, 60s, 120s, 240s, 480s
@@ -283,6 +283,37 @@ def archive_in_copper(
     new_tags = base + ["raed:archived"]
     payload = {"tags": new_tags, "status_id": settings.copper_unqualified_status_id}
     custom_fields = _unqual_custom_fields(reason_option_ids, detail_text)
+    if custom_fields:
+        payload["custom_fields"] = custom_fields
+    return _enqueue(copper_id, f"/leads/{copper_id}", payload)
+
+
+def close_duplicate_in_copper(
+    copper_id: str,
+    existing_tags: Optional[list],
+    detail_text: str,
+) -> Optional[str]:
+    """Issue #178: closes a Copper lead whose duplicate the nightly dedup
+    (app.services.dedup) already archived locally -- dedup deliberately never
+    writes back to Copper on its own, which is why Copper keeps both copies
+    open. Tags `raed:duplicate` (rather than archive_in_copper's generic
+    `raed:archived`) so a dedup-driven close is distinguishable in Copper from
+    a REJECT/no-reply archive, and writes `detail_text` (expected to name the
+    surviving record, e.g. "Duplicate of Acme Co (Copper #12345)") to the
+    Unqualified Details custom field. Returns the new outbox row's id, or None
+    if skipped (no copper_id, or copper_unqualified_status_id unset)."""
+    if not copper_id:
+        return None
+    if not settings.copper_unqualified_status_id:
+        _record_skipped_write(
+            copper_id, f"/leads/{copper_id}", "PUT",
+            "skipped close_duplicate_in_copper: copper_unqualified_status_id unset",
+        )
+        return None
+    base = _strip_raed_state_tags(existing_tags)
+    new_tags = base + ["raed:duplicate"]
+    payload = {"tags": new_tags, "status_id": settings.copper_unqualified_status_id}
+    custom_fields = _unqual_custom_fields(None, detail_text)
     if custom_fields:
         payload["custom_fields"] = custom_fields
     return _enqueue(copper_id, f"/leads/{copper_id}", payload)
