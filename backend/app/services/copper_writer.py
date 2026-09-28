@@ -402,6 +402,16 @@ def reject_in_copper(
     _enqueue(copper_id, f"/leads/{copper_id}", payload)
 
 
+def push_assignee(copper_id: str, assignee_id: int) -> Optional[str]:
+    """Best-effort push of a manual owner reassignment (issue #180 duplicate
+    review) to Copper's assignee_id, via the outbox like every other write
+    here. Returns the new outbox row's id, or None if there's nothing to
+    push (missing copper_id or assignee_id)."""
+    if not copper_id or not assignee_id:
+        return None
+    return _enqueue(copper_id, f"/leads/{copper_id}", {"assignee_id": assignee_id})
+
+
 def convert_lead_to_opportunity(
     copper_id: str,
     company_name: str,
