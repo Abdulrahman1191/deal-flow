@@ -147,14 +147,29 @@ def block_if_impersonating(request: Request, user: User) -> None:
         )
 
 
-def verify_webhook_signature(payload: bytes, signature: str) -> bool:
-    """HMAC verification for Copper webhook ingestion. Independent of user
-    auth — the inbound webhook from Copper has no Slack identity and is
-    gated on this shared-secret HMAC instead."""
-    if not settings.copper_webhook_secret or not signature:
+COPPER_WEBHOOK_TOKEN_HEADER = "X-Copper-Webhook-Token"
+
+
+def verify_webhook_signature(payload: bytes, signature: str, token: str = "") -> bool:
+    """Shared-secret verification for Copper webhook ingestion. Independent of
+    user auth — the inbound webhook from Copper has no Slack identity.
+
+    Copper cannot sign notifications: it has no HMAC support, it only replays
+    the static `headers` configured on the subscription. So the path real
+    Copper traffic takes is `token` (the X-Copper-Webhook-Token header that
+    scripts/register_copper_webhooks.py registers) compared in constant time to
+    COPPER_WEBHOOK_SECRET. An HMAC-SHA256 of the body in X-Copper-Signature is
+    still accepted for callers that can sign. Fails closed: no secret
+    configured, or neither credential valid, is a rejection."""
+    secret = settings.copper_webhook_secret
+    if not secret:
+        return False
+    if token and hmac.compare_digest(token.encode(), secret.encode()):
+        return True
+    if not signature:
         return False
     expected = hmac.new(
-        settings.copper_webhook_secret.encode(),
+        secret.encode(),
         payload,
         hashlib.sha256,
     ).hexdigest()

@@ -9,19 +9,24 @@ run against an already-registered account creates nothing (no duplicate
 subscriptions for the same target/event/url).
 """
 from __future__ import annotations
+import json
 import sys
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+import httpx  # noqa: E402
+
 import register_copper_webhooks as rcw  # noqa: E402
 
 URL = "https://deal-flow.apps.raed.vc/api/v1/leads/ingest"
 
 
-def _sub(id_, target, event, url=URL):
-    return {"id": id_, "target": target, "event": event, "url": url}
+def _sub(id_, entity_type, event, url=URL):
+    """A subscription as Copper's GET /webhooks returns it: `type` is the
+    entity, `target` is the URL."""
+    return {"id": id_, "type": entity_type, "event": event, "target": url}
 
 
 # --- pure planning logic -------------------------------------------------------
@@ -162,4 +167,66 @@ def test_list_flag_prints_and_exits_without_planning_or_writes(monkeypatch, caps
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "id=1" in out
-    assert "target=lead" in out
+    assert "type=lead" in out
+    assert f"target={URL}" in out
+
+
+# --- create payload: Copper's field names ---------------------------------------
+
+# Copper's verbatim response to the payload this script used to send
+# ({"target": "lead", "url": ..., "secret": {...}}) on 2026-09-29.
+RECORDED_422 = {
+    "success": False,
+    "status": 422,
+    "message": "Invalid input: Validation errors: Base: Unrecognized attributes specified: url\nType: can't be blank",
+}
+
+
+def _fake_copper(sent):
+    """A stand-in for POST /developer_api/v1/webhooks that validates the way
+    Copper did when it returned RECORDED_422."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if "url" in body or not body.get("type"):
+            return httpx.Response(422, json=RECORDED_422)
+        return httpx.Response(200, json={"id": 4242, **body})
+    real_client = httpx.Client
+    return lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+
+
+def test_create_subscription_is_accepted_by_copper_validation(monkeypatch):
+    sent = []
+    monkeypatch.setattr(rcw.httpx, "Client", _fake_copper(sent))
+
+    created = rcw.create_subscription("lead", "delete", URL, "shh")
+
+    assert created["id"] == 4242
+    assert sent == [{
+        "type": "lead",
+        "event": "delete",
+        "target": URL,
+        "headers": {"X-Copper-Webhook-Token": "shh"},
+    }]
+
+
+def test_the_old_payload_shape_reproduces_the_recorded_422(monkeypatch):
+    """Guards the fake itself: the pre-fix body must still fail the way Copper
+    failed, so the test above can't pass against a lenient stand-in."""
+    sent = []
+    monkeypatch.setattr(rcw.httpx, "Client", _fake_copper(sent))
+    old_body = {"target": "lead", "event": "new", "url": URL, "secret": {"secret": "shh"}}
+
+    with rcw.httpx.Client(timeout=30) as client:
+        response = client.post(f"{rcw.COPPER_BASE}/webhooks", json=old_body)
+
+    assert response.status_code == 422
+    assert response.json() == RECORDED_422
+
+
+def test_secret_goes_in_headers_never_in_the_echoed_secret_field():
+    """Copper echoes a subscription's `secret` values inside every notification
+    body; the shared secret must travel only as the replayed header."""
+    body = rcw.subscription_body("lead", "new", URL, "shh")
+    assert "secret" not in body
+    assert body["headers"] == {"X-Copper-Webhook-Token": "shh"}

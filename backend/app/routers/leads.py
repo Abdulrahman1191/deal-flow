@@ -205,13 +205,15 @@ async def ingest_lead(
     request: Request,
     db: AsyncSession = Depends(get_db),
     x_copper_signature: Optional[str] = Header(default=None),
+    x_copper_webhook_token: Optional[str] = Header(default=None),
 ):
     body = await request.body()
 
-    # Fail closed: reject whenever the signature header is missing or invalid,
-    # or the shared secret isn't configured — never silently skip verification
+    # Fail closed: reject unless the X-Copper-Webhook-Token header (what Copper
+    # actually sends) or an X-Copper-Signature HMAC is valid, or when the shared
+    # secret isn't configured — never silently skip verification
     # (SECURITY_AUDIT.md F3).
-    if not verify_webhook_signature(body, x_copper_signature or ""):
+    if not verify_webhook_signature(body, x_copper_signature or "", x_copper_webhook_token or ""):
         raise HTTPException(status_code=401, detail="Missing or invalid webhook signature")
 
     raw = request.state.__dict__.get("_json") or {}
