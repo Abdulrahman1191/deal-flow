@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -200,6 +201,38 @@ def _parse_copper_payload(payload: dict) -> dict:
     }
 
 
+async def _import_new_copper_lead(db: AsyncSession, copper_id: str) -> dict:
+    """Import one lead named by a Copper `new` notification. Copper's
+    notification body carries only `ids` (no lead fields), so the lead is
+    fetched from Copper -- the same import the `update` branch does for an
+    unknown id. Idempotent: an id already on a row, including one the polling
+    sync inserted concurrently, is reported as a duplicate, never a 500."""
+    from app.services.copper_service import fetch_lead_by_id, map_copper_lead
+
+    existing = await db.execute(select(Lead).where(Lead.copper_id == copper_id))
+    if existing.scalar_one_or_none():
+        return {"status": "duplicate", "copper_id": copper_id}
+    try:
+        fresh = fetch_lead_by_id(copper_id)
+    except Exception as exc:
+        # Transient Copper failure: a non-2xx makes Copper redeliver, and the
+        # redelivery is idempotent via the duplicate check above.
+        raise HTTPException(status_code=503, detail=f"Copper fetch failed for {copper_id}: {exc!r}")
+    if not fresh:
+        return {"status": "not_found_in_copper", "copper_id": copper_id}
+
+    lead = Lead(**map_copper_lead(fresh), owner_email=await _owner_for_assignee(db, fresh))
+    db.add(lead)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return {"status": "duplicate", "copper_id": copper_id}
+    await db.refresh(lead)
+    assess_lead_task.delay(str(lead.id))
+    return {"lead_id": str(lead.id), "status": "queued", "copper_id": copper_id}
+
+
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_lead(
     request: Request,
@@ -325,17 +358,40 @@ async def ingest_lead(
     if event not in ("new", "create", "created"):
         return {"status": "ignored", "event": event}
 
+    # A real Copper notification is {ids, type, event, subscription_id,
+    # timestamp} with no lead fields; parsing it as a lead gave copper_id=""
+    # and company "Unknown" -- the first one inserted a junk row, every later
+    # one hit leads_copper_id_key and 500'd. Import each id from Copper
+    # instead. A body that carries the lead itself (`payload` or `id`) keeps
+    # the direct-parse path below.
+    if "payload" not in raw and not str(raw.get("id") or "").strip():
+        new_ids = [str(i) for i in (raw.get("ids") or []) if str(i or "").strip()]
+        if not new_ids:
+            return {"status": "ignored", "event": event, "reason": "no_id"}
+        results = [await _import_new_copper_lead(db, cid) for cid in new_ids]
+        if len(results) == 1:
+            return results[0]
+        return {"status": "processed", "count": len(results), "results": results}
+
     lead_data = _parse_copper_payload(raw)
 
+    # Never insert a lead without a Copper id: "" is a real value to the unique
+    # constraint, so a second one would 500.
+    if not lead_data["copper_id"]:
+        return {"status": "ignored", "event": event, "reason": "no_id"}
+
     # Deduplicate by copper_id
-    if lead_data["copper_id"]:
-        existing = await db.execute(select(Lead).where(Lead.copper_id == lead_data["copper_id"]))
-        if existing.scalar_one_or_none():
-            return {"status": "duplicate", "copper_id": lead_data["copper_id"]}
+    existing = await db.execute(select(Lead).where(Lead.copper_id == lead_data["copper_id"]))
+    if existing.scalar_one_or_none():
+        return {"status": "duplicate", "copper_id": lead_data["copper_id"]}
 
     lead = Lead(**lead_data, owner_email=await _owner_for_assignee(db, raw))
     db.add(lead)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return {"status": "duplicate", "copper_id": lead_data["copper_id"]}
     await db.refresh(lead)
 
     assess_lead_task.delay(str(lead.id))
