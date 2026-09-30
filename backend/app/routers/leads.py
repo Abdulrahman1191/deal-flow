@@ -233,6 +233,82 @@ async def _import_new_copper_lead(db: AsyncSession, copper_id: str) -> dict:
     return {"lead_id": str(lead.id), "status": "queued", "copper_id": copper_id}
 
 
+async def _sync_updated_copper_lead(db: AsyncSession, copper_id_from_event: str, updated_attributes: dict) -> dict:
+    """Refresh one lead named by a Copper `update` notification. Copper
+    aggregates notifications, so one body's `ids` can name several leads; the
+    ingest route calls this once per id. The echo guard runs per id because
+    its registry check is keyed by Copper id."""
+    drop, reason = is_recent_echo(copper_id_from_event, updated_attributes)
+    if drop:
+        return {"status": "echo_dropped", "reason": reason, "copper_id": copper_id_from_event}
+
+    # Pull authoritative current state from Copper
+    from app.services.copper_service import fetch_lead_by_id, map_copper_lead
+    try:
+        fresh = fetch_lead_by_id(copper_id_from_event)
+    except Exception as exc:
+        return {"status": "fetch_failed", "error": repr(exc)}
+    if not fresh:
+        return {"status": "not_found_in_copper", "copper_id": copper_id_from_event}
+
+    result = await db.execute(select(Lead).where(Lead.copper_id == copper_id_from_event))
+    lead = result.scalar_one_or_none()
+    if not lead:
+        # Unknown locally — fall through to "new" logic via map_copper_lead
+        lead_data = map_copper_lead(fresh)
+        lead = Lead(**lead_data, owner_email=await _owner_for_assignee(db, fresh))
+        db.add(lead)
+        try:
+            await db.commit()
+        except IntegrityError:
+            # The polling sync inserted it between our lookup and commit.
+            await db.rollback()
+            return {"status": "duplicate", "copper_id": copper_id_from_event}
+        await db.refresh(lead)
+        assess_lead_task.delay(str(lead.id))
+        return {"lead_id": str(lead.id), "status": "queued_from_update"}
+
+    # Diff: which assessment-relevant fields changed?
+    fresh_data = map_copper_lead(fresh)
+    watched = ("description", "company_name", "website", "founder_names", "stage", "region")
+    material_change = any(
+        getattr(lead, k) != fresh_data.get(k) for k in watched
+    )
+    for k, v in fresh_data.items():
+        # Don't blow away our enriched fields (linkedin discovered, pitch deck, etc.)
+        if k in ("company_linkedin_url",) and getattr(lead, k):
+            continue
+        if k == "raw_copper_data":
+            # Merge instead of replace, preserve our `recipient_email` lookup etc.
+            merged = (lead.raw_copper_data or {}).copy()
+            merged.update(v or {})
+            lead.raw_copper_data = merged
+            continue
+        setattr(lead, k, v)
+
+    # Reassignment: assignee_id isn't in `watched` above on purpose --
+    # moving a lead between partners is an ownership change, not an
+    # assessment-relevant edit, and must never re-queue/re-verdict it.
+    new_owner = await _resolve_reassignment_owner(db, fresh, lead)
+    if new_owner:
+        from_owner = lead.owner_email
+        lead.owner_email = new_owner
+        await log_event(db, lead.id, EVENT_REASSIGNED,
+                         {"from_owner": from_owner, "to_owner": new_owner, "source": "webhook"})
+
+    await log_event(db, lead.id, EVENT_COPPER_UPDATED, {"material": material_change})
+    await db.commit()
+
+    if material_change and lead.status not in ("archived", "approved"):
+        lead.status = "pending"
+        lead.assessment_attempts = 0
+        await db.commit()
+        assess_lead_task.delay(str(lead.id))
+        return {"lead_id": str(lead.id), "status": "synced_and_reassessing"}
+
+    return {"lead_id": str(lead.id), "status": "synced"}
+
+
 @router.post("/ingest", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_lead(
     request: Request,
@@ -257,11 +333,14 @@ async def ingest_lead(
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     # Echo-loop guard: drop webhooks that mirror our own recent outbound writes.
+    # Multi-id notifications are echo-checked per id in _sync_updated_copper_lead:
+    # one id's echo must not drop the other leads in the same notification.
     incoming_ids = raw.get("ids") or []
-    incoming_id = str(incoming_ids[0]) if incoming_ids else ""
-    drop, reason = is_recent_echo(incoming_id, raw.get("updated_attributes") or {})
-    if drop:
-        return {"status": "echo_dropped", "reason": reason}
+    if len(incoming_ids) <= 1:
+        incoming_id = str(incoming_ids[0]) if incoming_ids else ""
+        drop, reason = is_recent_echo(incoming_id, raw.get("updated_attributes") or {})
+        if drop:
+            return {"status": "echo_dropped", "reason": reason}
 
     event = raw.get("event", "new")
 
@@ -290,70 +369,14 @@ async def ingest_lead(
     # into our local row. Triggers reassessment only if assessment-relevant
     # fields (description, founder, website) actually changed.
     if event in ("update", "updated", "edit", "edited"):
-        copper_id_from_event = str((raw.get("ids") or [None])[0] or "")
-        if not copper_id_from_event:
+        update_ids = [str(i) for i in (raw.get("ids") or []) if str(i or "").strip()]
+        if not update_ids:
             return {"status": "ignored", "event": event, "reason": "no_id"}
-
-        # Pull authoritative current state from Copper
-        from app.services.copper_service import fetch_lead_by_id, map_copper_lead
-        try:
-            fresh = fetch_lead_by_id(copper_id_from_event)
-        except Exception as exc:
-            return {"status": "fetch_failed", "error": repr(exc)}
-        if not fresh:
-            return {"status": "not_found_in_copper", "copper_id": copper_id_from_event}
-
-        result = await db.execute(select(Lead).where(Lead.copper_id == copper_id_from_event))
-        lead = result.scalar_one_or_none()
-        if not lead:
-            # Unknown locally — fall through to "new" logic via map_copper_lead
-            lead_data = map_copper_lead(fresh)
-            lead = Lead(**lead_data, owner_email=await _owner_for_assignee(db, fresh))
-            db.add(lead)
-            await db.commit()
-            await db.refresh(lead)
-            assess_lead_task.delay(str(lead.id))
-            return {"lead_id": str(lead.id), "status": "queued_from_update"}
-
-        # Diff: which assessment-relevant fields changed?
-        fresh_data = map_copper_lead(fresh)
-        watched = ("description", "company_name", "website", "founder_names", "stage", "region")
-        material_change = any(
-            getattr(lead, k) != fresh_data.get(k) for k in watched
-        )
-        for k, v in fresh_data.items():
-            # Don't blow away our enriched fields (linkedin discovered, pitch deck, etc.)
-            if k in ("company_linkedin_url",) and getattr(lead, k):
-                continue
-            if k == "raw_copper_data":
-                # Merge instead of replace, preserve our `recipient_email` lookup etc.
-                merged = (lead.raw_copper_data or {}).copy()
-                merged.update(v or {})
-                lead.raw_copper_data = merged
-                continue
-            setattr(lead, k, v)
-
-        # Reassignment: assignee_id isn't in `watched` above on purpose --
-        # moving a lead between partners is an ownership change, not an
-        # assessment-relevant edit, and must never re-queue/re-verdict it.
-        new_owner = await _resolve_reassignment_owner(db, fresh, lead)
-        if new_owner:
-            from_owner = lead.owner_email
-            lead.owner_email = new_owner
-            await log_event(db, lead.id, EVENT_REASSIGNED,
-                             {"from_owner": from_owner, "to_owner": new_owner, "source": "webhook"})
-
-        await log_event(db, lead.id, EVENT_COPPER_UPDATED, {"material": material_change})
-        await db.commit()
-
-        if material_change and lead.status not in ("archived", "approved"):
-            lead.status = "pending"
-            lead.assessment_attempts = 0
-            await db.commit()
-            assess_lead_task.delay(str(lead.id))
-            return {"lead_id": str(lead.id), "status": "synced_and_reassessing"}
-
-        return {"lead_id": str(lead.id), "status": "synced"}
+        updated_attributes = raw.get("updated_attributes") or {}
+        results = [await _sync_updated_copper_lead(db, cid, updated_attributes) for cid in update_ids]
+        if len(results) == 1:
+            return results[0]
+        return {"status": "processed", "count": len(results), "results": results}
 
     if event not in ("new", "create", "created"):
         return {"status": "ignored", "event": event}

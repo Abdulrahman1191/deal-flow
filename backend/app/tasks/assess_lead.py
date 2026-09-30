@@ -351,6 +351,11 @@ async def _run(lead_id: str) -> dict:
             # instead -- never REJECT for absent data (issue #147).
             if lead.deck_promotion_count > settings.max_deck_promotions:
                 return await write_no_context_maybe_placeholder(db, lead)
+            # Archived while this task sat in the queue (e.g. by
+            # copper_reconcile): parking it would silently un-archive it and
+            # put it back on the board. Leave it archived.
+            if lead.status == "archived":
+                return {"lead_id": lead_id, "status": "skipped_archived"}
             lead.status = "awaiting_deck"
             lead.assessment_attempts = 0
             lead.last_assessment_error = None
@@ -359,7 +364,11 @@ async def _run(lead_id: str) -> dict:
             await db.commit()
             return {"lead_id": lead_id, "status": "awaiting_deck"}
 
-        lead.status = "processing"
+        # Same reason: an archived lead can still be assessed (the card is
+        # written, see the `!= "archived"` guards below) but never leaves
+        # `archived` because of this task.
+        if lead.status != "archived":
+            lead.status = "processing"
         await db.commit()
 
         # If Copper didn't surface a company LinkedIn, try discovery:
