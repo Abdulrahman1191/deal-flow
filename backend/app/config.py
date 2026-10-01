@@ -18,6 +18,19 @@ class Settings(BaseSettings):
     # cannot see because it is text-only.
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.7-flash"
+    # Which provider serves claude_agent's text calls (assessments, deck
+    # verification, drafts, briefings): "deepseek" (default) or "gemini".
+    # Gemini goes through its OpenAI-compatible endpoint with its own key --
+    # deliberately separate from gemini_api_key (deck OCR), so switching the
+    # assessment provider never silently changes which key/billing OCR uses.
+    llm_provider: str = "deepseek"
+    llm_gemini_api_key: str = ""
+    llm_gemini_model: str = ""            # empty -> gemini_model
+    # Gemini 3.x "thinks" and thinking tokens count against max_tokens, so a
+    # 200-token JSON call could come back empty. reasoning_effort keeps
+    # thinking small ("" omits it); the floor gives the visible answer room.
+    llm_gemini_reasoning_effort: str = "low"
+    llm_gemini_min_output_tokens: int = 2048
 
     # --- Web research ---
     tavily_api_key: str = ""

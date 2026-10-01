@@ -102,30 +102,84 @@ _client = None
 _REQUEST_TIMEOUT_SECONDS = 60.0
 
 
+GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+
+def _provider() -> str:
+    provider = (settings.llm_provider or "deepseek").strip().lower()
+    if provider not in ("deepseek", "gemini"):
+        raise ValueError(f"LLM_PROVIDER must be 'deepseek' or 'gemini', got {settings.llm_provider!r}")
+    return provider
+
+
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(
-            api_key=settings.deep_seek_api,
-            base_url="https://api.deepseek.com",
-            timeout=_REQUEST_TIMEOUT_SECONDS,
-        )
+        if _provider() == "gemini":
+            if not settings.llm_gemini_api_key:
+                raise ValueError("LLM_PROVIDER=gemini but LLM_GEMINI_API_KEY is not set")
+            _client = OpenAI(
+                api_key=settings.llm_gemini_api_key,
+                base_url=GEMINI_OPENAI_BASE_URL,
+                timeout=_REQUEST_TIMEOUT_SECONDS,
+            )
+        else:
+            _client = OpenAI(
+                api_key=settings.deep_seek_api,
+                base_url="https://api.deepseek.com",
+                timeout=_REQUEST_TIMEOUT_SECONDS,
+            )
     return _client
 
 
+def active_model() -> str:
+    if _provider() == "gemini":
+        return settings.llm_gemini_model or settings.gemini_model
+    return settings.deepseek_model
+
+
+def _provider_kwargs(kwargs: dict) -> dict:
+    """Adapt a DeepSeek-shaped call to the active provider. Call sites keep
+    passing model=settings.deepseek_model; the active provider's model wins."""
+    kwargs = dict(kwargs)
+    kwargs["model"] = active_model()
+    if _provider() == "gemini":
+        kwargs["max_tokens"] = max(int(kwargs.get("max_tokens") or 0), settings.llm_gemini_min_output_tokens)
+        if settings.llm_gemini_reasoning_effort:
+            # openai==1.30 predates the reasoning_effort argument.
+            extra = dict(kwargs.get("extra_body") or {})
+            extra["reasoning_effort"] = settings.llm_gemini_reasoning_effort
+            kwargs["extra_body"] = extra
+    return kwargs
+
+
 def _chat_completion(**kwargs):
-    """Every DeepSeek call goes through here. Refuses fast while the shared
-    breaker is open, and opens it on an account-level failure (402 no
-    balance / 401 bad key) so no other caller in any container retries it."""
+    """Every LLM text call goes through here, for whichever provider
+    LLM_PROVIDER selects. Refuses fast while the shared breaker is open, and
+    opens it on an account-level failure (402 no balance / 401 bad key) so no
+    other caller in any container retries it. Logs token usage per call so
+    cost per lead can be measured."""
     llm_breaker.check()
     try:
-        return _get_client().chat.completions.create(**kwargs)
+        response = _get_client().chat.completions.create(**_provider_kwargs(kwargs))
     except APIStatusError as exc:
         if exc.status_code in llm_breaker.ACCOUNT_LEVEL_STATUSES:
-            reason = f"DeepSeek {exc.status_code}: {exc.message}"
+            reason = f"{_provider()} {exc.status_code}: {exc.message}"
             llm_breaker.open_breaker(reason)
             raise llm_breaker.LLMUnavailable(reason) from exc
         raise
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        print(f"[llm] provider={_provider()} model={active_model()} "
+              f"prompt_tokens={usage.prompt_tokens} completion_tokens={usage.completion_tokens}")
+    choice = response.choices[0] if response.choices else None
+    if choice is None or not (choice.message.content or "").strip():
+        # Never hand callers an empty answer to parse as if it were one.
+        raise ValueError(
+            f"{_provider()} returned no content (finish_reason="
+            f"{getattr(choice, 'finish_reason', None)!r}, model={active_model()!r})"
+        )
+    return response
 
 
 ASSESS_SYSTEM = """You are a senior investment analyst at Raed Ventures, a sector-agnostic early-stage
