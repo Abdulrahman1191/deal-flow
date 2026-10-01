@@ -56,7 +56,7 @@ from app.database import CelerySessionLocal
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
 from app.services.copper_service import fetch_lead_by_id
-from app.services import deck_cache, task_guard
+from app.services import deck_cache, llm_breaker, task_guard
 from app.services.pitch_deck import (
     MATCH_THRESHOLD,
     extract_text_from_pdf,
@@ -383,6 +383,13 @@ async def _run() -> dict:
 
         matched, unmatched, failed, requeued = 0, 0, 0, 0
         unmatched_files: list[dict] = []
+        # Set once DeepSeek is unavailable account-wide (402/401, see
+        # llm_breaker): the rest of this sweep skips verification -- and the
+        # downloads done only for it -- instead of failing it file by file.
+        # Those files stay unmatched; the next sweep after the pause retries.
+        verification_paused: Optional[str] = llm_breaker.open_reason()
+        if verification_paused:
+            print(f"[sync_pitch_decks] deck verification paused for this run: {verification_paused}")
         for drive_file in drive_files:
             match = find_lead_match(drive_file["name"], remaining_leads)
             lead = match.lead
@@ -390,7 +397,8 @@ async def _run() -> dict:
             # verified file's content isn't downloaded/extracted twice.
             deck_text: Optional[str] = None
 
-            if lead is None and settings.deck_match_verify_enabled and match.needs_verification:
+            if (lead is None and settings.deck_match_verify_enabled and match.needs_verification
+                    and not verification_paused):
                 try:
                     deck_text = _download_and_extract(service, drive_file)
                 except Exception:
@@ -403,7 +411,11 @@ async def _run() -> dict:
                     )
                     deck_text = None
                 if deck_text:
-                    lead = verify_match_candidates(match.needs_verification, deck_text)
+                    try:
+                        lead = verify_match_candidates(match.needs_verification, deck_text)
+                    except llm_breaker.LLMUnavailable as exc:
+                        verification_paused = str(exc)
+                        print(f"[sync_pitch_decks] deck verification paused for the rest of this run: {exc}")
                 if lead is None:
                     deck_text = None  # nothing to reuse -- verification didn't resolve a lead
 
@@ -543,7 +555,12 @@ async def sync_lead_pitch_deck(db: AsyncSession, lead: Lead, *, force: bool = Fa
                 continue
             if not text:
                 continue
-            if verify_match_candidates(match.needs_verification, text):
+            try:
+                confirmed = verify_match_candidates(match.needs_verification, text)
+            except llm_breaker.LLMUnavailable as exc:
+                diagnostic["reason"] = f"Deck verification is paused (DeepSeek unavailable): {exc}"
+                return diagnostic
+            if confirmed:
                 matched_files = [drive_file]
                 verified_deck_text = text
                 break

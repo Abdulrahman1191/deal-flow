@@ -4,9 +4,10 @@ import json
 import re
 from typing import Any, Optional
 
-from openai import OpenAI
+from openai import APIStatusError, OpenAI
 
 from app.config import settings
+from app.services import llm_breaker
 
 # Fallback used when a lead's owner has no calendly_url set (see User.calendly_url,
 # issue #84) -- keeps the previous single hardcoded link as the default.
@@ -110,6 +111,21 @@ def _get_client() -> OpenAI:
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
     return _client
+
+
+def _chat_completion(**kwargs):
+    """Every DeepSeek call goes through here. Refuses fast while the shared
+    breaker is open, and opens it on an account-level failure (402 no
+    balance / 401 bad key) so no other caller in any container retries it."""
+    llm_breaker.check()
+    try:
+        return _get_client().chat.completions.create(**kwargs)
+    except APIStatusError as exc:
+        if exc.status_code in llm_breaker.ACCOUNT_LEVEL_STATUSES:
+            reason = f"DeepSeek {exc.status_code}: {exc.message}"
+            llm_breaker.open_breaker(reason)
+            raise llm_breaker.LLMUnavailable(reason) from exc
+        raise
 
 
 ASSESS_SYSTEM = """You are a senior investment analyst at Raed Ventures, a sector-agnostic early-stage
@@ -555,7 +571,7 @@ def assess_lead(
         team_calibration_block=team_calibration_block,
     )
 
-    response = _get_client().chat.completions.create(
+    response = _chat_completion(
         model=settings.deepseek_model,
         max_tokens=4096,
         # Greedy decoding (temperature 0): the assessment is a screening judgment we
@@ -713,7 +729,7 @@ def pick_linkedin_url(
         candidates_list="\n".join(f"- {c}" for c in candidates),
     )
     try:
-        response = _get_client().chat.completions.create(
+        response = _chat_completion(
             model=settings.deepseek_model,
             max_tokens=200,
             messages=[
@@ -794,7 +810,7 @@ def generate_unqualification_reason(
         summary=summary or "(no summary available)",
         red_flags=", ".join(red_flags or []) or "(none noted)",
     )
-    response = _get_client().chat.completions.create(
+    response = _chat_completion(
         model=settings.deepseek_model,
         max_tokens=300,
         temperature=0.0,
@@ -847,7 +863,7 @@ def regenerate_draft(
         founder_names=", ".join(lead_data.get("founder_names") or []) or "N/A",
         summary=summary or "(no prior summary)",
     )
-    response = _get_client().chat.completions.create(
+    response = _chat_completion(
         model=settings.deepseek_model,
         max_tokens=1024,
         messages=[
@@ -905,7 +921,7 @@ def verify_pitch_deck_match(company_name: str, company_context: str, deck_text: 
         company_context=company_context.strip() or "(no company description on file)",
         deck_excerpt=(deck_text or "")[:8_000],
     )
-    response = _get_client().chat.completions.create(
+    response = _chat_completion(
         model=settings.deepseek_model,
         max_tokens=200,
         temperature=0.0,
@@ -925,7 +941,7 @@ def generate_briefing(date_str: str, research_data: dict) -> dict[str, Any]:
         research_data=json.dumps(research_data, indent=2),
     )
 
-    response = _get_client().chat.completions.create(
+    response = _chat_completion(
         model=settings.deepseek_model,
         max_tokens=8096,
         messages=[

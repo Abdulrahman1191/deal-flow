@@ -14,7 +14,7 @@ from app.models.lead import Lead
 from app.models.assessment import AssessmentCard
 from app.models.user import User
 from app.services import claude_agent, copper_service, research
-from app.services import copper_writer
+from app.services import copper_writer, llm_breaker
 from app.services.events import EVENT_ASSESSED, EVENT_AWAITING_DECK, log_event
 from app.tasks.celery_app import celery
 
@@ -153,6 +153,30 @@ def _get_last_assessment_error(lead_id: str) -> str | None:
     return row[0] if row else None
 
 
+def _park_for_llm_outage(lead_id: str, reason: str) -> None:
+    """DeepSeek went account-wide unavailable mid-run (402 no balance / 401 bad
+    key, see llm_breaker). Nothing is wrong with the lead, so don't fail it or
+    burn its attempt: put it back to 'pending' with the attempt refunded and
+    the reason recorded. reap_stuck_leads re-queues pending leads, and those
+    tasks park instantly until the breaker's probe succeeds."""
+    from sqlalchemy import create_engine
+    from app.config import settings
+
+    url, connect_args = copper_writer._psycopg2_url_and_connect_args(settings.database_url)
+    engine = create_engine(url, connect_args=connect_args)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE leads SET status='pending', "
+                "assessment_attempts=GREATEST(assessment_attempts - 1, 0), "
+                "last_assessment_error=:err, last_assessment_error_at=now() "
+                "WHERE id=:lid AND status IN ('processing','pending')"
+            ),
+            {"lid": lead_id, "err": f"parked: {reason}"[:MAX_ERROR_CHARS]},
+        )
+    print(f"[assess_lead] parked lead {lead_id} (LLM unavailable): {reason}")
+
+
 def _increment_attempts(lead_id: str) -> int:
     """Sync DB write: atomically bump leads.assessment_attempts and return the
     new count. Called at the very start of every task attempt -- including a
@@ -188,6 +212,14 @@ def _increment_attempts(lead_id: str) -> int:
     time_limit=300,
 )
 def assess_lead_task(self, lead_id: str) -> dict:
+    # DeepSeek is down account-wide (llm_breaker): do no work and spend no
+    # attempt -- the lead is untouched and gets picked up again once the
+    # breaker's probe succeeds.
+    paused = llm_breaker.open_reason()
+    if paused:
+        print(f"[assess_lead] lead {lead_id} not assessed, LLM paused: {paused}")
+        return {"lead_id": lead_id, "status": "parked_llm_unavailable", "reason": paused}
+
     attempts = _increment_attempts(lead_id)
     if attempts > MAX_ASSESS_ATTEMPTS:
         cap_message = f"exceeded {MAX_ASSESS_ATTEMPTS} assessment attempts (attempt #{attempts})"
@@ -211,6 +243,9 @@ def assess_lead_task(self, lead_id: str) -> dict:
         print(f"[assess_lead] lead {lead_id} soft time limit exceeded:\n{traceback.format_exc()}")
         _mark_failed(lead_id, error, attempt=attempts)
         return {"lead_id": lead_id, "status": "failed", "error": "soft time limit exceeded"}
+    except llm_breaker.LLMUnavailable as exc:
+        _park_for_llm_outage(lead_id, str(exc))
+        return {"lead_id": lead_id, "status": "parked_llm_unavailable", "reason": str(exc)}
     except MaxRetriesExceededError as exc:
         error = _format_error(exc)
         print(f"[assess_lead] lead {lead_id} max retries exceeded:\n{traceback.format_exc()}")

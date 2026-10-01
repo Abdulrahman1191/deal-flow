@@ -45,6 +45,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import CelerySessionLocal
 from app.models.lead import Lead
+from app.services import llm_breaker
 from app.tasks.assess_lead import assess_lead_task
 from app.tasks.celery_app import celery
 
@@ -100,6 +101,12 @@ async def _run() -> dict:
 
 @celery.task(bind=True, max_retries=2, default_retry_delay=120)
 def redrive_failed_assessments_task(self) -> dict:
+    # Each redrive spends one of a lead's assessment_failed_max_redrives; while
+    # DeepSeek is down account-wide the assessment can't succeed, so wait.
+    paused = llm_breaker.open_reason()
+    if paused:
+        print(f"[redrive_failed_assessments] skipped, LLM paused: {paused}")
+        return {"skipped": "llm_unavailable", "reason": paused}
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:

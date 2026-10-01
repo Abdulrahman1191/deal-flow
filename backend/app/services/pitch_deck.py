@@ -421,17 +421,24 @@ def verify_match_candidates(
     Returns the single lead the deck content confirms. Never guesses: if zero
     or 2+ candidates verify (or a verification call errors), returns None --
     attaching to the wrong lead is worse than leaving the file unmatched.
+    Raises LLMUnavailable when DeepSeek is down account-wide, so callers can
+    stop verifying instead of retrying every candidate.
     """
     if not deck_text or not candidates:
         return None
 
     from app.services.claude_agent import verify_pitch_deck_match
+    from app.services.llm_breaker import LLMUnavailable
 
     verified: list[Lead] = []
     for candidate in candidates:
         context = _company_context(candidate.lead)
         try:
             is_match = verify_pitch_deck_match(candidate.company_name, context, deck_text)
+        except LLMUnavailable:
+            # Account-wide (no balance / bad key): every other candidate would
+            # fail identically. Let the sweep stop verifying, don't walk on.
+            raise
         except Exception as exc:
             print(f"[pitch_deck] deck verification failed for {candidate.company_name!r}: {exc!r}")
             continue

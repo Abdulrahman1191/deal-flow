@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     # --- Storage ---
     database_url: str                    # injected by platform/Khalid
     redis_url: str = "redis://redis:6379/0"
+    # After DeepSeek answers 402 (no balance) or 401 (bad key), pause every
+    # DeepSeek call fleet-wide for this long before probing again
+    # (app/services/llm_breaker.py).
+    llm_outage_pause_seconds: int = 900
 
     # --- Outbound email (SES or SendGrid via SMTP) ---
     # Both providers expose SMTP, so one generic config works for either.
