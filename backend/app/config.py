@@ -94,6 +94,14 @@ class Settings(BaseSettings):
     # --- Storage ---
     database_url: str                    # injected by platform/Khalid
     redis_url: str = "redis://redis:6379/0"
+    # Caller authentication beyond the platform proxy (app/services/auth.py
+    # caller_gate). DEALFLOW_SERVICE_TOKEN: shared with Reem; a direct call
+    # carrying it may assert X-Auth-Email, on SERVICE_ROUTES only.
+    # RAED_PROXY_SECRET: the header value the platform proxy adds to every
+    # proxied request; when set, X-Auth-Email is only trusted alongside it
+    # (or a valid service token). Both empty = previous behaviour.
+    dealflow_service_token: str = ""
+    raed_proxy_secret: str = ""
     # After DeepSeek answers 402 (no balance) or 401 (bad key), pause every
     # DeepSeek call fleet-wide for this long before probing again
     # (app/services/llm_breaker.py).

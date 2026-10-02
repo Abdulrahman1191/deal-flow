@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -40,6 +41,59 @@ from app.models.user import User
 _LOCAL_DEV = os.getenv("ENV", "prod").lower() == "dev"
 
 logger = logging.getLogger(__name__)
+
+
+_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+# The only (method, path) pairs a service-token caller (Reem) may use. Ids are
+# UUID-only so /leads/export, /leads/orphans, /leads/failed-summary etc. never
+# match /leads/{id}. Anything that queues founder email or Copper writes
+# (/approve, /send, /mark-sent, /bulk-archive, ...) is deliberately absent.
+SERVICE_ROUTES = (
+    ("GET", re.compile(r"^/api/v1/leads$")),
+    ("GET", re.compile(rf"^/api/v1/leads/{_UUID}$")),
+    ("GET", re.compile(rf"^/api/v1/assessments/{_UUID}$")),
+    ("POST", re.compile(rf"^/api/v1/assessments/{_UUID}/rate$")),
+)
+SERVICE_TOKEN_HEADER = "X-Service-Token"
+PROXY_SECRET_HEADER = "X-Raed-Proxy"
+SERVICE_EMAIL_DOMAIN = "@raed.vc"
+
+
+def _matches(secret: str, presented: Optional[str]) -> bool:
+    return bool(secret) and presented is not None and hmac.compare_digest(
+        presented.encode(), secret.encode()
+    )
+
+
+def caller_gate(request: Request) -> Optional[tuple[int, str]]:
+    """Decide whether a request may assert X-Auth-Email. Returns None to let
+    it through, or (status, detail) to reject it before any route runs.
+
+    X-Auth-Email used to be trusted from anything on the raed_platform
+    network, i.e. every analyst prototype could act as any partner. Now:
+    - X-Service-Token present: must equal DEALFLOW_SERVICE_TOKEN (401), the
+      route must be in SERVICE_ROUTES (403), and the asserted X-Auth-Email
+      must be an @raed.vc address (403).
+    - Otherwise, when RAED_PROXY_SECRET is set, a request carrying
+      X-Auth-Email must also carry the proxy's X-Raed-Proxy secret (401).
+    Requests without X-Auth-Email (Copper ingest, health) are unaffected; they
+    authenticate on their own or need no identity."""
+    token = request.headers.get(SERVICE_TOKEN_HEADER)
+    if token is not None:
+        if not _matches(settings.dealflow_service_token, token):
+            return 401, "Invalid service token"
+        method, path = request.method.upper(), request.url.path
+        if not any(m == method and rx.match(path) for m, rx in SERVICE_ROUTES):
+            return 403, f"Service token is not allowed on {method} {path}"
+        email = (request.headers.get("X-Auth-Email") or "").strip().lower()
+        if not email.endswith(SERVICE_EMAIL_DOMAIN) or email == SERVICE_EMAIL_DOMAIN:
+            return 403, "Service calls must act as an @raed.vc user (X-Auth-Email)"
+        return None
+
+    if settings.raed_proxy_secret and request.headers.get("X-Auth-Email"):
+        if not _matches(settings.raed_proxy_secret, request.headers.get(PROXY_SECRET_HEADER)):
+            return 401, "X-Auth-Email is only accepted from the platform proxy or with a service token"
+    return None
 
 
 def _extract_email(request: Request) -> Optional[str]:
@@ -82,8 +136,9 @@ async def get_current_user(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is deactivated")
         return user
 
-    # First-contact: auto-create a user row. We trust the platform proxy not
-    # to forge X-Auth-Email, so a brand-new email = a brand-new Raed teammate.
+    # First-contact: auto-create a user row. caller_gate (app/main.py) has
+    # already checked who may assert X-Auth-Email, so a brand-new email = a
+    # brand-new Raed teammate (or Reem's QA seat).
     user = User(
         email=email,
         # The User model still has hashed_password as nullable=False for

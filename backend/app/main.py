@@ -52,6 +52,20 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def caller_gate(request: Request, call_next):
+    """Reject forged identity before any route runs (see auth.caller_gate).
+    Registered before security_headers so that one stays outermost and its
+    headers land on these rejections too."""
+    from app.services.auth import caller_gate as _decide
+
+    decision = _decide(request)
+    if decision is not None:
+        status_code, detail = decision
+        return JSONResponse(status_code=status_code, content={"detail": detail})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def security_headers(request: Request, call_next):
     """Standard response-hardening headers (SECURITY_AUDIT.md F8). The platform
     proxy terminates TLS in front of us, but these cost nothing to set here too
