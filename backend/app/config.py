@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     mail_from: str = ""
     mail_from_name: str = "Raed Ventures"
+    # How many seconds apart POST /leads/bulk-send-rejection spaces each
+    # lead's send (issue #205): each lead is its own Celery task, dispatched
+    # with an increasing countdown of index * this value, rather than firing
+    # the whole batch at once. Gmail's daily send cap and spam heuristics both
+    # penalize a burst from a single address.
+    bulk_rejection_send_interval_seconds: float = 2.0
 
     # --- Google Drive (pitch decks) ---
     # The Drive folder containing the lead pitch decks. We don't need Google

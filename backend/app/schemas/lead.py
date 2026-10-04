@@ -147,3 +147,59 @@ class BulkReassignResult(BaseModel):
     moved: int
     by_target: dict[str, int]
     failed: List[BulkReassignFailure]
+
+
+class BulkSendRejectionPreviewRequest(BaseModel):
+    lead_ids: List[str]
+
+
+class BulkSendRejectionPreviewItem(BaseModel):
+    lead_id: str
+    company_name: Optional[str] = None
+    recipient_email: Optional[str] = None
+    draft_subject: Optional[str] = None
+    draft_excerpt: Optional[str] = None
+    eligible: bool
+    reason: Optional[str] = None
+
+
+class BulkSendRejectionPreviewResult(BaseModel):
+    eligible_count: int
+    items: List[BulkSendRejectionPreviewItem]
+
+
+class BulkSendRejectionRequest(BaseModel):
+    lead_ids: List[str]
+    # Must equal the preview's eligible_count -- a cheap guard against the
+    # board shifting (or the preview going stale) between preview and send
+    # (409 on mismatch, nothing sent).
+    confirm_count: int
+
+
+class BulkSendRejectionSkipped(BaseModel):
+    lead_id: str
+    reason: str
+
+
+class BulkSendRejectionResult(BaseModel):
+    batch_id: uuid.UUID
+    queued: int
+    skipped: List[BulkSendRejectionSkipped]
+
+
+class BulkSendRejectionBatchItemOut(BaseModel):
+    lead_id: str
+    company_name: Optional[str] = None
+    status: str
+    reason: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class BulkSendRejectionBatchStatus(BaseModel):
+    batch_id: uuid.UUID
+    sent: int
+    failed: int
+    skipped: int
+    queued: int
+    items: List[BulkSendRejectionBatchItemOut]

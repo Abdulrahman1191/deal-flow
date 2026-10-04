@@ -8,7 +8,7 @@ celery = Celery(
     "raedventures",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox", "app.tasks.bulk_archive_writeback", "app.tasks.promote_awaiting_deck", "app.tasks.redrive_failed_assessments"],
+    include=["app.tasks.assess_lead", "app.tasks.generate_briefing", "app.tasks.sync_copper", "app.tasks.drain_outbox", "app.tasks.dedupe_leads", "app.tasks.sync_pitch_decks", "app.tasks.reap_stuck_leads", "app.tasks.reconcile_ownership", "app.tasks.redrive_outbox", "app.tasks.bulk_archive_writeback", "app.tasks.promote_awaiting_deck", "app.tasks.redrive_failed_assessments", "app.tasks.send_bulk_rejection"],
 )
 
 celery.conf.update(
@@ -38,6 +38,11 @@ celery.conf.update(
         # selected lead (issue #141) -- routed with the other AI work so a large
         # batch can't crowd out the lightweight Copper sync/drain tasks below.
         "app.tasks.bulk_archive_writeback.*": {"queue": "heavy"},
+        # Per-lead bulk-rejection send (issue #205) -- like bulk-archive's
+        # write-back, each task calls the unqualification-reason LLM via
+        # _finalize_sent, so it's routed with the other AI work rather than
+        # the lightweight CRM plumbing below.
+        "app.tasks.send_bulk_rejection.*": {"queue": "heavy"},
         "app.tasks.sync_copper.*": {"queue": "default"},
         "app.tasks.promote_awaiting_deck.*": {"queue": "default"},
         "app.tasks.drain_outbox.*": {"queue": "default"},
