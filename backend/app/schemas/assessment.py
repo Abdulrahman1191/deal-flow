@@ -22,6 +22,13 @@ class AssessmentOut(BaseModel):
     # objects/test doubles built before this column existed (issue #150)
     # don't need updating just to satisfy response serialization.
     draft_bucket: Optional[str] = None
+    # Computed, not stored (issue #177) -- see app.services.language_audit.
+    # Default False so the field never breaks serialization of a card object
+    # the router didn't explicitly compute it for (e.g. a nested read
+    # elsewhere); every /assessments/* endpoint that returns a card sets the
+    # real values before returning.
+    language_mismatch: bool = False
+    draft_missing: bool = False
     research_sources: Optional[List]
     assessed_without_deck: bool
     user_override: Optional[str]
