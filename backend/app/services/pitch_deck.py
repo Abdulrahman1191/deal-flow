@@ -482,7 +482,11 @@ def _company_context(lead: Lead) -> str:
 
 
 def verify_match_candidates(
-    candidates: list[MatchCandidate], deck_text: str
+    candidates: list[MatchCandidate],
+    deck_text: str,
+    drive_file_id: Optional[str] = None,
+    *,
+    force: bool = False,
 ) -> Optional[Lead]:
     """Resolve a near-miss/ambiguous filename match against the deck's content.
 
@@ -493,6 +497,15 @@ def verify_match_candidates(
     LLM is invoked in the matcher -- the high-confidence exact/>=MATCH_THRESHOLD
     path in find_lead_match never reaches here, so that path stays free.
 
+    `drive_file_id` (issue #192) enables the verdict cache in
+    app/services/deck_verification_cache.py, keyed on (drive_file_id,
+    candidate lead id): a cache hit skips the LLM call entirely. Omitting it
+    (the default) disables caching -- every call re-verifies, exactly as
+    before this feature existed; callers that don't have a stable Drive file
+    id (or tests exercising the LLM path directly) rely on this. `force=True`
+    bypasses a cache hit (but still refreshes the cache with the fresh
+    verdict) for a caller that explicitly wants a real re-check.
+
     Returns the single lead the deck content confirms. Never guesses: if zero
     or 2+ candidates verify (or a verification call errors), returns None --
     attaching to the wrong lead is worse than leaving the file unmatched.
@@ -502,15 +515,27 @@ def verify_match_candidates(
     if not deck_text or not candidates:
         return None
 
+    from app.services import deck_verification_cache
     from app.services.claude_agent import verify_pitch_deck_match
     from app.services.llm_breaker import LLMUnavailable
 
+    text_hash = deck_verification_cache.deck_text_hash(deck_text)
+
     verified: list[Lead] = []
     for candidate in candidates:
+        lead_id = str(candidate.lead.id)
+
+        if drive_file_id and not force:
+            cached = deck_verification_cache.get(drive_file_id, lead_id, text_hash)
+            if cached is not None:
+                if cached:
+                    verified.append(candidate.lead)
+                continue
+
         context = _company_context(candidate.lead)
         try:
             is_match = verify_pitch_deck_match(
-                candidate.company_name, context, deck_text, lead_id=str(candidate.lead.id)
+                candidate.company_name, context, deck_text, lead_id=lead_id
             )
         except LLMUnavailable:
             # Account-wide (no balance / bad key): every other candidate would
@@ -519,6 +544,10 @@ def verify_match_candidates(
         except Exception as exc:
             print(f"[pitch_deck] deck verification failed for {candidate.company_name!r}: {exc!r}")
             continue
+
+        if drive_file_id:
+            deck_verification_cache.put(drive_file_id, lead_id, text_hash, is_match)
+
         if is_match:
             verified.append(candidate.lead)
 

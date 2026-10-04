@@ -6,8 +6,9 @@ from app.models.event import LeadEvent
 from app.models.user import User
 from app.models.processed_drive_file import ProcessedDriveFile
 from app.models.llm_usage import LLMUsage
+from app.models.deck_verification_cache import DeckVerificationCache
 
 __all__ = [
     "Lead", "AssessmentCard", "DailyBriefing", "LeadEvent", "User",
-    "ProcessedDriveFile", "LLMUsage",
+    "ProcessedDriveFile", "LLMUsage", "DeckVerificationCache",
 ]

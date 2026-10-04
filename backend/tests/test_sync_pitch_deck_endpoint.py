@@ -206,6 +206,44 @@ def test_already_attached_short_circuits_without_touching_drive(monkeypatch):
     assert "already attached" in result["reason"]
 
 
+def test_force_rechecks_deck_verification_despite_cache_hit(monkeypatch):
+    """issue #209 fix-round-1: `force` must reach verify_match_candidates, not
+    just the "already attached" guard above it -- otherwise a forced re-fetch
+    after a partner corrects the lead's Copper description silently serves a
+    30-day-stale cached verdict instead of actually re-checking it."""
+    from app.services import claude_agent
+    from tests.test_deck_verification_cache import _patch_engine
+
+    monkeypatch.setattr(settings, "google_service_account_json", '{"fake": "creds"}')
+    monkeypatch.setattr(spd, "_drive_service", lambda: object())
+    monkeypatch.setattr(
+        spd,
+        "_list_pdfs_in_folder",
+        # "Ailoo Group" vs lead "Ailoo" scores between the fuzzy floor and the
+        # high-confidence threshold -- lands in needs_verification, exactly
+        # the near-miss tier verify_match_candidates resolves.
+        lambda service, folder_id: [{"id": "file789", "name": "Ailoo Group.pdf"}],
+    )
+    monkeypatch.setattr(spd, "_download_and_extract", lambda service, drive_file: "deck text about Ailoo")
+    _patch_engine(monkeypatch)
+
+    calls: list = []
+    monkeypatch.setattr(claude_agent, "verify_pitch_deck_match", lambda *a, **k: calls.append(1) or True)
+
+    queued = []
+    monkeypatch.setattr(assess_lead_task, "delay", lambda lead_id: queued.append(lead_id))
+
+    lead = _fake_lead(company_name="Ailoo")
+
+    first = asyncio.run(spd.sync_lead_pitch_deck(_FakeSession(has_card=False), lead))
+    assert first["attached"] is True
+    assert len(calls) == 1  # verdict cached under (file789, lead.id, text-hash)
+
+    second = asyncio.run(spd.sync_lead_pitch_deck(_FakeSession(has_card=False), lead, force=True))
+    assert second["attached"] is True
+    assert len(calls) == 2  # force must bypass the cache hit, not just the idempotency guard
+
+
 def test_force_bypasses_idempotency_guard(monkeypatch):
     monkeypatch.setattr(settings, "google_service_account_json", '{"fake": "creds"}')
     monkeypatch.setattr(spd, "_drive_service", lambda: object())
