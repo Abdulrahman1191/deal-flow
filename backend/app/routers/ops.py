@@ -30,18 +30,24 @@ assessment data -- only queue names, counts and task timestamps. The whole
 point is that an incident should be visible without SSH access to the prod
 host, and ADMIN_EMAILS is a two-person list. Owner-gate it if that changes.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.models.user import User
 from app.services import queue_stats, task_heartbeat
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, is_owner
 from app.tasks.celery_app import celery
 
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+# Default window for GET /ops/llm-usage when no ?days= is given.
+DEFAULT_LLM_USAGE_DAYS = 7
 
 # A periodic task is called stale once it has missed roughly two turns. One
 # missed turn is normal here: the workers run --pool=solo, so a 30-minute sweep
@@ -253,4 +259,73 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
         queues=queues,
         unacked=queue_stats.unacked_count(),
         tasks=tasks,
+    )
+
+
+class LLMUsageTotalsOut(BaseModel):
+    calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class LLMUsageByPurposeOut(LLMUsageTotalsOut):
+    purpose: str
+
+
+class LLMUsageOut(BaseModel):
+    days: int
+    totals: LLMUsageTotalsOut
+    by_purpose: list[LLMUsageByPurposeOut]
+
+
+@router.get("/llm-usage", response_model=LLMUsageOut)
+async def llm_usage(
+    days: int = DEFAULT_LLM_USAGE_DAYS,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> LLMUsageOut:
+    """What every DeepSeek call has cost over the last `days` days, and which
+    `purpose` (assess / verify_deck / draft_regen / unqual_reason /
+    linkedin_pick / briefing) is spending it (issue #191). Admin-only, same
+    ADMIN_EMAILS gate as /associates/performance -- this is per-lead-adjacent
+    spend data, not the queue-health facts /ops/queues exposes to everyone.
+    """
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    since = datetime.now(timezone.utc) - timedelta(days=max(days, 1))
+
+    totals_row = (await db.execute(
+        text(
+            "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), "
+            "COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0) "
+            "FROM llm_usage WHERE created_at >= :since"
+        ),
+        {"since": since},
+    )).first()
+
+    by_purpose_rows = (await db.execute(
+        text(
+            "SELECT purpose, COUNT(*), COALESCE(SUM(prompt_tokens), 0), "
+            "COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0) "
+            "FROM llm_usage WHERE created_at >= :since "
+            "GROUP BY purpose ORDER BY SUM(total_tokens) DESC"
+        ),
+        {"since": since},
+    )).all()
+
+    return LLMUsageOut(
+        days=days,
+        totals=LLMUsageTotalsOut(
+            calls=totals_row[0], prompt_tokens=totals_row[1],
+            completion_tokens=totals_row[2], total_tokens=totals_row[3],
+        ),
+        by_purpose=[
+            LLMUsageByPurposeOut(
+                purpose=r[0], calls=r[1], prompt_tokens=r[2],
+                completion_tokens=r[3], total_tokens=r[4],
+            )
+            for r in by_purpose_rows
+        ],
     )
