@@ -2,7 +2,27 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from app.services.claude_agent import normalize_signal
+
+
+def _sanitize_signal_list(items: Optional[List]) -> Optional[List]:
+    """Serializer-side backstop for `positive_signals`/`red_flags` (issue
+    #200): reads every entry through the one shared `normalize_signal`
+    helper, so the API never hands a client a malformed item even if
+    something bypassed claude_agent's own post-response normalisation (e.g.
+    an older row, a script-written test fixture). Well-formed strings and
+    {label, text} objects round-trip unchanged; a malformed entry degrades to
+    its plain-text form rather than raising.
+    """
+    if not items:
+        return items
+    sanitized = []
+    for item in items:
+        label, text = normalize_signal(item)
+        sanitized.append({"label": label, "text": text} if label else text)
+    return sanitized
 
 
 class AssessmentOut(BaseModel):
@@ -40,6 +60,11 @@ class AssessmentOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("positive_signals", "red_flags", mode="before")
+    @classmethod
+    def _normalize_signals(cls, v: Optional[List]) -> Optional[List]:
+        return _sanitize_signal_list(v)
 
 
 class DraftUpdate(BaseModel):
