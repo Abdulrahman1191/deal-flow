@@ -7,6 +7,7 @@ import Badge from "../shared/Badge";
 import ConfidenceBar from "../shared/ConfidenceBar";
 import PriorContactChip from "../shared/PriorContactChip";
 import ReasoningBox from "./ReasoningBox";
+import ScoringStrip from "./ScoringStrip";
 import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { useToast } from "../shared/Toast";
@@ -40,6 +41,7 @@ const bucketVariant: Record<string, "yes" | "maybe" | "reject"> = {
 
 export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
   // When set, a ReasonModal is open for this bucket. The user must save with
   // at least a tag or note, or cancel (no override at all).
@@ -343,8 +345,21 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
               <ConfidenceBar score={assessment.confidence_score} bucket={aiBucket ?? ""} />
             </div>
           </div>
+          {assessment.scoring_breakdown && (
+            <ScoringStrip breakdown={assessment.scoring_breakdown} />
+          )}
           {assessment.summary && (
-            <p className="text-xs text-muted-foreground leading-relaxed">{assessment.summary}</p>
+            <button
+              type="button"
+              onClick={() => setSummaryExpanded((v) => !v)}
+              className="text-xs text-muted-foreground leading-relaxed text-left w-full"
+              dir="auto"
+              data-testid="summary-toggle"
+            >
+              <span className={summaryExpanded ? undefined : "line-clamp-2"}>
+                {assessment.summary}
+              </span>
+            </button>
           )}
           <ReasoningBox
             positive_signals={assessment.positive_signals}
@@ -602,18 +617,6 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
               </p>
             )}
           </div>
-
-          {/* Scoring breakdown */}
-          {assessment?.scoring_breakdown && (
-            <div className="space-y-1.5">
-              {Object.entries(assessment.scoring_breakdown).map(([key, val]) => (
-                <div key={key} className="flex justify-between text-xs">
-                  <span className="text-muted-foreground capitalize">{key.replace(/_/g, " ")}</span>
-                  <span className="text-foreground">{val.score}</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>
