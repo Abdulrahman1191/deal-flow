@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
+from app.models.bulk_rejection import BulkRejectionBatchItem
 from app.models.event import LeadEvent
 from app.models.lead import Lead
 from app.models.user import User
@@ -29,6 +30,14 @@ from app.schemas.lead import (
     BulkReassignPreviewResult,
     BulkReassignRequest,
     BulkReassignResult,
+    BulkSendRejectionBatchItemOut,
+    BulkSendRejectionBatchStatus,
+    BulkSendRejectionPreviewItem,
+    BulkSendRejectionPreviewRequest,
+    BulkSendRejectionPreviewResult,
+    BulkSendRejectionRequest,
+    BulkSendRejectionResult,
+    BulkSendRejectionSkipped,
     LeadOut,
     LeadUpdate,
     LeadWithAssessment,
@@ -42,7 +51,7 @@ from app.services.auth import (
     is_owner,
     verify_webhook_signature,
 )
-from app.services import bulk_reassess, bulk_reassign, claude_agent, copper_writer, llm_breaker
+from app.services import bulk_reassess, bulk_reassign, bulk_rejection, claude_agent, copper_writer, llm_breaker
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
 from app.services.dedup import normalize_name
@@ -988,6 +997,172 @@ async def execute_bulk_reassign(
             failed.append({"lead_id": str(lead_id), "error": repr(exc)})
 
     return BulkReassignResult(batch_id=batch_id, moved=moved, by_target=by_target, failed=failed)
+
+
+@router.post("/bulk-send-rejection/preview", response_model=BulkSendRejectionPreviewResult)
+async def preview_bulk_send_rejection(
+    body: BulkSendRejectionPreviewRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Dry run for POST /leads/bulk-send-rejection (issue #205): the review
+    screen's data. For each submitted lead_id, returns the recipient address
+    and a draft excerpt the partner is about to commit to sending, plus an
+    `eligible` verdict with a `reason` when false -- nothing is sent and
+    nothing is written.
+
+    This is the first bulk action in the product that is irreversible and
+    outward-facing (a sent email can't be unsent), so unlike bulk-archive/
+    bulk-reassign this is gated behind is_owner() in addition to the usual
+    per-user lead scoping, and (like every other bulk mutation) refuses
+    outright while an admin is viewing another user's board via `view_as`.
+    """
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    block_if_impersonating(request, user)
+
+    items: list[BulkSendRejectionPreviewItem] = []
+    eligible_count = 0
+    for raw_lead_id in body.lead_ids:
+        lead, card, not_found_reason = await bulk_rejection.load_lead_and_card(db, raw_lead_id, user.email)
+        if lead is None:
+            items.append(BulkSendRejectionPreviewItem(
+                lead_id=str(raw_lead_id), eligible=False, reason=not_found_reason,
+            ))
+            continue
+
+        reason = bulk_rejection.eligibility_reason(lead, card)
+        items.append(BulkSendRejectionPreviewItem(
+            lead_id=str(lead.id),
+            company_name=lead.company_name,
+            recipient_email=bulk_rejection.recipient_email(lead),
+            draft_subject=card.draft_subject if card else None,
+            draft_excerpt=(card.draft_body[:200] if card and card.draft_body else None),
+            eligible=reason is None,
+            reason=reason,
+        ))
+        if reason is None:
+            eligible_count += 1
+
+    return BulkSendRejectionPreviewResult(eligible_count=eligible_count, items=items)
+
+
+@router.post("/bulk-send-rejection", response_model=BulkSendRejectionResult)
+async def send_bulk_rejection(
+    body: BulkSendRejectionRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Sends the already-drafted rejection email to every eligible lead in
+    `lead_ids` -- one separate, individually addressed email per founder,
+    never a shared/grouped message (issue #205).
+
+    Eligibility is re-checked here from scratch (never trusted from the
+    preview, which may be minutes old), and `confirm_count` must equal the
+    freshly-computed eligible count or this refuses with 409 and sends
+    nothing -- a cheap guard against the board changing between preview and
+    confirm.
+
+    The actual send happens in `send_bulk_rejection_task`, one Celery task per
+    lead, spaced `settings.bulk_rejection_send_interval_seconds` apart via an
+    increasing `countdown` rather than fired all at once -- so one lead's
+    SMTP failure can't abort the rest, and a large batch doesn't risk
+    submission@raed.vc's deliverability. Each task is independently idempotent
+    on AssessmentCard.sent_at, so retrying or re-running this same batch sends
+    nothing further for a lead already sent.
+    """
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    block_if_impersonating(request, user)
+
+    eligible: list[tuple[Lead, object]] = []
+    skipped: list[BulkSendRejectionSkipped] = []
+    for raw_lead_id in body.lead_ids:
+        lead, card, not_found_reason = await bulk_rejection.load_lead_and_card(db, raw_lead_id, user.email)
+        if lead is None:
+            skipped.append(BulkSendRejectionSkipped(lead_id=str(raw_lead_id), reason=not_found_reason))
+            continue
+        reason = bulk_rejection.eligibility_reason(lead, card)
+        if reason:
+            skipped.append(BulkSendRejectionSkipped(lead_id=str(lead.id), reason=reason))
+            continue
+        eligible.append((lead, card))
+
+    if len(eligible) != body.confirm_count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirm_count ({body.confirm_count}) no longer matches the current eligible count "
+                   f"({len(eligible)}) -- the board changed since preview. Re-run the preview.",
+        )
+
+    from app.tasks.send_bulk_rejection import send_bulk_rejection_task
+
+    batch_id = uuid.uuid4()
+    for lead, _card in eligible:
+        db.add(BulkRejectionBatchItem(
+            batch_id=batch_id, lead_id=lead.id, owner_email=user.email,
+            company_name=lead.company_name, status="queued",
+        ))
+    for s in skipped:
+        try:
+            skipped_lead_uuid = uuid.UUID(s.lead_id)
+        except ValueError:
+            continue
+        db.add(BulkRejectionBatchItem(
+            batch_id=batch_id, lead_id=skipped_lead_uuid, owner_email=user.email,
+            company_name=None, status="skipped", reason=s.reason,
+        ))
+    await db.commit()
+
+    interval = settings.bulk_rejection_send_interval_seconds
+    for index, (lead, _card) in enumerate(eligible):
+        send_bulk_rejection_task.apply_async(
+            args=[str(batch_id), str(lead.id), user.email],
+            countdown=index * interval,
+        )
+
+    return BulkSendRejectionResult(batch_id=batch_id, queued=len(eligible), skipped=skipped)
+
+
+@router.get("/bulk-send-rejection/{batch_id}", response_model=BulkSendRejectionBatchStatus)
+async def get_bulk_send_rejection_batch(
+    batch_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Sent/failed/skipped counts + per-lead reasons for one
+    POST /leads/bulk-send-rejection batch (issue #205), so a partial batch is
+    auditable rather than guessed at. Scoped to the batch's own owner -- one
+    partner can't read another's send results."""
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    result = await db.execute(
+        select(BulkRejectionBatchItem)
+        .where(BulkRejectionBatchItem.batch_id == batch_id, BulkRejectionBatchItem.owner_email == user.email)
+        .order_by(BulkRejectionBatchItem.created_at.asc())
+    )
+    rows = result.scalars().all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    counts = {"sent": 0, "failed": 0, "skipped": 0, "queued": 0}
+    for row in rows:
+        counts[row.status] = counts.get(row.status, 0) + 1
+
+    return BulkSendRejectionBatchStatus(
+        batch_id=batch_id,
+        sent=counts["sent"], failed=counts["failed"], skipped=counts["skipped"], queued=counts["queued"],
+        items=[
+            BulkSendRejectionBatchItemOut(
+                lead_id=str(row.lead_id), company_name=row.company_name,
+                status=row.status, reason=row.reason,
+            )
+            for row in rows
+        ],
+    )
 
 
 def _require_filter_or_ids(body: BulkReassessPreviewRequest) -> None:

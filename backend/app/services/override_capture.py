@@ -25,6 +25,10 @@ Trigger = Literal[
     "override", "re-override", "approve", "skip", "send",
     "confirm",    # thumbs-up: human agrees with the AI bucket
     "rate_down",  # thumbs-down: human disagrees with the AI bucket
+    # Bulk rejection send (issue #205) -- the per-lead rating gate doesn't
+    # apply to bulk dispositions (same as bulk-archive): selecting and
+    # confirming the batch *is* the human judgement.
+    "bulk_send_rejection",
 ]
 
 # Cap pitch deck text at the same length the LLM sees — keeps row size bounded
