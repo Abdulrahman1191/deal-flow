@@ -47,6 +47,43 @@ def _uid(n: int) -> uuid.UUID:
     return uuid.UUID(int=n)
 
 
+class _Lead:
+    """Mirrors enough of a real ORM instance's post-rollback expiration
+    behavior to catch the MissingGreenlet regression a plain SimpleNamespace
+    never could: `Session.rollback()` expires every object still in an
+    AsyncSession, and touching any attribute but the primary key (`id`,
+    served from the identity map, no reload needed) on an expired instance
+    outside of an `await` raises. `_expire()`/`_refresh()` simulate that;
+    `_FakeSession` below calls them to match `rollback()` and a per-id
+    `select` respectively."""
+
+    def __init__(self, **attrs):
+        object.__setattr__(self, "__dict__", dict(attrs))
+        object.__setattr__(self, "_expired", False)
+
+    def __getattribute__(self, name):
+        if name != "id" and not name.startswith("_") and object.__getattribute__(self, "_expired"):
+            raise RuntimeError(
+                "MissingGreenlet: synchronous attribute refresh on an expired "
+                "AsyncSession instance"
+            )
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name, value):
+        if name != "id" and not name.startswith("_") and object.__getattribute__(self, "_expired"):
+            raise RuntimeError(
+                "MissingGreenlet: synchronous attribute refresh on an expired "
+                "AsyncSession instance"
+            )
+        object.__setattr__(self, name, value)
+
+    def _expire(self):
+        object.__setattr__(self, "_expired", True)
+
+    def _refresh(self):
+        object.__setattr__(self, "_expired", False)
+
+
 def _lead(
     n: int,
     owner_email: str = FROM_OWNER,
@@ -60,7 +97,7 @@ def _lead(
     assessment = None
     if bucket is not None or user_override is not None or sent_at is not None:
         assessment = SimpleNamespace(bucket=bucket, user_override=user_override, sent_at=sent_at)
-    return SimpleNamespace(
+    return _Lead(
         id=_uid(n),
         owner_email=owner_email,
         status=status,
@@ -84,12 +121,31 @@ class _ScalarsResult:
     def all(self):
         return self._rows
 
+    def scalar_one_or_none(self):
+        return self._rows[0] if self._rows else None
+
+
+def _id_filter_value(query):
+    """Extracts the id being filtered on from a `select(Lead).where(Lead.id
+    == <id>)` query, or None for any other where-clause (e.g.
+    matching_leads's `Lead.owner_email == from_owner` full-table scan)."""
+    where = query.whereclause
+    left = getattr(where, "left", None)
+    if left is not None and getattr(left, "key", None) == "id":
+        return where.right.value
+    return None
+
 
 class _FakeSession:
     """Routes execute() by query target entity (mirrors test_duplicates.py):
     the leads list for `select(Lead)`, the users list for `select(User)`.
-    Records commit/rollback counts and added rows (LeadEvents) so tests can
-    assert write behavior without a live DB."""
+    A `select(Lead).where(Lead.id == ...)` -- the per-lead re-fetch
+    execute_bulk_reassign does inside its loop -- is served from the same
+    `_leads` list but filtered to that one row and `_refresh()`d, simulating
+    a real re-SELECT repopulating an expired instance. Records
+    commit/rollback counts and added rows (LeadEvents) so tests can assert
+    write behavior without a live DB; `rollback()` also `_expire()`s every
+    lead, mirroring Session.rollback()'s real behavior."""
 
     def __init__(self, leads=None, users=None):
         self._leads = list(leads or [])
@@ -101,6 +157,12 @@ class _FakeSession:
     async def execute(self, query):
         entity = query.column_descriptions[0]["entity"]
         if entity is Lead:
+            lead_id = _id_filter_value(query)
+            if lead_id is not None:
+                matches = [lead for lead in self._leads if lead.id == lead_id]
+                for lead in matches:
+                    lead._refresh()
+                return _ScalarsResult(matches)
             return _ScalarsResult(self._leads)
         assert entity is User
         return _ScalarsResult(self._users)
@@ -113,6 +175,8 @@ class _FakeSession:
 
     async def rollback(self):
         self.rollbacks += 1
+        for lead in self._leads:
+            lead._expire()
 
     async def refresh(self, obj):
         pass
@@ -433,6 +497,13 @@ def test_mid_batch_failure_leaves_rest_applied_and_names_failure(monkeypatch):
     assert len(body["failed"]) == 1
     assert body["failed"][0]["lead_id"] == str(bad.id)
     assert "db exploded" in body["failed"][0]["error"]
+    # bad's rollback expires every lead still in the session, good_1 and
+    # good_2 included, even though they'd already been committed -- same as
+    # a real Session.rollback(). A caller checking persisted state after the
+    # request would re-query rather than trust an in-process reference, so
+    # simulate that fresh read here before asserting on it.
+    good_1._refresh()
+    good_2._refresh()
     assert good_1.owner_email == "waleed@raed.vc"
     assert good_2.owner_email == "waleed@raed.vc"
     assert session.rollbacks == 1

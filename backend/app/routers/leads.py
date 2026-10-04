@@ -902,6 +902,16 @@ async def execute_bulk_reassign(
     endpoint out), and enqueues copper_writer.push_assignee through the
     outbox. Each lead runs in its own try/except with rollback, mirroring
     bulk_archive_leads above, so one failure can't abort the batch.
+
+    Each lead is re-fetched by id inside its own try, rather than reusing the
+    `Lead` objects `matching_leads()` already fetched: `Session.rollback()`
+    expires every object still in the session regardless of
+    `expire_on_commit=False` (that flag only governs `commit()`), so after one
+    lead's rollback, touching a stale attribute on the next -- or on the
+    `target_users` User objects resolved earlier -- would trigger a
+    synchronous refresh and raise MissingGreenlet on an AsyncSession. A fresh
+    `select` per lead sidesteps that; `copper_user_id` is snapshotted into a
+    plain dict up front for the same reason.
     """
     if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -929,13 +939,25 @@ async def execute_bulk_reassign(
     assignments = bulk_reassign.round_robin_assignments(leads, to_owners)
     batch_id = uuid.uuid4()
 
+    # Primary-key access on an expired ORM instance is safe (the identity map
+    # satisfies it without a reload); anything else isn't -- so only `.id` is
+    # read off the pre-loop `leads`/`target_users` objects below.
+    lead_ids = [lead.id for lead in leads]
+    target_copper_user_ids = {email: u.copper_user_id for email, u in target_users.items()}
+
     moved = 0
     by_target: dict[str, int] = {}
     failed: list[dict] = []
 
-    for lead in leads:
-        target_email = assignments[lead.id]
+    for lead_id in lead_ids:
+        target_email = assignments[lead_id]
         try:
+            result = await db.execute(select(Lead).where(Lead.id == lead_id))
+            lead = result.scalar_one_or_none()
+            if not lead:
+                failed.append({"lead_id": str(lead_id), "error": "not_found"})
+                continue
+
             from_email = lead.owner_email
             lead.owner_email = target_email
             await log_event(
@@ -951,13 +973,13 @@ async def execute_bulk_reassign(
             await db.commit()
 
             if lead.copper_id:
-                copper_writer.push_assignee(lead.copper_id, target_users[target_email].copper_user_id)
+                copper_writer.push_assignee(lead.copper_id, target_copper_user_ids[target_email])
 
             moved += 1
             by_target[target_email] = by_target.get(target_email, 0) + 1
         except Exception as exc:
             await db.rollback()
-            failed.append({"lead_id": str(lead.id), "error": repr(exc)})
+            failed.append({"lead_id": str(lead_id), "error": repr(exc)})
 
     return BulkReassignResult(batch_id=batch_id, moved=moved, by_target=by_target, failed=failed)
 
