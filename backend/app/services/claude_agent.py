@@ -239,6 +239,14 @@ Never reject a lead for missing data alone.
 Surface nuance. Flag what you don't know in `data_gaps`. Cite sources in
 `research_sources`. **When precedents inform a signal, name them.**
 
+For every entry in `positive_signals` and `red_flags`, give both a `label` and a
+`text` (see the exact shape below). `label` is a short noun phrase NAMING the point
+— e.g. "Founder identity unverified", "Moat unevidenced", "Instrument mismatch" —
+AT MOST 6 WORDS. It is never a full sentence, never a severity word ("High risk",
+"Strong signal"), and never a truncation of `text`: `label` names what the point is
+about, `text` is the full sentence that explains it (write `text` exactly as you
+would today).
+
 Return your output as a valid JSON object matching the AssessmentResult schema."""
 
 NO_DECK_GUIDANCE = """
@@ -424,8 +432,8 @@ Return a JSON object with this exact structure:
     "stage_alignment": {{ "score": <0-10>, "reasoning": "..." }},
     "model_fit":       {{ "score": <0-5>,  "reasoning": "..." }}
   }},
-  "positive_signals": ["..."],
-  "red_flags": ["..."],
+  "positive_signals": [{{"label": "noun phrase, max 6 words", "text": "full sentence, as today"}}],
+  "red_flags": [{{"label": "noun phrase, max 6 words", "text": "full sentence, as today"}}],
   "data_gaps": ["..."],
   "research_sources": ["url"],
   "draft_type": "rejection" | "meeting_request" | null,
@@ -642,6 +650,65 @@ def assess_lead(
     return result
 
 
+# Longest a model-supplied `label` may be (issue #200) -- a label is meant to
+# name the point, not restate it, so anything past this reads as a sentence
+# and gets trimmed back to a short phrase.
+MAX_SIGNAL_LABEL_WORDS = 6
+
+
+def normalize_signal(item: Any) -> tuple[Optional[str], str]:
+    """Reads one `positive_signals` / `red_flags` entry, which may be either a
+    plain string (today's shape, and forever a valid one) or an object
+    `{"label": ..., "text": ...}` (issue #200). Every consumer -- the API
+    serializer, exports, eval scripts -- should read signals through this one
+    function so a shape change can't quietly desync how different parts of
+    the app interpret a signal.
+
+    Returns `(label, text)`. `label` is None whenever there isn't a usable one
+    (plain string input, or an object with a missing/empty/non-string label)
+    -- callers fall back to `text` alone in that case, exactly like an
+    unlabelled signal reads today. Never raises: anything malformed degrades
+    to a best-effort `text` with no label rather than blowing up a caller.
+    """
+    if isinstance(item, str):
+        return None, item
+    if isinstance(item, dict):
+        text = item.get("text")
+        if not isinstance(text, str):
+            text = ""
+        label = item.get("label")
+        if isinstance(label, str):
+            label = label.strip()
+            if label:
+                words = label.split()
+                if len(words) > MAX_SIGNAL_LABEL_WORDS:
+                    label = " ".join(words[:MAX_SIGNAL_LABEL_WORDS])
+            else:
+                label = None
+        else:
+            label = None
+        return label, (text or label or "")
+    # Not a string or dict (None, number, list...) -- degrade rather than raise.
+    return None, ("" if item is None else str(item))
+
+
+def _normalize_signal_list(items: Optional[list]) -> list:
+    """Applies `normalize_signal` across a whole positive_signals/red_flags
+    list, re-emitting each entry as `{"label", "text"}` when it has a real
+    (now-trimmed) label, or as a plain string when it doesn't -- so
+    already-well-formed input round-trips unchanged and only oversized/empty
+    labels get fixed up. Called right after the model responds, same spot
+    `_enforce_bucket_consistency` already fixes up other output, so a
+    malformed label never reaches storage, let alone a raise."""
+    if not items:
+        return items or []
+    normalized = []
+    for item in items:
+        label, text = normalize_signal(item)
+        normalized.append({"label": label, "text": text} if label else text)
+    return normalized
+
+
 def _enforce_bucket_consistency(result: dict) -> None:
     """Light guardrails on the model's pattern-based decision.
 
@@ -659,6 +726,12 @@ def _enforce_bucket_consistency(result: dict) -> None:
     if bucket not in ("YES", "MAYBE", "REJECT"):
         bucket = "MAYBE"
     result["bucket"] = bucket
+
+    # Normalise each positive_signals/red_flags entry's optional {label, text}
+    # shape (issue #200) -- trims an over-long label, drops an empty/malformed
+    # one back to the plain-string form, never raises.
+    result["positive_signals"] = _normalize_signal_list(result.get("positive_signals"))
+    result["red_flags"] = _normalize_signal_list(result.get("red_flags"))
 
     # Draft type must match bucket
     if bucket == "YES":
@@ -850,11 +923,15 @@ def generate_unqualification_reason(
     failed AI call never blocks the archive/reject write itself.
     """
     labels = list(UNQUAL_REASON_OPTIONS.keys())
+    # red_flags entries may be plain strings or {label, text} objects (issue
+    # #200) -- read every one through normalize_signal rather than assuming a
+    # plain string, so a labelled flag doesn't crash this join.
+    flag_texts = [text for _, text in (normalize_signal(f) for f in (red_flags or [])) if text]
     prompt = UNQUAL_REASON_USER_TEMPLATE.format(
         company_name=company_name or "",
         bucket=bucket,
         summary=summary or "(no summary available)",
-        red_flags=", ".join(red_flags or []) or "(none noted)",
+        red_flags=", ".join(flag_texts) or "(none noted)",
     )
     response = _chat_completion(
         purpose="unqual_reason",

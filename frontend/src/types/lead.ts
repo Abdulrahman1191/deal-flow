@@ -22,14 +22,20 @@ export interface Lead {
   assessment?: Assessment;
 }
 
+// A positive_signals/red_flags entry is either a plain string (today's
+// shape -- ~1,000 existing cards) or an object carrying a model-chosen short
+// `label` alongside the full `text` (issue #200). Readers must accept both
+// shapes forever; see ReasoningBox's extractSignalLabel.
+export type Signal = string | { label?: string | null; text: string };
+
 export interface Assessment {
   id: string;
   lead_id: string;
   bucket: "YES" | "MAYBE" | "REJECT";
   confidence_score: number;
   summary: string | null;
-  positive_signals: string[] | null;
-  red_flags: string[] | null;
+  positive_signals: Signal[] | null;
+  red_flags: Signal[] | null;
   data_gaps: string[] | null;
   scoring_breakdown: Record<string, { score: number; reasoning: string }> | null;
   draft_subject: string | null;
