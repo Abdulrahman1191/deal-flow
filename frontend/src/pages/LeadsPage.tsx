@@ -296,9 +296,22 @@ export default function LeadsPage() {
             if (reassessQueued) {
               clear();
               setReassessQueued(false);
+              // The batch may still be running after the modal closes (Escape,
+              // backdrop, ×) — re-invalidate shortly after close so leads that
+              // finish just after close land on the board too, same pattern as
+              // the sync/bulk-archive follow-up invalidations above.
+              qc.invalidateQueries({ queryKey: ["leads"] });
+              setTimeout(() => qc.invalidateQueries({ queryKey: ["leads"] }), 4000);
+              setTimeout(() => qc.invalidateQueries({ queryKey: ["leads"] }), 12000);
             }
           }}
-          onQueued={() => setReassessQueued(true)}
+          onQueued={() => {
+            setReassessQueued(true);
+            // Selected leads are set to `pending` server-side as soon as the
+            // batch is queued — invalidate right away so the board doesn't
+            // sit stale from the moment of confirm.
+            qc.invalidateQueries({ queryKey: ["leads"] });
+          }}
         />
       )}
     </div>
