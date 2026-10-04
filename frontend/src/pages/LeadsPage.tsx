@@ -110,7 +110,13 @@ export default function LeadsPage() {
   // Same "don't clear until close" reasoning as reassess above — the batch
   // may still be running when the review modal is dismissed.
   const [sendRejectionQueued, setSendRejectionQueued] = useState(false);
-  const sendRejectionLeadIds = useMemo(() => Array.from(selected), [selected]);
+  // Snapshotted once, when the button is clicked — NOT a live useMemo on
+  // `selected` like reassess's. Sent leads leave the board (status flips to
+  // approved and the list endpoint hides it), so a live derivation would
+  // prune them from `selected` mid-batch, changing this array and resetting
+  // the modal's `leadIdsKey` effect — wiping the in-progress result screen.
+  // Reassessed leads stay on the board, so that modal can stay live-derived.
+  const [sendRejectionLeadIds, setSendRejectionLeadIds] = useState<string[]>([]);
 
   const bulkArchive = useMutation({
     mutationFn: () => bulkArchiveLeads(Array.from(selected)),
@@ -244,7 +250,10 @@ export default function LeadsPage() {
             onArchiveSelected={handleBulkArchive}
             archiving={bulkArchive.isPending}
             onReassessSelected={() => setShowReassessModal(true)}
-            onSendRejectionSelected={() => setShowSendRejectionModal(true)}
+            onSendRejectionSelected={() => {
+              setSendRejectionLeadIds(Array.from(selected));
+              setShowSendRejectionModal(true);
+            }}
             readOnly={readOnly}
           />
           {hasFilter && bucket("YES").length + bucket("MAYBE").length + bucket("REJECT").length === 0 ? (
