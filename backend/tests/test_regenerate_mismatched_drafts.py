@@ -224,10 +224,25 @@ class _FakeRowsResult:
         return self._rows
 
 
+class _FakeUsersResult:
+    def __init__(self, users):
+        self._users = users
+
+    def scalars(self):
+        return self._users
+
+
 class _FakeSession:
-    def __init__(self, rows):
+    """`run()` issues at most two `execute()` calls in a fixed order: the
+    (card, lead) rows query first, then (only when there's something
+    mismatched to regenerate) the owner-fields-by-email query -- so the
+    call count alone is enough to dispatch each fake result."""
+
+    def __init__(self, rows, users=None):
         self._rows = rows
+        self._users = users or []
         self.committed = 0
+        self.execute_calls = 0
 
     async def __aenter__(self):
         return self
@@ -236,16 +251,31 @@ class _FakeSession:
         return False
 
     async def execute(self, _query):
-        return _FakeRowsResult(self._rows)
+        self.execute_calls += 1
+        if self.execute_calls == 1:
+            return _FakeRowsResult(self._rows)
+        return _FakeUsersResult(self._users)
 
     async def commit(self):
         self.committed += 1
 
 
-def _stub_session(monkeypatch, rows):
-    session = _FakeSession(rows)
+def _stub_session(monkeypatch, rows, users=None):
+    session = _FakeSession(rows, users=users)
     monkeypatch.setattr(rmd, "AsyncSessionLocal", lambda: session)
     return session
+
+
+class _FakeUserDb:
+    """Minimal fake for _load_owner_fields_by_email's own unit tests --
+    unlike _FakeSession, it's exercised directly (no `async with`) and only
+    ever serves the one users query."""
+
+    def __init__(self, users):
+        self._users = users
+
+    async def execute(self, _query):
+        return _FakeUsersResult(self._users)
 
 
 def test_main_dry_run_makes_no_writes_and_no_regenerate_calls(monkeypatch, capsys):
@@ -328,3 +358,94 @@ def test_fetch_rows_returns_whatever_the_query_yields():
 
     rows = asyncio.run(rmd._fetch_rows(session, None))
     assert rows == [(card, lead)]
+
+
+# --- _load_owner_fields_by_email / _make_regenerate_fn (issue #177 fix-round-1) --
+
+
+def test_load_owner_fields_by_email_maps_known_owners_and_skips_unknown():
+    waleed = SimpleNamespace(
+        email="waleed@raed.vc", calendly_url="https://calendly.com/waleed-raed/30min", full_name="Waleed"
+    )
+    db = _FakeUserDb([waleed])
+
+    fields = asyncio.run(rmd._load_owner_fields_by_email(db, {"waleed@raed.vc", "uday@raed.vc", None}))
+
+    assert fields == {
+        "waleed@raed.vc": {"owner_calendly": "https://calendly.com/waleed-raed/30min", "owner_name": "Waleed"},
+    }
+
+
+def test_load_owner_fields_by_email_skips_the_query_when_no_emails():
+    db = _FakeUserDb([SimpleNamespace(email="waleed@raed.vc", calendly_url="x", full_name="Waleed")])
+
+    fields = asyncio.run(rmd._load_owner_fields_by_email(db, set()))
+
+    assert fields == {}
+
+
+def test_make_regenerate_fn_passes_the_matching_owners_fields(monkeypatch):
+    captured = {}
+
+    def fake_regenerate_draft_for_bucket(lead, bucket, summary, owner_fields):
+        captured["owner_fields"] = owner_fields
+        return {"draft_type": "meeting_request", "draft_subject": "x", "draft_body": "y"}
+
+    monkeypatch.setattr(rmd, "_regenerate_draft_for_bucket", fake_regenerate_draft_for_bucket)
+
+    lead = _lead()  # owner_email="waleed@raed.vc"
+    owner_fields_by_email = {
+        "waleed@raed.vc": {"owner_calendly": "https://calendly.com/waleed-raed/30min", "owner_name": "Waleed"},
+    }
+    regenerate_fn = rmd._make_regenerate_fn(owner_fields_by_email)
+    regenerate_fn(lead, "YES", "summary")
+
+    assert captured["owner_fields"] == {
+        "owner_calendly": "https://calendly.com/waleed-raed/30min", "owner_name": "Waleed",
+    }
+
+
+def test_make_regenerate_fn_falls_back_to_none_for_an_owner_with_no_user_row(monkeypatch):
+    captured = {}
+
+    def fake_regenerate_draft_for_bucket(lead, bucket, summary, owner_fields):
+        captured["owner_fields"] = owner_fields
+        return {"draft_type": "meeting_request", "draft_subject": "x", "draft_body": "y"}
+
+    monkeypatch.setattr(rmd, "_regenerate_draft_for_bucket", fake_regenerate_draft_for_bucket)
+
+    lead = _lead()  # owner_email="waleed@raed.vc", not present in the map below
+    regenerate_fn = rmd._make_regenerate_fn({})
+    regenerate_fn(lead, "YES", "summary")
+
+    assert captured["owner_fields"] == {"owner_calendly": None, "owner_name": None}
+
+
+def test_main_commit_regenerates_with_the_leads_owner_calendly_not_the_default(monkeypatch, capsys):
+    """Regression for the fix-round-1 bug: _default_regenerate_fn used to
+    call _regenerate_draft_for_bucket with owner_fields={}, which
+    claude_agent.regenerate_draft maps to DEFAULT_CALENDLY_URL --
+    abdulrahman's personal booking link -- even though every lead in this
+    script's target population belongs to waleed/uday/yomna."""
+    arabic_lead = _arabic_lead(lead_id=uuid.uuid4())  # owner_email="waleed@raed.vc"
+    mismatched_card = _card(arabic_lead.id, draft_body=ENGLISH_DRAFT_BODY)
+    waleed = SimpleNamespace(
+        email="waleed@raed.vc", calendly_url="https://calendly.com/waleed-raed/30min", full_name="Waleed"
+    )
+    _stub_session(monkeypatch, [(mismatched_card, arabic_lead)], users=[waleed])
+
+    captured = {}
+
+    def fake_regenerate(lead, bucket, summary, owner_fields):
+        captured["owner_fields"] = owner_fields
+        return {"draft_type": "meeting_request", "draft_subject": "موضوع", "draft_body": ARABIC_DRAFT_BODY}
+
+    monkeypatch.setattr(rmd, "_regenerate_draft_for_bucket", fake_regenerate)
+
+    exit_code = rmd.main(["--commit"])
+
+    assert exit_code == 0
+    assert captured["owner_fields"] == {
+        "owner_calendly": "https://calendly.com/waleed-raed/30min", "owner_name": "Waleed",
+    }
+    assert captured["owner_fields"]["owner_calendly"] != "https://calendly.com/abdulrahman-raed/30min"

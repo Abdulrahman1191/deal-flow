@@ -18,10 +18,12 @@ all (a MAYBE, or a backfill gap) is also skipped -- this script only
 rewrites an existing draft, it never manufactures one (see
 backfill_drafts.py for that).
 
-Regenerated drafts fall back to the default Raed Ventures Calendly link
-(claude_agent.DEFAULT_CALENDLY_URL) rather than looking up each lead's
-owner -- a one-off language fix doesn't need per-owner personalization, and
-skipping that lookup keeps this script to a single DB round-trip.
+Regenerated drafts carry the lead owner's own Calendly link/name (issue
+#84), resolved via one extra query for every distinct owner_email in the
+mismatched set -- the same personalization the /override and
+/regenerate-draft endpoints apply via _load_owner_draft_fields. An owner
+with no matching User row falls back to claude_agent.DEFAULT_CALENDLY_URL,
+same as those endpoints.
 
 Dry-run by default: prints the plan, makes NO writes and NO LLM calls (script
 detection is pure/deterministic). --commit regenerates the mismatched drafts.
@@ -52,6 +54,7 @@ from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
+from app.models.user import User
 from app.routers.assessments import _regenerate_draft_for_bucket
 from app.services import language_audit
 
@@ -123,8 +126,19 @@ def apply_regeneration(plan: list[dict], regenerate_fn: Callable) -> dict:
     return result
 
 
-def _default_regenerate_fn(lead, bucket: str, summary: str) -> dict:
-    return _regenerate_draft_for_bucket(lead, bucket, summary, {})
+def _make_regenerate_fn(owner_fields_by_email: dict) -> Callable:
+    """Builds a regenerate_fn closure that looks up each lead's own owner
+    fields (by Lead.owner_email) in the pre-loaded `owner_fields_by_email`
+    map, so every bucket in this batch gets its actual owner's Calendly
+    link/name rather than one shared default (issue #84 parity -- see
+    _load_owner_fields_by_email)."""
+    default_fields = {"owner_calendly": None, "owner_name": None}
+
+    def regenerate_fn(lead, bucket: str, summary: str) -> dict:
+        owner_fields = owner_fields_by_email.get(lead.owner_email, default_fields)
+        return _regenerate_draft_for_bucket(lead, bucket, summary, owner_fields)
+
+    return regenerate_fn
 
 
 # --- DB access -----------------------------------------------------------------
@@ -135,6 +149,25 @@ async def _fetch_rows(db, owner_email: Optional[str]) -> list:
         query = query.where(Lead.owner_email == owner_email)
     result = await db.execute(query.order_by(AssessmentCard.created_at.desc()))
     return result.all()
+
+
+async def _load_owner_fields_by_email(db, owner_emails: set) -> dict:
+    """Batched equivalent of assessments._load_owner_draft_fields: one query
+    for every distinct non-empty owner_email, keyed by email. An
+    owner_email with no matching User row is simply absent from the
+    result -- callers fall back to {"owner_calendly": None, "owner_name":
+    None}, which claude_agent.regenerate_draft maps to its own defaults
+    (same semantics as _load_owner_draft_fields)."""
+    owner_emails = {email for email in owner_emails if email}
+    fields_by_email: dict = {}
+    if owner_emails:
+        result = await db.execute(select(User).where(User.email.in_(owner_emails)))
+        for owner in result.scalars():
+            fields_by_email[owner.email] = {
+                "owner_calendly": owner.calendly_url,
+                "owner_name": owner.full_name,
+            }
+    return fields_by_email
 
 
 # --- Rendering ------------------------------------------------------------
@@ -174,8 +207,12 @@ async def run(owner_email: Optional[str], commit: bool) -> dict:
             print("\nNothing to regenerate.")
             return {"regenerated": [], "no_change": no_change_ids, "failed": []}
 
+        owner_fields_by_email = await _load_owner_fields_by_email(
+            db, {e["lead"].owner_email for e in mismatched}
+        )
+
         print(f"\nRegenerating {len(mismatched)} draft(s)...")
-        outcome = apply_regeneration(plan, _default_regenerate_fn)
+        outcome = apply_regeneration(plan, _make_regenerate_fn(owner_fields_by_email))
         await db.commit()
         for lead_id in outcome["regenerated"]:
             entry = next(e for e in plan if e["lead_id"] == lead_id)
