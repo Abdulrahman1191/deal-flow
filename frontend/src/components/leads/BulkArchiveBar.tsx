@@ -6,6 +6,9 @@ interface Props {
   onClear: () => void;
   onArchiveSelected: () => void;
   archiving: boolean;
+  /** Reassess selected (issue #204) — omitted entirely hides the button,
+   * e.g. on boards that don't offer bulk reassessment (AwaitingDeckPage). */
+  onReassessSelected?: () => void;
   /** Admin "view as" QA mode (issue #52) — disables selection + the bulk action. */
   readOnly?: boolean;
 }
@@ -18,6 +21,7 @@ export default function BulkArchiveBar({
   onClear,
   onArchiveSelected,
   archiving,
+  onReassessSelected,
   readOnly = false,
 }: Props) {
   if (total === 0) return null;
@@ -38,15 +42,26 @@ export default function BulkArchiveBar({
       {count > 0 && (
         <>
           <span className="text-xs text-muted-foreground">{count} selected</span>
-          <button
-            onClick={onArchiveSelected}
-            disabled={archiving || readOnly}
-            title={readOnly ? "Read-only while viewing another user's board" : undefined}
-            data-testid="bulk-archive-btn"
-            className="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {archiving ? "Archiving…" : `Archive selected (${count})`}
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {onReassessSelected && !readOnly && (
+              <button
+                onClick={onReassessSelected}
+                data-testid="bulk-reassess-btn"
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {`Reassess selected (${count})`}
+              </button>
+            )}
+            <button
+              onClick={onArchiveSelected}
+              disabled={archiving || readOnly}
+              title={readOnly ? "Read-only while viewing another user's board" : undefined}
+              data-testid="bulk-archive-btn"
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {archiving ? "Archiving…" : `Archive selected (${count})`}
+            </button>
+          </div>
         </>
       )}
     </div>
