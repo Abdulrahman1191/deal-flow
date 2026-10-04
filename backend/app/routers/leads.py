@@ -20,6 +20,10 @@ from app.routers.assessments import _require_rating
 from app.schemas.lead import (
     BulkArchiveRequest,
     BulkArchiveResult,
+    BulkReassignPreviewRequest,
+    BulkReassignPreviewResult,
+    BulkReassignRequest,
+    BulkReassignResult,
     LeadOut,
     LeadUpdate,
     LeadWithAssessment,
@@ -33,7 +37,7 @@ from app.services.auth import (
     is_owner,
     verify_webhook_signature,
 )
-from app.services import claude_agent, copper_writer
+from app.services import bulk_reassign, claude_agent, copper_writer
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
 from app.services.dedup import normalize_name
@@ -838,6 +842,146 @@ async def bulk_archive_leads(
             failed.append({"lead_id": str(raw_lead_id), "error": repr(exc)})
 
     return BulkArchiveResult(archived=archived, copper_enqueued=copper_enqueued, failed=failed)
+
+
+def _normalize_reassign_request(body) -> tuple[str, list[str]]:
+    from_owner = body.from_owner.strip().lower()
+    to_owners = [email.strip().lower() for email in body.to_owners]
+    return from_owner, to_owners
+
+
+@router.post("/reassign/preview", response_model=BulkReassignPreviewResult)
+async def preview_bulk_reassign(
+    body: BulkReassignPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only dry run for bulk reassignment (issue #194): shows how many
+    of `from_owner`'s leads would move, broken down by status/bucket/target,
+    without writing anything. The UI shows this before the operator confirms
+    via POST /leads/reassign -- its `count` must equal that call's
+    `confirm_count` exactly, so the two must share this same matching logic
+    (app.services.bulk_reassign.matching_leads)."""
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from_owner, to_owners = _normalize_reassign_request(body)
+    leads = await bulk_reassign.matching_leads(
+        db, from_owner, bucket=body.bucket, include_converted=body.include_converted,
+    )
+    assignments = bulk_reassign.round_robin_assignments(leads, to_owners)
+    breakdown = bulk_reassign.breakdown_counts(leads, assignments, to_owners)
+
+    return BulkReassignPreviewResult(count=len(leads), **breakdown)
+
+
+@router.post("/reassign", response_model=BulkReassignResult)
+async def execute_bulk_reassign(
+    body: BulkReassignRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Admin-only bulk reassignment (issue #194) -- moves every one of
+    `from_owner`'s matched leads to `to_owners`, round-robin, in one action.
+    Covers the out-of-office case: today the only paths are editing the
+    assignee per lead in Copper, or the single-lead
+    POST /duplicates/reassign -- neither usable for a hundred leads.
+
+    Refuses upfront (400, nothing written) if any target lacks a
+    copper_user_id: reconcile_ownership_task snaps owner_email back to
+    Copper's current assignee every 5 minutes, so a reassignment that can't
+    also be pushed to Copper would silently revert within 5 minutes and look
+    like data loss. Also refuses (409, nothing written) if `confirm_count`
+    doesn't match the current matching-lead count -- a cheap guard against
+    the board shifting between preview and execute.
+
+    Per lead: sets owner_email, logs a `reassigned` LeadEvent stamped with
+    the shared `batch_id` (so a mistaken run can be identified and reversed
+    by reassigning that batch back -- issue explicitly scopes an undo
+    endpoint out), and enqueues copper_writer.push_assignee through the
+    outbox. Each lead runs in its own try/except with rollback, mirroring
+    bulk_archive_leads above, so one failure can't abort the batch.
+
+    Each lead is re-fetched by id inside its own try, rather than reusing the
+    `Lead` objects `matching_leads()` already fetched: `Session.rollback()`
+    expires every object still in the session regardless of
+    `expire_on_commit=False` (that flag only governs `commit()`), so after one
+    lead's rollback, touching a stale attribute on the next -- or on the
+    `target_users` User objects resolved earlier -- would trigger a
+    synchronous refresh and raise MissingGreenlet on an AsyncSession. A fresh
+    `select` per lead sidesteps that; `copper_user_id` is snapshotted into a
+    plain dict up front for the same reason.
+    """
+    if not is_owner(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    block_if_impersonating(request, user)
+
+    from_owner, to_owners = _normalize_reassign_request(body)
+
+    target_users, missing = await bulk_reassign.resolve_targets(db, to_owners)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target(s) missing a Copper user id, refusing to reassign: {', '.join(missing)}",
+        )
+
+    leads = await bulk_reassign.matching_leads(
+        db, from_owner, bucket=body.bucket, include_converted=body.include_converted,
+    )
+    if len(leads) != body.confirm_count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirm_count ({body.confirm_count}) no longer matches the current count "
+                   f"({len(leads)}) -- the board changed since preview. Re-run the preview.",
+        )
+
+    assignments = bulk_reassign.round_robin_assignments(leads, to_owners)
+    batch_id = uuid.uuid4()
+
+    # Primary-key access on an expired ORM instance is safe (the identity map
+    # satisfies it without a reload); anything else isn't -- so only `.id` is
+    # read off the pre-loop `leads`/`target_users` objects below.
+    lead_ids = [lead.id for lead in leads]
+    target_copper_user_ids = {email: u.copper_user_id for email, u in target_users.items()}
+
+    moved = 0
+    by_target: dict[str, int] = {}
+    failed: list[dict] = []
+
+    for lead_id in lead_ids:
+        target_email = assignments[lead_id]
+        try:
+            result = await db.execute(select(Lead).where(Lead.id == lead_id))
+            lead = result.scalar_one_or_none()
+            if not lead:
+                failed.append({"lead_id": str(lead_id), "error": "not_found"})
+                continue
+
+            from_email = lead.owner_email
+            lead.owner_email = target_email
+            await log_event(
+                db, lead.id, EVENT_REASSIGNED,
+                {
+                    "from_owner": from_email,
+                    "to_owner": target_email,
+                    "source": "bulk_reassign",
+                    "by": user.email,
+                    "batch_id": str(batch_id),
+                },
+            )
+            await db.commit()
+
+            if lead.copper_id:
+                copper_writer.push_assignee(lead.copper_id, target_copper_user_ids[target_email])
+
+            moved += 1
+            by_target[target_email] = by_target.get(target_email, 0) + 1
+        except Exception as exc:
+            await db.rollback()
+            failed.append({"lead_id": str(lead_id), "error": repr(exc)})
+
+    return BulkReassignResult(batch_id=batch_id, moved=moved, by_target=by_target, failed=failed)
 
 
 @router.post("/{lead_id}/archive-no-reply")
