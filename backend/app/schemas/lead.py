@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 from pydantic import BaseModel, Field, computed_field
 from app.schemas.assessment import AssessmentOut
@@ -115,3 +115,35 @@ class PitchDeckSyncResult(BaseModel):
     garbled: bool = False
     reassessment_queued: bool = False
     reason: str
+
+
+class BulkReassignPreviewRequest(BaseModel):
+    from_owner: str
+    to_owners: List[str] = Field(min_length=1)
+    bucket: Optional[Literal["YES", "MAYBE", "REJECT"]] = None
+    include_converted: bool = False
+
+
+class BulkReassignRequest(BulkReassignPreviewRequest):
+    # Must equal the preview's `count` -- a cheap guard against the board
+    # shifting between preview and execute (409 on mismatch, nothing written).
+    confirm_count: int
+
+
+class BulkReassignPreviewResult(BaseModel):
+    count: int
+    by_status: dict[str, int]
+    by_bucket: dict[str, int]
+    by_target: dict[str, int]
+
+
+class BulkReassignFailure(BaseModel):
+    lead_id: str
+    error: str
+
+
+class BulkReassignResult(BaseModel):
+    batch_id: uuid.UUID
+    moved: int
+    by_target: dict[str, int]
+    failed: List[BulkReassignFailure]
