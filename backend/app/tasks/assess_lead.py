@@ -15,6 +15,7 @@ from app.models.assessment import AssessmentCard
 from app.models.user import User
 from app.services import claude_agent, copper_service, research
 from app.services import copper_writer, llm_breaker
+from app.services.bulk_reassess import compute_fingerprint
 from app.services.events import EVENT_ASSESSED, EVENT_AWAITING_DECK, log_event
 from app.tasks.celery_app import celery
 
@@ -310,6 +311,7 @@ async def write_no_context_maybe_placeholder(db, lead) -> dict:
         research_data=None,
         precedents_cited=[],
         assessed_without_deck=True,
+        input_fingerprint=compute_fingerprint(lead.company_name, lead.description, lead.pitch_deck_text, ""),
         user_override=None,
         user_override_at=None,
         approved_at=None,
@@ -507,6 +509,9 @@ async def _run(lead_id: str) -> dict:
             # and/or description only) -- issue #144 -- so partners know it's
             # lower-confidence and can attach a deck to refine it later.
             assessed_without_deck=not has_deck,
+            input_fingerprint=compute_fingerprint(
+                lead.company_name, lead.description, lead.pitch_deck_text, website_content
+            ),
             user_override=None,
             user_override_at=None,
             approved_at=None,

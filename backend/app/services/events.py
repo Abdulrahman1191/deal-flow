@@ -28,6 +28,11 @@ EVENT_ASSESSMENT_FAILED = "assessment_failed"
 # the `archived` event so it's auditable via GET /leads/orphans rather than
 # only a print() (issue #174).
 EVENT_COPPER_RECORD_VANISHED = "copper_record_vanished"
+# A lead was queued for a bulk re-assessment run (issue #203) -- payload
+# carries {batch_id, bucket_before} so GET /leads/bulk-reassess/{batch_id}
+# can later tell which leads belong to the run and whether each one's
+# effective bucket actually moved.
+EVENT_BULK_REASSESS_QUEUED = "bulk_reassess_queued"
 
 
 async def log_event(

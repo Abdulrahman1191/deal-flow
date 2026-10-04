@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     # purged by the nightly dedupe-leads sweep (app/tasks/dedupe_leads.py) so
     # the table doesn't grow unbounded.
     llm_usage_retention_days: int = 90
+    # Max leads a single POST /leads/bulk-reassess call may queue (issue
+    # #203). Queueing an unbounded batch into a single request is how a
+    # fat-fingered "reassess the whole board" would turn into hundreds of
+    # DeepSeek calls (~12k input tokens each) in one shot; split a bigger
+    # pile into multiple calls instead.
+    bulk_reassess_batch_cap: int = 250
 
     # --- Outbound email (SES or SendGrid via SMTP) ---
     # Both providers expose SMTP, so one generic config works for either.

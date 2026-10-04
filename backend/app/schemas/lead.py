@@ -147,3 +147,55 @@ class BulkReassignResult(BaseModel):
     moved: int
     by_target: dict[str, int]
     failed: List[BulkReassignFailure]
+
+
+class BulkReassessPreviewRequest(BaseModel):
+    # Either lead_ids OR the bucket/assessed_before filter -- lead_ids wins
+    # if both are somehow given. At least one of the three must be set.
+    lead_ids: Optional[List[str]] = None
+    bucket: Optional[Literal["YES", "MAYBE", "REJECT"]] = None
+    assessed_before: Optional[datetime] = None
+    # False (default): only leads whose inputs changed since their last card
+    # are queued. True: every matched lead is queued regardless -- the "the
+    # prompt changed, re-run everything" path.
+    force: bool = False
+
+
+class BulkReassessRequest(BulkReassessPreviewRequest):
+    # Must equal the preview's `matched` count -- same split-brain guard as
+    # BulkReassignRequest.confirm_count (409 on mismatch, nothing queued).
+    confirm_count: int
+
+
+class BulkReassessPreviewResult(BaseModel):
+    matched: int
+    changed: int
+    would_skip: int
+    in_flight: int
+    would_queue: int
+    breaker_open: bool
+    breaker_reason: Optional[str] = None
+
+
+class BulkReassessFailure(BaseModel):
+    lead_id: str
+    error: str
+
+
+class BulkReassessResult(BaseModel):
+    batch_id: uuid.UUID
+    matched: int
+    queued: int
+    skipped_unchanged: int
+    skipped_in_flight: int
+    failed: List[BulkReassessFailure]
+
+
+class BulkReassessProgress(BaseModel):
+    batch_id: uuid.UUID
+    queued: int
+    assessed: int
+    pending: int
+    failed: int
+    bucket_changed: int
+    bucket_unchanged: int
