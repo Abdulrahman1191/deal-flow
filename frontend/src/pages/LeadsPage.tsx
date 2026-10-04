@@ -8,6 +8,7 @@ import LeadBucket from "../components/leads/LeadBucket";
 import LeadCard from "../components/leads/LeadCard";
 import BulkArchiveBar from "../components/leads/BulkArchiveBar";
 import BulkReassessModal from "../components/leads/BulkReassessModal";
+import BulkSendRejectionModal from "../components/leads/BulkSendRejectionModal";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 import { useToast } from "../components/shared/Toast";
 import type { Lead } from "../types/lead";
@@ -104,6 +105,18 @@ export default function LeadsPage() {
   // lead_ids instead of re-previewing an empty selection.
   const [reassessQueued, setReassessQueued] = useState(false);
   const reassessLeadIds = useMemo(() => Array.from(selected), [selected]);
+
+  const [showSendRejectionModal, setShowSendRejectionModal] = useState(false);
+  // Same "don't clear until close" reasoning as reassess above — the batch
+  // may still be running when the review modal is dismissed.
+  const [sendRejectionQueued, setSendRejectionQueued] = useState(false);
+  // Snapshotted once, when the button is clicked — NOT a live useMemo on
+  // `selected` like reassess's. Sent leads leave the board (status flips to
+  // approved and the list endpoint hides it), so a live derivation would
+  // prune them from `selected` mid-batch, changing this array and resetting
+  // the modal's `leadIdsKey` effect — wiping the in-progress result screen.
+  // Reassessed leads stay on the board, so that modal can stay live-derived.
+  const [sendRejectionLeadIds, setSendRejectionLeadIds] = useState<string[]>([]);
 
   const bulkArchive = useMutation({
     mutationFn: () => bulkArchiveLeads(Array.from(selected)),
@@ -237,6 +250,10 @@ export default function LeadsPage() {
             onArchiveSelected={handleBulkArchive}
             archiving={bulkArchive.isPending}
             onReassessSelected={() => setShowReassessModal(true)}
+            onSendRejectionSelected={() => {
+              setSendRejectionLeadIds(Array.from(selected));
+              setShowSendRejectionModal(true);
+            }}
             readOnly={readOnly}
           />
           {hasFilter && bucket("YES").length + bucket("MAYBE").length + bucket("REJECT").length === 0 ? (
@@ -268,6 +285,9 @@ export default function LeadsPage() {
                 accent="bg-error"
                 selected={selected}
                 onToggleSelect={toggle}
+                onSelectAllInColumn={
+                  readOnly ? undefined : () => selectIds(bucket("REJECT").map((l) => l.id))
+                }
               />
             </div>
           )}
@@ -312,6 +332,37 @@ export default function LeadsPage() {
             // sit stale from the moment of confirm.
             qc.invalidateQueries({ queryKey: ["leads"] });
           }}
+        />
+      )}
+      {showSendRejectionModal && (
+        <BulkSendRejectionModal
+          leadIds={sendRejectionLeadIds}
+          onClose={() => {
+            setShowSendRejectionModal(false);
+            if (sendRejectionQueued) {
+              clear();
+              setSendRejectionQueued(false);
+              // The batch may still be sending after the modal closes
+              // (Escape, backdrop, ×) — re-invalidate shortly after close so
+              // leads that finish just after close land on the board too,
+              // same pattern as the sync/bulk-archive follow-up invalidations
+              // above.
+              qc.invalidateQueries({ queryKey: ["leads"] });
+              qc.invalidateQueries({ queryKey: ["archive"] });
+              qc.invalidateQueries({ queryKey: ["send-queue"] });
+              setTimeout(() => {
+                qc.invalidateQueries({ queryKey: ["leads"] });
+                qc.invalidateQueries({ queryKey: ["archive"] });
+                qc.invalidateQueries({ queryKey: ["send-queue"] });
+              }, 4000);
+              setTimeout(() => {
+                qc.invalidateQueries({ queryKey: ["leads"] });
+                qc.invalidateQueries({ queryKey: ["archive"] });
+                qc.invalidateQueries({ queryKey: ["send-queue"] });
+              }, 12000);
+            }
+          }}
+          onQueued={() => setSendRejectionQueued(true)}
         />
       )}
     </div>
