@@ -9,6 +9,10 @@ interface Props {
   /** Reassess selected (issue #204) — omitted entirely hides the button,
    * e.g. on boards that don't offer bulk reassessment (AwaitingDeckPage). */
   onReassessSelected?: () => void;
+  /** Send rejection emails (issue #206) — omitted entirely hides the button,
+   * e.g. on boards that don't offer the REJECT bulk-send flow. Opens the
+   * review screen; nothing is sent from this toolbar directly. */
+  onSendRejectionSelected?: () => void;
   /** Admin "view as" QA mode (issue #52) — disables selection + the bulk action. */
   readOnly?: boolean;
 }
@@ -22,6 +26,7 @@ export default function BulkArchiveBar({
   onArchiveSelected,
   archiving,
   onReassessSelected,
+  onSendRejectionSelected,
   readOnly = false,
 }: Props) {
   if (total === 0) return null;
@@ -61,6 +66,15 @@ export default function BulkArchiveBar({
             >
               {archiving ? "Archiving…" : `Archive selected (${count})`}
             </button>
+            {onSendRejectionSelected && !readOnly && (
+              <button
+                onClick={onSendRejectionSelected}
+                data-testid="bulk-send-rejection-btn"
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {`Send rejection emails (${count})`}
+              </button>
+            )}
           </div>
         </>
       )}
