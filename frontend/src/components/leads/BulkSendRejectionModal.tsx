@@ -69,6 +69,9 @@ export default function BulkSendRejectionModal({ leadIds, onClose, onQueued }: P
   // count (and the lead_ids) passed to the API.
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [execResult, setExecResult] = useState<BulkSendRejectionResult | null>(null);
+  // Set when a confirm attempt 409s because the board moved since the review
+  // was opened — shown back on the review step the partner gets bounced to.
+  const [staleReviewNotice, setStaleReviewNotice] = useState<string | null>(null);
   const invalidatedRef = useRef(false);
 
   const previewMutation = useMutation({
@@ -81,6 +84,7 @@ export default function BulkSendRejectionModal({ leadIds, onClose, onQueued }: P
     setStep("review");
     setExcludedIds(new Set());
     setExecResult(null);
+    setStaleReviewNotice(null);
     executeMutation.reset();
     previewMutation.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -113,9 +117,15 @@ export default function BulkSendRejectionModal({ leadIds, onClose, onQueued }: P
     onError: (err) => {
       // The board moved since the review was opened — don't let a stale
       // review back a second send attempt; the partner has to re-run it.
-      if (describeError(err).includes("re-run the review")) {
+      const message = describeError(err);
+      if (message.includes("re-run the review")) {
+        setStaleReviewNotice(message);
         setStep("review");
         previewMutation.mutate();
+        // Clear the mutation's own error state immediately so it can't
+        // reappear as a false "send failed" banner on the next, valid
+        // confirm screen — the notice above is now the source of truth.
+        executeMutation.reset();
       }
     },
   });
@@ -154,6 +164,10 @@ export default function BulkSendRejectionModal({ leadIds, onClose, onQueued }: P
             <p className="text-sm text-foreground">
               Review {leadIds.length} selected lead{leadIds.length === 1 ? "" : "s"} before sending.
             </p>
+
+            {staleReviewNotice && (
+              <div className="text-sm text-error bg-error/10 rounded-lg px-3 py-2">{staleReviewNotice}</div>
+            )}
 
             {previewMutation.isPending && (
               <p className="text-sm text-muted-foreground">Loading preview…</p>
@@ -244,7 +258,10 @@ export default function BulkSendRejectionModal({ leadIds, onClose, onQueued }: P
                 Cancel
               </button>
               <button
-                onClick={() => setStep("confirm")}
+                onClick={() => {
+                  setStaleReviewNotice(null);
+                  setStep("confirm");
+                }}
                 disabled={!preview || count === 0}
                 data-testid="rejection-review-continue-btn"
                 className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
