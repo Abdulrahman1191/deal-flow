@@ -7,6 +7,7 @@ import StatsRow from "../components/leads/StatsRow";
 import LeadBucket from "../components/leads/LeadBucket";
 import LeadCard from "../components/leads/LeadCard";
 import BulkArchiveBar from "../components/leads/BulkArchiveBar";
+import BulkReassessModal from "../components/leads/BulkReassessModal";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 import { useToast } from "../components/shared/Toast";
 import type { Lead } from "../types/lead";
@@ -96,7 +97,13 @@ export default function LeadsPage() {
   const hasFilter = !!search.trim() || !!stage;
 
   const selectableIds = useMemo(() => filtered.map((l) => l.id), [filtered]);
-  const { selected, toggle, selectAll, clear, allSelected } = useBulkSelection(selectableIds);
+  const { selected, toggle, selectAll, selectIds, clear, allSelected } = useBulkSelection(selectableIds);
+  const [showReassessModal, setShowReassessModal] = useState(false);
+  // Set once the batch is queued; selection is cleared on close rather than
+  // immediately, so the still-open modal keeps polling against the original
+  // lead_ids instead of re-previewing an empty selection.
+  const [reassessQueued, setReassessQueued] = useState(false);
+  const reassessLeadIds = useMemo(() => Array.from(selected), [selected]);
 
   const bulkArchive = useMutation({
     mutationFn: () => bulkArchiveLeads(Array.from(selected)),
@@ -229,6 +236,7 @@ export default function LeadsPage() {
             onClear={clear}
             onArchiveSelected={handleBulkArchive}
             archiving={bulkArchive.isPending}
+            onReassessSelected={() => setShowReassessModal(true)}
             readOnly={readOnly}
           />
           {hasFilter && bucket("YES").length + bucket("MAYBE").length + bucket("REJECT").length === 0 ? (
@@ -250,6 +258,9 @@ export default function LeadsPage() {
                 accent="bg-warning"
                 selected={selected}
                 onToggleSelect={toggle}
+                onSelectAllInColumn={
+                  readOnly ? undefined : () => selectIds(bucket("MAYBE").map((l) => l.id))
+                }
               />
               <LeadBucket
                 title="Reject"
@@ -276,6 +287,19 @@ export default function LeadsPage() {
             </div>
           )}
         </>
+      )}
+      {showReassessModal && (
+        <BulkReassessModal
+          leadIds={reassessLeadIds}
+          onClose={() => {
+            setShowReassessModal(false);
+            if (reassessQueued) {
+              clear();
+              setReassessQueued(false);
+            }
+          }}
+          onQueued={() => setReassessQueued(true)}
+        />
       )}
     </div>
   );

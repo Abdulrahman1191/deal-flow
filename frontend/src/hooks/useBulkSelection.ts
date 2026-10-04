@@ -31,7 +31,13 @@ export function useBulkSelection(ids: string[]) {
   const selectAll = useCallback(() => setSelected(new Set(ids)), [ids]);
   const clear = useCallback(() => setSelected(new Set()), []);
 
+  /** Add a specific subset to the current selection without disturbing the
+   * rest — e.g. "select all MAYBE" on top of whatever's already picked. */
+  const selectIds = useCallback((extra: string[]) => {
+    setSelected((prev) => new Set([...prev, ...extra]));
+  }, []);
+
   const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
 
-  return { selected, toggle, selectAll, clear, allSelected };
+  return { selected, toggle, selectAll, selectIds, clear, allSelected };
 }
