@@ -4,5 +4,6 @@ from app.models.assessment import AssessmentCard
 from app.models.briefing import DailyBriefing
 from app.models.event import LeadEvent
 from app.models.user import User
+from app.models.processed_drive_file import ProcessedDriveFile
 
-__all__ = ["Lead", "AssessmentCard", "DailyBriefing", "LeadEvent", "User"]
+__all__ = ["Lead", "AssessmentCard", "DailyBriefing", "LeadEvent", "User", "ProcessedDriveFile"]

@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -284,6 +285,56 @@ def _normalize_company_key(s: str) -> str:
     return " ".join(filtered) if filtered else normalized
 
 
+# --- Inbound-folder sender-domain signal (issue #189) -----------------------
+# The info@ intake agent names every file it saves "<sender domain> —
+# <original filename>.pdf". The em-dash separator (with surrounding spaces)
+# is distinctive enough that splitting on it is safe -- a real filename
+# containing " — " unrelated to the agent's convention would be a very odd
+# coincidence, and worst case just falls back to matching the full stem.
+_INBOUND_NAME_SEP = " — "
+_DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+
+
+def parse_inbound_filename(filename: str) -> tuple[Optional[str], str]:
+    """Split "<sender domain> — <original filename>.pdf" into (domain, rest).
+
+    Returns (None, filename) unchanged when the separator is absent or the
+    left-hand side doesn't look like a domain -- callers then fall back to
+    today's filename-only matching, exactly as the issue requires.
+    """
+    if _INBOUND_NAME_SEP in filename:
+        domain_part, _, rest = filename.partition(_INBOUND_NAME_SEP)
+        domain_part = domain_part.strip().lower()
+        rest = rest.strip()
+        if rest and _DOMAIN_RE.match(domain_part):
+            return domain_part, rest
+    return None, filename
+
+
+def _host_from_website(website: Optional[str]) -> str:
+    """Bare host for a lead's `website` field, e.g. "https://www.acme.com/x"
+    -> "acme.com". Empty for a blank/unparseable value."""
+    if not website or not website.strip():
+        return ""
+    url = website.strip().lower()
+    if "://" not in url:
+        url = "//" + url
+    host = urlparse(url).netloc
+    host = host.split("@")[-1].split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _email_domain(lead: Lead) -> str:
+    """Domain half of the lead's contact email (raw_copper_data['recipient_email'],
+    see app/services/duplicates.py::applicant_email), or "" if unknown."""
+    from app.services.duplicates import applicant_email
+
+    email = applicant_email(lead)
+    return email.split("@")[-1].strip().lower() if "@" in email else ""
+
+
 @dataclass
 class MatchCandidate:
     """A lead considered as a possible match, for diagnostics/reporting."""
@@ -312,6 +363,7 @@ def find_lead_match(
     leads: list[Lead],
     threshold: float = MATCH_THRESHOLD,
     fuzzy_floor: Optional[float] = None,
+    sender_domain: Optional[str] = None,
 ) -> MatchResult:
     """Match a PDF filename to one of the supplied leads, with diagnostics.
 
@@ -326,6 +378,17 @@ def find_lead_match(
     candidates (whether or not one was chosen) so callers can log/report why
     a file didn't attach.
 
+    `sender_domain` (issue #189): the inbound-folder intake agent names files
+    "<sender domain> — <original filename>.pdf" (see parse_inbound_filename).
+    When given and NOT a generic webmail domain (settings.drive_generic_
+    sender_domains -- gmail.com and friends carry no identifying signal),
+    exactly one lead whose `website` host or contact-email domain matches it
+    is treated as a confident match regardless of filename similarity -- a
+    domain match is a far stronger signal than fuzzy name matching, and takes
+    priority over the filename-based tiers below. Two or more leads sharing
+    the domain is ambiguous on its own and falls through to those tiers
+    unrestricted, same as if no domain had been given.
+
     Whenever no lead is resolved with confidence, candidates that still clear
     `fuzzy_floor` (default settings.deck_match_fuzzy_floor, ~0.6) are surfaced
     on `.needs_verification` -- this includes both the "one near-miss" case
@@ -336,8 +399,12 @@ def find_lead_match(
     stem = Path(filename).stem  # "Hadawi.pdf" -> "Hadawi"
     norm_stem = _normalize_company_key(stem)
 
+    normalized_domain = (sender_domain or "").strip().lower()
+    domain_is_signal = bool(normalized_domain) and normalized_domain not in settings.generic_sender_domain_set()
+
     scored: list[MatchCandidate] = []
     exact_matches: list[MatchCandidate] = []
+    domain_matches: list[MatchCandidate] = []
     for lead in leads:
         if not lead.company_name:
             continue
@@ -349,9 +416,17 @@ def find_lead_match(
         scored.append(candidate)
         if norm_stem and norm_name == norm_stem:
             exact_matches.append(candidate)
+        if domain_is_signal and normalized_domain in (
+            _host_from_website(getattr(lead, "website", None)),
+            _email_domain(lead),
+        ):
+            domain_matches.append(candidate)
 
     scored.sort(key=lambda c: c.score, reverse=True)
     top_candidates = scored[:_MAX_REPORTED_CANDIDATES]
+
+    if len(domain_matches) == 1:
+        return MatchResult(lead=domain_matches[0].lead, candidates=top_candidates)
 
     if not norm_stem:
         return MatchResult(lead=None, candidates=top_candidates)
