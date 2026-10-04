@@ -14,6 +14,7 @@ exactly this situation. A failed write must never fail the call it measures,
 so every exception is swallowed here, not surfaced to the caller.
 """
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import create_engine, text
@@ -62,3 +63,23 @@ def record(
             )
     except Exception as exc:
         print(f"[{_LABEL}] could not record usage (purpose={purpose} status={status}): {exc!r}")
+
+
+def purge_older_than(retention_days: int) -> int:
+    """Delete llm_usage rows older than `retention_days` (issue #191), so the
+    table doesn't grow unbounded. Piggybacked best-effort onto the nightly
+    dedupe-leads sweep (app/tasks/dedupe_leads.py) -- same discipline as
+    `record`: a failure here must never fail the task it rides along with.
+
+    Returns the number of rows deleted, or -1 if the delete itself failed.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    try:
+        url, connect_args = copper_writer._psycopg2_url_and_connect_args(settings.database_url)
+        engine = create_engine(url, connect_args=connect_args)
+        with engine.begin() as conn:
+            result = conn.execute(text("DELETE FROM llm_usage WHERE created_at < :cutoff"), {"cutoff": cutoff})
+            return result.rowcount
+    except Exception as exc:
+        print(f"[{_LABEL}] could not purge rows older than {retention_days}d: {exc!r}")
+        return -1

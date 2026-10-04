@@ -35,6 +35,7 @@ class _FakeConn:
 
     def execute(self, stmt, params=None):
         self.statements.append((str(stmt), params or {}))
+        return SimpleNamespace(rowcount=0)
 
 
 class _FakeEngine:
@@ -213,11 +214,17 @@ class _FakeResult:
 
 
 class _FakeUsageSession:
-    """Returns the totals row to the first execute() and the per-purpose
-    rows to the second, matching the two queries llm_usage() issues."""
+    """Answers the five queries llm_usage() issues in order: totals_today,
+    totals_7d, totals_30d, by_purpose, top_leads."""
 
-    def __init__(self, totals_row, by_purpose_rows):
-        self._results = [_FakeResult([totals_row]), _FakeResult(by_purpose_rows)]
+    def __init__(self, today_row, d7_row, d30_row, by_purpose_rows, top_lead_rows=()):
+        self._results = [
+            _FakeResult([today_row]),
+            _FakeResult([d7_row]),
+            _FakeResult([d30_row]),
+            _FakeResult(by_purpose_rows),
+            _FakeResult(list(top_lead_rows)),
+        ]
 
     async def execute(self, *_a, **_k):
         return self._results.pop(0)
@@ -244,10 +251,12 @@ def test_llm_usage_is_forbidden_for_non_admin():
     assert response.status_code == 403
 
 
-def test_llm_usage_returns_totals_and_per_purpose_breakdown(monkeypatch):
+def test_llm_usage_returns_today_7d_30d_totals_and_per_purpose_breakdown(monkeypatch):
     async def _fake_get_db():
         yield _FakeUsageSession(
-            totals_row=(10, 50_000, 5_000, 55_000),
+            today_row=(2, 8_000, 1_000, 9_000),
+            d7_row=(10, 50_000, 5_000, 55_000),
+            d30_row=(40, 200_000, 20_000, 220_000),
             by_purpose_rows=[("assess", 7, 48_000, 4_500, 52_500), ("verify_deck", 3, 2_000, 500, 2_500)],
         )
 
@@ -261,9 +270,114 @@ def test_llm_usage_returns_totals_and_per_purpose_breakdown(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["days"] == 30
-    assert body["totals"] == {
+    assert body["totals_today"] == {
+        "calls": 2, "prompt_tokens": 8_000, "completion_tokens": 1_000, "total_tokens": 9_000,
+    }
+    assert body["totals_7d"] == {
         "calls": 10, "prompt_tokens": 50_000, "completion_tokens": 5_000, "total_tokens": 55_000,
+    }
+    assert body["totals_30d"] == {
+        "calls": 40, "prompt_tokens": 200_000, "completion_tokens": 20_000, "total_tokens": 220_000,
     }
     assert body["by_purpose"][0]["purpose"] == "assess"
     assert body["by_purpose"][0]["calls"] == 7
+    # share is this purpose's total_tokens over the window's combined total
+    # (52_500 + 2_500 = 55_000) -- attribution across purposes, not just a count.
+    assert body["by_purpose"][0]["share"] == pytest.approx(52_500 / 55_000, abs=1e-4)
     assert body["by_purpose"][1]["purpose"] == "verify_deck"
+    assert body["by_purpose"][1]["share"] == pytest.approx(2_500 / 55_000, abs=1e-4)
+
+
+def test_llm_usage_returns_top_leads_by_token_spend(monkeypatch):
+    async def _fake_get_db():
+        yield _FakeUsageSession(
+            today_row=(0, 0, 0, 0),
+            d7_row=(0, 0, 0, 0),
+            d30_row=(0, 0, 0, 0),
+            by_purpose_rows=[("assess", 2, 9_000, 1_000, 10_000)],
+            top_lead_rows=[("lead-costly", 2, 7_000), ("lead-cheap", 1, 3_000)],
+        )
+
+    app.dependency_overrides[ops.get_db] = _fake_get_db
+    _auth_as("abdulrahman@raed.vc")
+    try:
+        response = client.get("/api/v1/ops/llm-usage")
+    finally:
+        _clear_auth()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["top_leads"] == [
+        {"lead_id": "lead-costly", "calls": 2, "total_tokens": 7_000},
+        {"lead_id": "lead-cheap", "calls": 1, "total_tokens": 3_000},
+    ]
+
+
+def test_llm_usage_by_purpose_share_is_zero_when_window_is_empty(monkeypatch):
+    async def _fake_get_db():
+        yield _FakeUsageSession(
+            today_row=(0, 0, 0, 0), d7_row=(0, 0, 0, 0), d30_row=(0, 0, 0, 0), by_purpose_rows=[],
+        )
+
+    app.dependency_overrides[ops.get_db] = _fake_get_db
+    _auth_as("abdulrahman@raed.vc")
+    try:
+        response = client.get("/api/v1/ops/llm-usage")
+    finally:
+        _clear_auth()
+
+    assert response.status_code == 200
+    assert response.json()["by_purpose"] == []
+
+
+# ---------------------------------------------------------------------------
+# Retention cut-off (issue #191): llm_usage rows older than the configured
+# default must not grow the table unbounded.
+# ---------------------------------------------------------------------------
+
+def test_purge_older_than_deletes_rows_before_the_cutoff(monkeypatch):
+    conn = _patch_usage_engine(monkeypatch)
+
+    rowcount = llm_usage.purge_older_than(90)
+
+    deletes = [(sql, params) for sql, params in conn.statements if "DELETE FROM llm_usage" in sql]
+    assert len(deletes) == 1
+    assert "created_at < :cutoff" in deletes[0][0]
+    assert rowcount == 0  # _FakeConn.execute doesn't set a result object
+
+
+def test_purge_older_than_never_raises_on_a_db_failure(monkeypatch):
+    def _broken_engine(*a, **k):
+        raise ConnectionError("db unreachable")
+
+    monkeypatch.setattr(llm_usage, "create_engine", _broken_engine)
+
+    assert llm_usage.purge_older_than(90) == -1
+
+
+def test_dedupe_leads_task_also_purges_old_llm_usage_rows(monkeypatch):
+    from app.tasks import dedupe_leads as dedupe_leads_task_module
+
+    class _FakeDb:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    async def _fake_dedupe(db, commit):
+        return {"active": 0, "groups": 0, "to_archive": 0, "archived": 0}
+
+    monkeypatch.setattr(dedupe_leads_task_module, "CelerySessionLocal", lambda: _FakeDb())
+    monkeypatch.setattr(dedupe_leads_task_module, "dedupe_leads", _fake_dedupe)
+
+    purge_calls = []
+    monkeypatch.setattr(
+        dedupe_leads_task_module.llm_usage, "purge_older_than",
+        lambda days: purge_calls.append(days) or 3,
+    )
+
+    result = dedupe_leads_task_module.dedupe_leads_task()
+
+    assert purge_calls == [dedupe_leads_task_module.settings.llm_usage_retention_days]
+    assert result["llm_usage_purged"] == 3

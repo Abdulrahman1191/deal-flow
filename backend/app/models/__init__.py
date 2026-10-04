@@ -5,5 +5,9 @@ from app.models.briefing import DailyBriefing
 from app.models.event import LeadEvent
 from app.models.user import User
 from app.models.processed_drive_file import ProcessedDriveFile
+from app.models.llm_usage import LLMUsage
 
-__all__ = ["Lead", "AssessmentCard", "DailyBriefing", "LeadEvent", "User", "ProcessedDriveFile"]
+__all__ = [
+    "Lead", "AssessmentCard", "DailyBriefing", "LeadEvent", "User",
+    "ProcessedDriveFile", "LLMUsage",
+]

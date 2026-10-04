@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User
-from app.services import queue_stats, task_heartbeat
+from app.services import llm_breaker, queue_stats, task_heartbeat
 from app.services.auth import get_current_user, is_owner
 from app.tasks.celery_app import celery
 
@@ -112,6 +112,13 @@ class OpsOut(BaseModel):
     queues: list[QueueOut]
     unacked: Optional[int]
     tasks: list[TaskOut]
+    # DeepSeek circuit breaker (app/services/llm_breaker.py, issue #191): a
+    # 402/401 pauses every DeepSeek call fleet-wide, which otherwise shows up
+    # here only as "assessments stopped" with no queue/worker signal explaining
+    # why -- exactly the kind of silent-looking outage this endpoint exists for.
+    llm_breaker_open: bool
+    llm_breaker_reason: Optional[str]
+    llm_breaker_opened_at: Optional[str]
 
 
 def _age_seconds(iso: Optional[str], now: datetime) -> Optional[float]:
@@ -251,6 +258,8 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
     # answer to "is anything wrong" is the top row rather than a scan.
     tasks.sort(key=lambda t: (not t.stale, -(t.seconds_since or 0)))
 
+    breaker_reason = llm_breaker.open_reason()
+
     return OpsOut(
         generated_at=now.isoformat(),
         redis_reachable=redis_reachable,
@@ -259,6 +268,9 @@ async def queue_status(user: User = Depends(get_current_user)) -> OpsOut:
         queues=queues,
         unacked=queue_stats.unacked_count(),
         tasks=tasks,
+        llm_breaker_open=breaker_reason is not None,
+        llm_breaker_reason=breaker_reason,
+        llm_breaker_opened_at=llm_breaker.opened_at() if breaker_reason is not None else None,
     )
 
 
@@ -271,12 +283,42 @@ class LLMUsageTotalsOut(BaseModel):
 
 class LLMUsageByPurposeOut(LLMUsageTotalsOut):
     purpose: str
+    # This purpose's total_tokens as a fraction of ALL purposes' total_tokens
+    # in the `?days=` window -- "which purpose is spending it" (issue #191),
+    # not just "how much did this one purpose spend".
+    share: float
+
+
+class LLMUsageByLeadOut(BaseModel):
+    lead_id: str
+    calls: int
+    total_tokens: int
 
 
 class LLMUsageOut(BaseModel):
     days: int
-    totals: LLMUsageTotalsOut
+    # Fixed windows, independent of `days` -- "is spend elevated today" needs
+    # today/7d/30d side by side, not just whichever window the caller picked.
+    totals_today: LLMUsageTotalsOut
+    totals_7d: LLMUsageTotalsOut
+    totals_30d: LLMUsageTotalsOut
+    # Both of these are scoped to the `?days=` window.
     by_purpose: list[LLMUsageByPurposeOut]
+    top_leads: list[LLMUsageByLeadOut]
+
+
+async def _llm_usage_totals(db: AsyncSession, since: datetime) -> LLMUsageTotalsOut:
+    row = (await db.execute(
+        text(
+            "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), "
+            "COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0) "
+            "FROM llm_usage WHERE created_at >= :since"
+        ),
+        {"since": since},
+    )).first()
+    return LLMUsageTotalsOut(
+        calls=row[0], prompt_tokens=row[1], completion_tokens=row[2], total_tokens=row[3],
+    )
 
 
 @router.get("/llm-usage", response_model=LLMUsageOut)
@@ -285,25 +327,23 @@ async def llm_usage(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> LLMUsageOut:
-    """What every DeepSeek call has cost over the last `days` days, and which
+    """What every DeepSeek call has cost -- today / 7d / 30d -- and which
     `purpose` (assess / verify_deck / draft_regen / unqual_reason /
-    linkedin_pick / briefing) is spending it (issue #191). Admin-only, same
-    ADMIN_EMAILS gate as /associates/performance -- this is per-lead-adjacent
-    spend data, not the queue-health facts /ops/queues exposes to everyone.
+    linkedin_pick / briefing) and which leads are spending it over the last
+    `days` days (issue #191). Admin-only, same ADMIN_EMAILS gate as
+    /associates/performance -- this is per-lead-adjacent spend data, not the
+    queue-health facts /ops/queues exposes to everyone.
     """
     if not is_owner(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    since = datetime.now(timezone.utc) - timedelta(days=max(days, 1))
+    now = datetime.now(timezone.utc)
+    since_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    since_window = now - timedelta(days=max(days, 1))
 
-    totals_row = (await db.execute(
-        text(
-            "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), "
-            "COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0) "
-            "FROM llm_usage WHERE created_at >= :since"
-        ),
-        {"since": since},
-    )).first()
+    totals_today = await _llm_usage_totals(db, since_today)
+    totals_7d = await _llm_usage_totals(db, now - timedelta(days=7))
+    totals_30d = await _llm_usage_totals(db, now - timedelta(days=30))
 
     by_purpose_rows = (await db.execute(
         text(
@@ -312,20 +352,36 @@ async def llm_usage(
             "FROM llm_usage WHERE created_at >= :since "
             "GROUP BY purpose ORDER BY SUM(total_tokens) DESC"
         ),
-        {"since": since},
+        {"since": since_window},
+    )).all()
+    window_total_tokens = sum(r[4] for r in by_purpose_rows)
+
+    # Attribution: which leads actually cost the most, not just which purpose
+    # (issue #191) -- lead_id is captured on every row but otherwise invisible.
+    top_lead_rows = (await db.execute(
+        text(
+            "SELECT lead_id, COUNT(*), COALESCE(SUM(total_tokens), 0) "
+            "FROM llm_usage WHERE created_at >= :since AND lead_id IS NOT NULL "
+            "GROUP BY lead_id ORDER BY SUM(total_tokens) DESC LIMIT 10"
+        ),
+        {"since": since_window},
     )).all()
 
     return LLMUsageOut(
         days=days,
-        totals=LLMUsageTotalsOut(
-            calls=totals_row[0], prompt_tokens=totals_row[1],
-            completion_tokens=totals_row[2], total_tokens=totals_row[3],
-        ),
+        totals_today=totals_today,
+        totals_7d=totals_7d,
+        totals_30d=totals_30d,
         by_purpose=[
             LLMUsageByPurposeOut(
                 purpose=r[0], calls=r[1], prompt_tokens=r[2],
                 completion_tokens=r[3], total_tokens=r[4],
+                share=round(r[4] / window_total_tokens, 4) if window_total_tokens else 0.0,
             )
             for r in by_purpose_rows
+        ],
+        top_leads=[
+            LLMUsageByLeadOut(lead_id=str(r[0]), calls=r[1], total_tokens=r[2])
+            for r in top_lead_rows
         ],
     )
