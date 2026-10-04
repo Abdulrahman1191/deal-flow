@@ -134,6 +134,30 @@ class Settings(BaseSettings):
     # gracefully rather than crashing the worker when this is empty.
     google_service_account_json: str = ""
 
+    # Second, additive source folder (issue #189): the info@ intake agent's
+    # "Inbound Pitch Decks" folder, where every email attachment lands
+    # automatically all day -- as opposed to drive_pitch_deck_folder_id above,
+    # which a partner still populates by hand. Swept IN ADDITION to that
+    # folder, never instead of it. "" (default) = today's behaviour exactly;
+    # nothing about the existing folder sweep changes when this is unset.
+    # Strictly read-only: sync_pitch_decks.py must never rename/move/delete
+    # anything here, since it's owned by almuhammed@raed.vc and shared with
+    # the whole team.
+    drive_inbound_deck_folder_id: str = ""
+    # Files in the inbound folder are named "<sender domain> — <original
+    # filename>.pdf" by the intake agent. How many days before an unmatched
+    # file is re-checked (a lead may arrive in Copper after its deck did) --
+    # see app.tasks.sync_pitch_decks._sweep_inbound_folder.
+    inbound_deck_recheck_days: int = 30
+    # Sender domains that carry no identifying signal (free/webmail
+    # providers used by many unrelated applicants) -- ignored rather than
+    # matched against a lead's website/contact-email domain. Configurable so
+    # a new generic provider can be added without a code change.
+    drive_generic_sender_domains: str = (
+        "gmail.com,googlemail.com,hotmail.com,hotmail.co.uk,outlook.com,"
+        "yahoo.com,icloud.com,aol.com,live.com,msn.com"
+    )
+
     # --- Pitch-deck match verification (issue #74) ---
     # Filenames scoring below MATCH_THRESHOLD (0.85) but at/above this floor
     # are candidates for the LLM content-verification tier -- real matches
@@ -273,6 +297,12 @@ class Settings(BaseSettings):
         if owner not in emails:
             emails.append(owner)
         return emails
+
+    def generic_sender_domain_set(self) -> set[str]:
+        """Lowercased set of DRIVE_GENERIC_SENDER_DOMAINS -- webmail domains
+        that must never be treated as an identifying match signal (see
+        app/services/pitch_deck.py find_lead_match's `sender_domain` param)."""
+        return {d.strip().lower() for d in self.drive_generic_sender_domains.split(",") if d.strip()}
 
     def non_client_facing_email_set(self) -> set[str]:
         """Lowercased set of NON_CLIENT_FACING_EMAILS -- test/engineer

@@ -189,7 +189,7 @@ def _wire_sweep(monkeypatch, files, candidates_per_file=2):
                         lambda service, folder_id: [{"id": f"f{i}", "name": f"Deck {i}.pdf"} for i in range(files)])
     monkeypatch.setattr(spd, "CelerySessionLocal", lambda: _FakeRunSession(leads))
     monkeypatch.setattr(spd.settings, "deck_match_verify_enabled", True)
-    monkeypatch.setattr(spd, "find_lead_match", lambda name, remaining: MatchResult(
+    monkeypatch.setattr(spd, "find_lead_match", lambda name, remaining, sender_domain=None: MatchResult(
         lead=None, candidates=[], needs_verification=[_candidate(f"{name} cand {j}") for j in range(candidates_per_file)]))
     monkeypatch.setattr(spd, "_download_and_extract", lambda service, f: downloads.append(f["name"]) or "deck text")
     return downloads
