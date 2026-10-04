@@ -275,6 +275,40 @@ def test_force_rechecks_a_recently_unmatched_file(monkeypatch):
     assert result["matched"] == 1
 
 
+def test_force_never_rechecks_an_already_matched_file(monkeypatch):
+    # Issue #189 scopes force to re-checking a previously *unmatched* file
+    # only; a "matched" row's lead already has pitch_deck_drive_id set (and
+    # is excluded from `remaining_leads`), so re-running it can only waste a
+    # download/LLM call, misattach to a different lead, or flip the row to
+    # "unmatched" and re-download it on every sweep forever after.
+    monkeypatch.setattr(
+        spd,
+        "_list_files_in_folder",
+        lambda service, folder_id: [
+            {"id": "file1", "name": "verdantimpact.com — Deck.pdf", "mimeType": "application/pdf"}
+        ],
+    )
+    monkeypatch.setattr(spd, "_download_pdf", _boom_download)
+
+    matched_row = ProcessedDriveFile(
+        id=uuid.uuid4(), drive_file_id="file1", outcome="matched",
+        processed_at=datetime.now(timezone.utc) - timedelta(days=60),
+    )
+    lead = _lead(company_name="Zylo Corp", website="https://verdantimpact.com")
+    db = _FakeInboundSession(existing_processed=matched_row, has_card=True)
+
+    result = asyncio.run(
+        spd._sweep_inbound_folder(db, None, "folder-id", [lead], None, force=True)
+    )
+
+    assert result["skipped_already_processed"] == 1
+    assert result["matched"] == 0
+    assert result["unmatched"] == 0
+    assert db.added == []
+    assert db.committed == 0
+    assert lead.pitch_deck_drive_id is None
+
+
 # ---------- additive / no-op-when-unset, and read-only Drive access ----------
 
 

@@ -630,11 +630,21 @@ async def _sweep_inbound_folder(
             continue
 
         existing = await _get_processed(db, file_id)
-        if existing is not None and not force:
-            stale = existing.outcome == "unmatched" and (now - existing.processed_at) > recheck_window
-            if not stale:
+        if existing is not None:
+            # A matched row is never re-processed, `force` included: the
+            # lead it attached to already has pitch_deck_drive_id set and is
+            # excluded from remaining_leads, so re-running this file can only
+            # (a) burn a download + LLM verification call, (b) misattach to
+            # a different deckless lead, or (c) flip the row to "unmatched"
+            # and re-download it forever after. See ProcessedDriveFile docstring.
+            if existing.outcome == "matched":
                 skipped_already_processed += 1
                 continue
+            if not force:
+                stale = existing.outcome == "unmatched" and (now - existing.processed_at) > recheck_window
+                if not stale:
+                    skipped_already_processed += 1
+                    continue
 
         sender_domain, filename_for_match = parse_inbound_filename(name)
         lead, deck_text, candidates, verification_paused = _resolve_match(
