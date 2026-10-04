@@ -509,7 +509,9 @@ def verify_match_candidates(
     for candidate in candidates:
         context = _company_context(candidate.lead)
         try:
-            is_match = verify_pitch_deck_match(candidate.company_name, context, deck_text)
+            is_match = verify_pitch_deck_match(
+                candidate.company_name, context, deck_text, lead_id=str(candidate.lead.id)
+            )
         except LLMUnavailable:
             # Account-wide (no balance / bad key): every other candidate would
             # fail identically. Let the sweep stop verifying, don't walk on.

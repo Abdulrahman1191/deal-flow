@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # DeepSeek call fleet-wide for this long before probing again
     # (app/services/llm_breaker.py).
     llm_outage_pause_seconds: int = 900
+    # llm_usage rows (one per DeepSeek call, issue #191) older than this are
+    # purged by the nightly dedupe-leads sweep (app/tasks/dedupe_leads.py) so
+    # the table doesn't grow unbounded.
+    llm_usage_retention_days: int = 90
 
     # --- Outbound email (SES or SendGrid via SMTP) ---
     # Both providers expose SMTP, so one generic config works for either.

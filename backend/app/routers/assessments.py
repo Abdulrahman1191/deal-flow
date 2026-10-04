@@ -253,6 +253,7 @@ async def _finalize_sent(
                     bucket=effective_bucket,
                     summary=card.summary,
                     red_flags=card.red_flags,
+                    lead_id=str(lead.id),
                 )
                 reason_option_ids = unqual.get("reason_option_ids")
                 detail_text = unqual.get("detail_text")
@@ -437,6 +438,7 @@ def _regenerate_draft_for_bucket(lead: Lead, bucket: str, summary: str, owner_fi
                 },
                 bucket,
                 summary,
+                lead_id=str(lead.id),
                 **owner_fields,
             )
         except Exception as exc:

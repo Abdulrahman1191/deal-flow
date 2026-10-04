@@ -5,6 +5,7 @@ pypdf emit Latin-1 mojibake like "GþþÿN þþþþÿ", which the AI assessment 
 scored as noise. The guard must flag such output so it gets re-extracted via
 OCR rather than stored as-is.
 """
+import uuid
 from types import SimpleNamespace
 
 from app.config import settings
@@ -51,7 +52,7 @@ def _lead(company_name, description=None, copper_description=None):
     raw = None
     if copper_description is not None:
         raw = {"custom_fields": [{"custom_field_definition_id": 536851, "value": copper_description}]}
-    return SimpleNamespace(company_name=company_name, description=description, raw_copper_data=raw)
+    return SimpleNamespace(id=uuid.uuid4(), company_name=company_name, description=description, raw_copper_data=raw)
 
 
 class TestFuzzyVerificationTier:
@@ -118,7 +119,7 @@ class TestVerifyMatchCandidates:
             MatchCandidate(lead=lead_b, company_name="Ailoozb", score=0.86),
         ]
 
-        def _fake_verify(company_name, company_context, deck_text):
+        def _fake_verify(company_name, company_context, deck_text, lead_id=None):
             return company_name == "Ailoozb"
 
         monkeypatch.setattr(claude_agent, "verify_pitch_deck_match", _fake_verify)

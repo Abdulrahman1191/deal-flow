@@ -56,6 +56,7 @@ async def _run(lead_id: str) -> dict:
                     bucket=card.user_override or card.bucket,
                     summary=card.summary,
                     red_flags=card.red_flags,
+                    lead_id=str(lead.id),
                 )
                 reason_option_ids = unqual.get("reason_option_ids")
                 detail_text = unqual.get("detail_text")

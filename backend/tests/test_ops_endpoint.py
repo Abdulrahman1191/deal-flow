@@ -425,3 +425,30 @@ class TestTaskStaleness:
         assert by_name["sync-pitch-decks"]["queue"] == "heavy"
         assert by_name["sync-copper-leads"]["queue"] == "default"
         assert by_name["drain-copper-outbox"]["queue"] == "default"
+
+
+class TestLLMBreakerState:
+    """The headline motivation for issue #191: "assessments paused -- DeepSeek
+    out of balance" must be visible here, not just inferable from a stale
+    `assess_lead` task and a guess."""
+
+    def test_closed_breaker_reports_not_open_and_no_reason(self, monkeypatch):
+        monkeypatch.setattr(ops.llm_breaker, "open_reason", lambda: None)
+        monkeypatch.setattr(ops.llm_breaker, "opened_at", lambda: None)
+
+        body = _get(monkeypatch, depths=HEALTHY_QUEUES, consumers=BOTH_CONSUMED)
+
+        assert body["llm_breaker_open"] is False
+        assert body["llm_breaker_reason"] is None
+        assert body["llm_breaker_opened_at"] is None
+
+    def test_open_breaker_reports_open_with_reason_and_opened_at(self, monkeypatch):
+        opened_at = _ago(120)
+        monkeypatch.setattr(ops.llm_breaker, "open_reason", lambda: "DeepSeek 402: Insufficient Balance")
+        monkeypatch.setattr(ops.llm_breaker, "opened_at", lambda: opened_at)
+
+        body = _get(monkeypatch, depths=HEALTHY_QUEUES, consumers=BOTH_CONSUMED)
+
+        assert body["llm_breaker_open"] is True
+        assert body["llm_breaker_reason"] == "DeepSeek 402: Insufficient Balance"
+        assert body["llm_breaker_opened_at"] == opened_at

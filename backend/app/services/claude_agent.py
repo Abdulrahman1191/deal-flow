@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Optional
 
 from openai import APIStatusError, OpenAI
 
 from app.config import settings
-from app.services import llm_breaker
+from app.services import llm_breaker, llm_usage
 
 # Fallback used when a lead's owner has no calendly_url set (see User.calendly_url,
 # issue #84) -- keeps the previous single hardcoded link as the default.
@@ -113,19 +114,59 @@ def _get_client() -> OpenAI:
     return _client
 
 
-def _chat_completion(**kwargs):
+def _chat_completion(*, purpose: str, lead_id: Optional[str] = None, **kwargs):
     """Every DeepSeek call goes through here. Refuses fast while the shared
     breaker is open, and opens it on an account-level failure (402 no
-    balance / 401 bad key) so no other caller in any container retries it."""
-    llm_breaker.check()
+    balance / 401 bad key) so no other caller in any container retries it.
+
+    Records one app.services.llm_usage row per call (issue #191), attributed
+    by `purpose` (and `lead_id` where the caller has one) -- the only place
+    that can see every call's prompt/completion tokens, model, duration and
+    outcome in one spot. Recording is best-effort and never changes what this
+    function raises or returns.
+    """
+    model = kwargs.get("model", "")
+    start = time.monotonic()
+
     try:
-        return _get_client().chat.completions.create(**kwargs)
+        llm_breaker.check()
+    except llm_breaker.LLMUnavailable:
+        llm_usage.record(
+            purpose=purpose, lead_id=lead_id, model=model, status="breaker_open",
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+        raise
+
+    try:
+        response = _get_client().chat.completions.create(**kwargs)
     except APIStatusError as exc:
+        duration_ms = int((time.monotonic() - start) * 1000)
         if exc.status_code in llm_breaker.ACCOUNT_LEVEL_STATUSES:
             reason = f"DeepSeek {exc.status_code}: {exc.message}"
             llm_breaker.open_breaker(reason)
+            llm_usage.record(purpose=purpose, lead_id=lead_id, model=model, status="error", duration_ms=duration_ms)
             raise llm_breaker.LLMUnavailable(reason) from exc
+        llm_usage.record(purpose=purpose, lead_id=lead_id, model=model, status="error", duration_ms=duration_ms)
         raise
+    except Exception:
+        llm_usage.record(
+            purpose=purpose, lead_id=lead_id, model=model, status="error",
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+        raise
+
+    usage = getattr(response, "usage", None)
+    llm_usage.record(
+        purpose=purpose,
+        lead_id=lead_id,
+        model=model,
+        status="ok",
+        duration_ms=int((time.monotonic() - start) * 1000),
+        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        total_tokens=getattr(usage, "total_tokens", 0) or 0,
+    )
+    return response
 
 
 ASSESS_SYSTEM = """You are a senior investment analyst at Raed Ventures, a sector-agnostic early-stage
@@ -491,6 +532,7 @@ def assess_lead(
     team_calibration: list[dict] | None = None,
     owner_calendly: Optional[str] = None,
     owner_name: Optional[str] = None,
+    lead_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Assess a lead.
 
@@ -572,6 +614,8 @@ def assess_lead(
     )
 
     response = _chat_completion(
+        purpose="assess",
+        lead_id=lead_id,
         model=settings.deepseek_model,
         max_tokens=4096,
         # Greedy decoding (temperature 0): the assessment is a screening judgment we
@@ -730,6 +774,7 @@ def pick_linkedin_url(
     )
     try:
         response = _chat_completion(
+            purpose="linkedin_pick",
             model=settings.deepseek_model,
             max_tokens=200,
             messages=[
@@ -792,6 +837,7 @@ def generate_unqualification_reason(
     bucket: str,
     summary: Optional[str] = None,
     red_flags: Optional[list] = None,
+    lead_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Best-effort: asks the LLM which fixed reason label(s) explain why a lead
     was unqualified, plus a short internal detail note. Feeds Copper's
@@ -811,6 +857,8 @@ def generate_unqualification_reason(
         red_flags=", ".join(red_flags or []) or "(none noted)",
     )
     response = _chat_completion(
+        purpose="unqual_reason",
+        lead_id=lead_id,
         model=settings.deepseek_model,
         max_tokens=300,
         temperature=0.0,
@@ -835,6 +883,7 @@ def regenerate_draft(
     summary: str = "",
     owner_calendly: Optional[str] = None,
     owner_name: Optional[str] = None,
+    lead_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Produces a fresh draft email for a manually-set bucket. No re-assessment.
 
@@ -864,6 +913,8 @@ def regenerate_draft(
         summary=summary or "(no prior summary)",
     )
     response = _chat_completion(
+        purpose="draft_regen",
+        lead_id=lead_id,
         model=settings.deepseek_model,
         max_tokens=1024,
         messages=[
@@ -907,7 +958,9 @@ company description above -- ignore filename similarity entirely.
 Return the JSON object described in your instructions."""
 
 
-def verify_pitch_deck_match(company_name: str, company_context: str, deck_text: str) -> bool:
+def verify_pitch_deck_match(
+    company_name: str, company_context: str, deck_text: str, lead_id: Optional[str] = None
+) -> bool:
     """Cheap LLM check: does this deck's content actually belong to this company?
 
     Used only by app.services.pitch_deck.verify_match_candidates for the
@@ -922,6 +975,8 @@ def verify_pitch_deck_match(company_name: str, company_context: str, deck_text: 
         deck_excerpt=(deck_text or "")[:8_000],
     )
     response = _chat_completion(
+        purpose="verify_deck",
+        lead_id=lead_id,
         model=settings.deepseek_model,
         max_tokens=200,
         temperature=0.0,
@@ -942,6 +997,7 @@ def generate_briefing(date_str: str, research_data: dict) -> dict[str, Any]:
     )
 
     response = _chat_completion(
+        purpose="briefing",
         model=settings.deepseek_model,
         max_tokens=8096,
         messages=[

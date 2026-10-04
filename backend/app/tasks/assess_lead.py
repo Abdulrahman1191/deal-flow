@@ -479,6 +479,7 @@ async def _run(lead_id: str) -> dict:
             team_calibration=team_calibration,
             owner_calendly=owner.calendly_url if owner else None,
             owner_name=owner.full_name if owner else None,
+            lead_id=str(lead.id),
         )
 
         # Upsert: update existing card if present, otherwise create one.

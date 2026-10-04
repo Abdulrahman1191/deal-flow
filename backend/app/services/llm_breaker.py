@@ -17,6 +17,7 @@ process that saw the 402.
 """
 from __future__ import annotations
 import time
+from datetime import datetime, timezone
 
 import redis
 
@@ -24,9 +25,13 @@ from app.config import settings
 
 ACCOUNT_LEVEL_STATUSES = (401, 402)
 _KEY = "llm:deepseek:circuit_open"
+# Same TTL as _KEY, written alongside it -- lets GET /ops/queues report when
+# the breaker opened, not just that it's open.
+_OPENED_AT_KEY = "llm:deepseek:circuit_opened_at"
 
 _redis = None
 _local_open_until = 0.0
+_local_opened_at: str | None = None
 
 
 class LLMUnavailable(RuntimeError):
@@ -42,11 +47,14 @@ def _client() -> redis.Redis:
 
 
 def open_breaker(reason: str) -> None:
-    global _local_open_until
+    global _local_open_until, _local_opened_at
     seconds = max(int(settings.llm_outage_pause_seconds), 1)
     _local_open_until = time.monotonic() + seconds
+    _local_opened_at = datetime.now(timezone.utc).isoformat()
     try:
-        _client().set(_KEY, reason, ex=seconds)
+        client = _client()
+        client.set(_KEY, reason, ex=seconds)
+        client.set(_OPENED_AT_KEY, _local_opened_at, ex=seconds)
     except Exception as exc:
         print(f"[llm_breaker] redis unavailable, breaker local to this process: {exc!r}")
     print(f"[llm_breaker] OPEN for {seconds}s: {reason}")
@@ -62,6 +70,20 @@ def open_reason() -> str | None:
     except Exception:
         if time.monotonic() < _local_open_until:
             return "DeepSeek paused (local breaker; redis unavailable)"
+        return None
+
+
+def opened_at() -> str | None:
+    """ISO timestamp of when the currently-open breaker was opened, or None
+    once it has closed. Used by GET /ops/queues -- see open_reason()."""
+    try:
+        value = _client().get(_OPENED_AT_KEY)
+        if value is not None:
+            return value.decode() if isinstance(value, bytes) else str(value)
+        return None
+    except Exception:
+        if time.monotonic() < _local_open_until:
+            return _local_opened_at
         return None
 
 

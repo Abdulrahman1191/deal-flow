@@ -542,7 +542,7 @@ def test_real_transliteration_near_miss_verifies_and_attaches(monkeypatch):
 
     verify_calls = []
 
-    def _fake_verify(company_name, company_context, deck_text):
+    def _fake_verify(company_name, company_context, deck_text, lead_id=None):
         verify_calls.append((company_name, company_context, deck_text))
         return True
 
