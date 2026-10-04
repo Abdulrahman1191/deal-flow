@@ -1024,7 +1024,10 @@ async def preview_bulk_send_rejection(
 
     items: list[BulkSendRejectionPreviewItem] = []
     eligible_count = 0
-    for raw_lead_id in body.lead_ids:
+    # Dedupe (preserving order): a repeated id must count, and resolve, once --
+    # not look eligible twice in `eligible_count` only for the send endpoint's
+    # own dedupe to then queue a single task per id (see send_bulk_rejection).
+    for raw_lead_id in dict.fromkeys(body.lead_ids):
         lead, card, not_found_reason = await bulk_rejection.load_lead_and_card(db, raw_lead_id, user.email)
         if lead is None:
             items.append(BulkSendRejectionPreviewItem(
@@ -1079,7 +1082,12 @@ async def send_bulk_rejection(
 
     eligible: list[tuple[Lead, object]] = []
     skipped: list[BulkSendRejectionSkipped] = []
-    for raw_lead_id in body.lead_ids:
+    # Dedupe (preserving order): an id repeated in the request must resolve
+    # once, not insert two "queued" BulkRejectionBatchItem rows for the same
+    # (batch_id, lead_id) and dispatch two tasks -- the second task's
+    # `_get_item` would then raise MultipleResultsFound and both would fail
+    # without ever sending.
+    for raw_lead_id in dict.fromkeys(body.lead_ids):
         lead, card, not_found_reason = await bulk_rejection.load_lead_and_card(db, raw_lead_id, user.email)
         if lead is None:
             skipped.append(BulkSendRejectionSkipped(lead_id=str(raw_lead_id), reason=not_found_reason))

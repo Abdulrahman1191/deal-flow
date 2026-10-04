@@ -167,6 +167,60 @@ def test_task_skips_lead_already_sent_and_does_not_resend(monkeypatch):
     assert item.reason == "already_sent"
 
 
+def test_task_commits_sent_at_before_finalize_so_a_redelivery_does_not_resend(monkeypatch):
+    """Simulates the acks_late=True redelivery window this task is exposed
+    to: a worker lost after send_email() succeeds but before _finalize_sent
+    finishes its Copper/LLM work. The fix commits card.sent_at (and the batch
+    item row) right after the send, before that slow work runs -- so by the
+    time a redelivered task re-enters _run and re-checks eligibility, it
+    sees sent_at already set and resolves as skipped/already_sent instead of
+    calling send_email a second time."""
+    from app.routers import assessments
+
+    lead = _fake_lead()
+    card = _fake_card()
+    item = _fake_item()
+    session = _FakeTaskSession(lead=lead, card=card, item=item)
+    _install_fake_session(monkeypatch, session)
+
+    sent_calls = []
+    monkeypatch.setattr(
+        email_sender, "send_email",
+        lambda *a, **kw: sent_calls.append((a, kw)),
+    )
+
+    finalize_calls = []
+
+    async def _fake_finalize_sent(db, card_arg, lead_arg, user_arg):
+        # By the time the slow Copper-approve-write / unqualification-reason
+        # LLM call (_finalize_sent's own work) would run, sent_at and the
+        # batch item must already be committed -- that's what shrinks the
+        # acks_late redelivery window to the SMTP call itself.
+        assert card_arg.sent_at is not None
+        assert item.status == "sent"
+        finalize_calls.append(1)
+        return {"status": "sent"}
+
+    monkeypatch.setattr(assessments, "_finalize_sent", _fake_finalize_sent)
+    monkeypatch.setattr(send_bulk_rejection, "capture_override", _noop_capture)
+
+    batch_id = str(uuid.uuid4())
+    result = asyncio.run(send_bulk_rejection._run(batch_id, str(lead.id), "reviewer@raed.vc"))
+
+    assert finalize_calls == [1]
+    assert result["status"] == "sent"
+    assert len(sent_calls) == 1
+
+    # Celery redelivers the same task -- e.g. the worker was lost right after
+    # the SMTP call above, before this attempt's finalize work ran at all.
+    redelivered_result = asyncio.run(send_bulk_rejection._run(batch_id, str(lead.id), "reviewer@raed.vc"))
+
+    assert redelivered_result == {
+        "batch_id": batch_id, "lead_id": str(lead.id), "status": "skipped", "reason": "already_sent",
+    }
+    assert len(sent_calls) == 1  # not resent
+
+
 def test_task_re_checks_eligibility_stale_draft_guard(monkeypatch):
     """A lead whose draft_bucket disagrees with its current bucket must never
     be sent, even if it slipped through to a dispatched task (issue #150

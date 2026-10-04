@@ -121,6 +121,19 @@ async def _send_and_finalize(
     except Exception as exc:
         return await _resolve(db, item, batch_id, lead_id, "failed", f"send_failed: {exc!r}")
 
+    # Commit sent_at (and the batch item row) immediately -- *before* the
+    # Copper approve write and _finalize_sent's LLM/Copper work, which can
+    # take several seconds. The task is acks_late=True /
+    # task_reject_on_worker_lost=True, so a worker lost in that window gets
+    # this task redelivered; without committing here first, the redelivery's
+    # eligibility re-check would still see sent_at=NULL and email the founder
+    # a second time. _finalize_sent re-setting sent_at below is harmless.
+    card.sent_at = datetime.now(timezone.utc)
+    await db.commit()
+    if item:
+        item.status = "sent"
+        await db.commit()
+
     # Mark approved (idempotent) + Copper approve tag, mirroring
     # assessments.send_assessment -- bulk and single-lead sends must leave the
     # lead in the same intermediate state before finalize.

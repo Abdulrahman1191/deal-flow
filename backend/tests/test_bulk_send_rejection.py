@@ -154,6 +154,21 @@ def test_preview_returns_eligibility_and_excerpt_and_sends_nothing():
     assert bad["reason"] == "stale_or_missing_draft"
 
 
+def test_preview_dedupes_repeated_lead_id():
+    lead = _fake_lead()
+    card = _fake_card()
+
+    _auth_as(OWNER_EMAIL)
+    _use_db([lead, card])  # only one lookup -- the repeat must not re-query
+
+    response = client.post(PREVIEW_URL, json={"lead_ids": [str(lead.id), str(lead.id)]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["eligible_count"] == 1
+    assert len(body["items"]) == 1
+
+
 def test_preview_reports_not_found_lead():
     _auth_as(OWNER_EMAIL)
     missing_id = uuid.uuid4()
@@ -238,6 +253,33 @@ def test_send_dispatches_one_throttled_task_per_eligible_lead(monkeypatch):
     assert all(item.status == "queued" for item in queued_items)
     assert all(item.owner_email == OWNER_EMAIL for item in queued_items)
     assert session.commits == 1
+
+
+def test_send_dedupes_repeated_lead_id_and_queues_one_task(monkeypatch):
+    """A lead id repeated in the request must resolve, and queue, exactly
+    once. Without dedupe this would insert two `queued` BulkRejectionBatchItem
+    rows for the same (batch_id, lead_id) and dispatch two tasks -- the
+    second task's `_get_item` then raises MultipleResultsFound and both fail
+    without ever sending (see send_bulk_rejection._get_item)."""
+    calls = _record_apply_async(monkeypatch)
+    lead, card = _fake_lead(), _fake_card()
+
+    _auth_as(OWNER_EMAIL)
+    session = _use_db([lead, card])  # only one lookup -- the repeat must not re-query
+
+    response = client.post(SEND_URL, json={
+        "lead_ids": [str(lead.id), str(lead.id)], "confirm_count": 1,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["queued"] == 1
+    assert body["skipped"] == []
+    assert len(calls) == 1
+
+    queued_items = [o for o in session.added if isinstance(o, BulkRejectionBatchItem)]
+    assert len(queued_items) == 1
+    assert queued_items[0].lead_id == lead.id
 
 
 def test_send_confirm_count_mismatch_sends_nothing(monkeypatch):
