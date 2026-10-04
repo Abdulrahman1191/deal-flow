@@ -779,7 +779,7 @@ async def sync_lead_pitch_deck(db: AsyncSession, lead: Lead, *, force: bool = Fa
                 continue
             try:
                 confirmed = verify_match_candidates(
-                    match.needs_verification, text, drive_file["id"]
+                    match.needs_verification, text, drive_file["id"], force=force
                 )
             except llm_breaker.LLMUnavailable as exc:
                 diagnostic["reason"] = f"Deck verification is paused (DeepSeek unavailable): {exc}"

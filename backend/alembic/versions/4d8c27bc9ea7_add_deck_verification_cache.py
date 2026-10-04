@@ -7,7 +7,7 @@ A hit requires the stored deck_text_hash to still match and verified_at to
 be within settings.deck_verification_cache_ttl_days.
 
 Revision ID: 4d8c27bc9ea7
-Revises: z2a3b4c5d6e7
+Revises: a7b8c9d0e1f2
 Create Date: 2026-10-04
 """
 from typing import Sequence, Union
@@ -18,7 +18,7 @@ from alembic import op
 
 
 revision: str = "4d8c27bc9ea7"
-down_revision: Union[str, None] = "z2a3b4c5d6e7"
+down_revision: Union[str, None] = "a7b8c9d0e1f2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
