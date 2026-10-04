@@ -91,6 +91,25 @@ def _language_instruction(lead_data: dict) -> str:
     return _LANGUAGE_INSTRUCTIONS[detect_applicant_language(lead_data)]
 
 
+def detect_draft_script(draft_body: Optional[str]) -> str:
+    """Deterministically detect which script a GENERATED draft email is
+    actually written in (ar vs en) -- same Arabic-vs-Latin character
+    heuristic and minimum-signal floor as detect_applicant_language, so a
+    name/signature in the other script inside an otherwise one-language
+    draft can't flip the result.
+
+    Used by issue #177 (language_mismatch / regenerate_mismatched_drafts.py)
+    to catch drafts generated before issue #168's detection fix shipped,
+    which may still be in English on an Arabic lead.
+    """
+    text = draft_body or ""
+    arabic_chars = len(_ARABIC_CHAR_RE.findall(text))
+    if arabic_chars <= _MIN_ARABIC_CHARS:
+        return "en"
+    latin_chars = len(_LATIN_CHAR_RE.findall(text))
+    return "ar" if arabic_chars > latin_chars else "en"
+
+
 _client = None
 
 

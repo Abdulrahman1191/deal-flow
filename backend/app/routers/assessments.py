@@ -14,7 +14,7 @@ from app.models.lead_action_log import LeadActionLog
 from app.models.user import User
 from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverride, DraftUpdate
 from app.config import settings
-from app.services import claude_agent, copper_service, copper_writer, email_sender
+from app.services import claude_agent, copper_service, copper_writer, email_sender, language_audit
 from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
 from app.services.override_capture import capture_override
 from app.tasks.sync_copper import resolve_copper_id
@@ -67,6 +67,17 @@ async def _load_owner_draft_fields(db: AsyncSession, lead: Lead) -> dict:
         "owner_calendly": owner.calendly_url if owner else None,
         "owner_name": owner.full_name if owner else None,
     }
+
+
+def _apply_language_audit(card: AssessmentCard, lead: Lead) -> None:
+    """Attaches the computed `language_mismatch` / `draft_missing` fields
+    (issue #177) onto `card` as plain attributes before it's serialized
+    through AssessmentOut -- they aren't DB columns, so every endpoint that
+    returns a card must set them explicitly (the schema default of False
+    only covers callers that never call this)."""
+    effective_bucket = card.user_override or card.bucket
+    card.language_mismatch = language_audit.language_mismatch(lead, card.draft_body)
+    card.draft_missing = language_audit.draft_missing(effective_bucket, card.draft_body)
 
 
 def _require_rating(card: AssessmentCard) -> None:
@@ -157,7 +168,8 @@ async def get_assessment(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    card, _lead = await _get_card_and_lead(lead_id, request, db, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
+    _apply_language_audit(card, lead)
     return card
 
 
@@ -413,6 +425,7 @@ async def update_draft(
             )
         except Exception as exc:
             print(f"[update_draft] Copper write failed: {exc!r}")
+    _apply_language_audit(card, lead)
     return card
 
 
@@ -447,11 +460,12 @@ def _regenerate_draft_for_bucket(lead: Lead, bucket: str, summary: str, owner_fi
     raise last_exc
 
 
-def _override_response(card: AssessmentCard, draft_regen_failed: bool) -> dict:
+def _override_response(card: AssessmentCard, lead: Lead, draft_regen_failed: bool) -> dict:
     """AssessmentOut plus a `draft_regen_failed` flag (issue #150) so the
     caller can tell "draft matches the new bucket" from "regen failed and the
     draft was nulled out — go regenerate it" instead of guessing from the
     (now-empty) draft fields."""
+    _apply_language_audit(card, lead)
     data = AssessmentOut.model_validate(card).model_dump(mode="json")
     data["draft_regen_failed"] = draft_regen_failed
     return data
@@ -473,7 +487,7 @@ async def override_bucket(
         raise HTTPException(status_code=400, detail="bucket must be YES, MAYBE, or REJECT")
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     if card.bucket == body.bucket and not card.user_override:
-        return _override_response(card, draft_regen_failed=False)  # no-op
+        return _override_response(card, lead, draft_regen_failed=False)  # no-op
 
     prior_bucket = card.user_override or card.bucket
     # `ai_bucket_at_override` = the AI's most recent calculation. If this is the
@@ -577,7 +591,7 @@ async def override_bucket(
         acted_by_email=user.email,
     )
 
-    return _override_response(card, draft_regen_failed)
+    return _override_response(card, lead, draft_regen_failed)
 
 
 @router.post("/{lead_id}/rate", response_model=AssessmentOut)
@@ -619,6 +633,7 @@ async def rate_assessment(
         acted_by_email=user.email,
     )
 
+    _apply_language_audit(card, lead)
     return card
 
 
@@ -653,6 +668,7 @@ async def regenerate_draft(
     card.draft_body = new_draft.get("draft_body")
     await db.commit()
     await db.refresh(card)
+    _apply_language_audit(card, lead)
     return card
 
 
