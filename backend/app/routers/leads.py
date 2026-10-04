@@ -20,6 +20,11 @@ from app.routers.assessments import _require_rating
 from app.schemas.lead import (
     BulkArchiveRequest,
     BulkArchiveResult,
+    BulkReassessPreviewRequest,
+    BulkReassessPreviewResult,
+    BulkReassessProgress,
+    BulkReassessRequest,
+    BulkReassessResult,
     BulkReassignPreviewRequest,
     BulkReassignPreviewResult,
     BulkReassignRequest,
@@ -37,13 +42,14 @@ from app.services.auth import (
     is_owner,
     verify_webhook_signature,
 )
-from app.services import bulk_reassign, claude_agent, copper_writer
+from app.services import bulk_reassess, bulk_reassign, claude_agent, copper_writer, llm_breaker
 from app.services.copper_echo_guard import is_recent_echo
 from app.services.csv_export import build_leads_csv, effective_bucket
 from app.services.dedup import normalize_name
 from app.services.events import (
     EVENT_ARCHIVED,
     EVENT_ARCHIVED_NO_REPLY,
+    EVENT_BULK_REASSESS_QUEUED,
     EVENT_COPPER_RECORD_VANISHED,
     EVENT_COPPER_UPDATED,
     EVENT_REASSIGNED,
@@ -982,6 +988,207 @@ async def execute_bulk_reassign(
             failed.append({"lead_id": str(lead_id), "error": repr(exc)})
 
     return BulkReassignResult(batch_id=batch_id, moved=moved, by_target=by_target, failed=failed)
+
+
+def _require_filter_or_ids(body: BulkReassessPreviewRequest) -> None:
+    if not body.lead_ids and not body.bucket and not body.assessed_before:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide lead_ids, or a bucket/assessed_before filter, to select leads.",
+        )
+
+
+async def _resolve_bulk_reassess_candidates(db: AsyncSession, owner_email: str, body: BulkReassessPreviewRequest):
+    try:
+        return await bulk_reassess.resolve_candidates(
+            db, owner_email, lead_ids=body.lead_ids, bucket=body.bucket, assessed_before=body.assessed_before,
+        )
+    except bulk_reassess.NotOwnedError:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/bulk-reassess/preview", response_model=BulkReassessPreviewResult)
+async def preview_bulk_reassess(
+    body: BulkReassessPreviewRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Dry run for POST /leads/bulk-reassess (issue #203): shows how many of
+    the caller's own leads match, how many have changed inputs since their
+    last card (the fingerprint app/services/bulk_reassess.py defines --
+    company name, description, pitch deck text, and scraped website content
+    for deck-less leads), and how many would be skipped as unchanged. Writes
+    nothing and queues nothing -- the partner sees "117 match, 12 have new
+    information" before deciding whether to run it, and with `force`, before
+    confirming every one of them anyway.
+
+    Owner-scoped like the execute endpoint below: block_if_impersonating so
+    an admin under `?view_as=` can't preview (or run) someone else's board.
+    """
+    block_if_impersonating(request, user)
+    _require_filter_or_ids(body)
+
+    candidates = await _resolve_bulk_reassess_candidates(db, user.email, body)
+
+    in_flight = sum(1 for lead in candidates if lead.status in bulk_reassess.IN_FLIGHT_STATUSES)
+    changed_map = await bulk_reassess.classify(candidates)
+    changed = sum(1 for is_changed in changed_map.values() if is_changed)
+    matched = len(candidates)
+    would_queue = (matched - in_flight) if body.force else changed
+
+    breaker_reason = llm_breaker.open_reason()
+
+    return BulkReassessPreviewResult(
+        matched=matched,
+        changed=changed,
+        would_skip=matched - changed,
+        in_flight=in_flight,
+        would_queue=would_queue,
+        breaker_open=breaker_reason is not None,
+        breaker_reason=breaker_reason,
+    )
+
+
+@router.post("/bulk-reassess", response_model=BulkReassessResult)
+async def execute_bulk_reassess(
+    body: BulkReassessRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Queues a fresh assess_lead_task for many of the caller's own leads at
+    once (issue #203) -- built for clearing the MAYBE pile once something
+    feeding the prompt has actually changed, rather than re-running a
+    temperature=0 assessor that would return the identical bucket.
+
+    Refuses to queue ANYTHING (409) if the LLM breaker is open -- checked
+    first, before matching leads or writing anything -- so an account-wide
+    DeepSeek outage can't fill the board with parked leads (the 2026-10-04
+    incident this issue cites). Also refuses (409) if `confirm_count` no
+    longer matches the live count (the board moved since preview), and
+    refuses (409) if the batch exceeds `settings.bulk_reassess_batch_cap`.
+
+    Without `force`, only leads whose fingerprint changed since their last
+    card are queued; with `force: true`, every matched lead not already
+    in-flight is queued regardless. Each lead is processed in its own
+    try/except with a fresh re-fetch + rollback-on-failure, mirroring
+    execute_bulk_reassign above -- a rollback expires every object still in
+    the session, so touching a stale pre-loop Lead after that would raise
+    MissingGreenlet.
+    """
+    block_if_impersonating(request, user)
+    _require_filter_or_ids(body)
+
+    breaker_reason = llm_breaker.open_reason()
+    if breaker_reason:
+        raise HTTPException(
+            status_code=409,
+            detail=f"DeepSeek is unavailable account-wide, queueing nothing: {breaker_reason}",
+        )
+
+    candidates = await _resolve_bulk_reassess_candidates(db, user.email, body)
+
+    cap = settings.bulk_reassess_batch_cap
+    if len(candidates) > cap:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Batch of {len(candidates)} leads exceeds the cap of {cap}. "
+                   f"Narrow the filter or split into smaller batches.",
+        )
+
+    if body.confirm_count != len(candidates):
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirm_count ({body.confirm_count}) no longer matches the current count "
+                   f"({len(candidates)}) -- the board changed since preview. Re-run the preview.",
+        )
+
+    # Snapshotted before the loop, same reason as execute_bulk_reassign: once
+    # any iteration below rolls back, every object still in the session
+    # expires, so nothing after this point may read an attribute off a
+    # pre-loop `candidates` Lead without triggering a MissingGreenlet.
+    candidate_ids = [lead.id for lead in candidates]
+    bucket_before_by_id = {lead.id: effective_bucket(lead.assessment) for lead in candidates}
+    changed_map = {} if body.force else await bulk_reassess.classify(candidates)
+
+    batch_id = uuid.uuid4()
+    queued = 0
+    skipped_unchanged = 0
+    skipped_in_flight = 0
+    failed: list[dict] = []
+
+    for lead_id in candidate_ids:
+        try:
+            result = await db.execute(select(Lead).where(Lead.id == lead_id))
+            lead = result.scalar_one_or_none()
+            if not lead:
+                failed.append({"lead_id": str(lead_id), "error": "not_found"})
+                continue
+
+            if lead.status in bulk_reassess.IN_FLIGHT_STATUSES:
+                skipped_in_flight += 1
+                continue
+            if not body.force and not changed_map.get(lead_id, True):
+                skipped_unchanged += 1
+                continue
+
+            lead.status = "pending"
+            lead.assessment_attempts = 0
+            await log_event(
+                db, lead.id, EVENT_BULK_REASSESS_QUEUED,
+                {"batch_id": str(batch_id), "bucket_before": bucket_before_by_id.get(lead_id)},
+            )
+            await db.commit()
+            assess_lead_task.delay(str(lead.id))
+            queued += 1
+        except Exception as exc:
+            await db.rollback()
+            failed.append({"lead_id": str(lead_id), "error": repr(exc)})
+
+    return BulkReassessResult(
+        batch_id=batch_id,
+        matched=len(candidate_ids),
+        queued=queued,
+        skipped_unchanged=skipped_unchanged,
+        skipped_in_flight=skipped_in_flight,
+        failed=failed,
+    )
+
+
+@router.get("/bulk-reassess/{batch_id}", response_model=BulkReassessProgress)
+async def bulk_reassess_progress(
+    batch_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Progress for a bulk-reassess run (issue #203): queued / assessed /
+    still pending / failed, and how many of the finished leads' effective
+    bucket actually moved -- the only honest measure of whether the batch
+    was worth running. Scoped to the caller's own board (honoring an admin's
+    `?view_as=` for QA, like every other scoped read) by joining each
+    `bulk_reassess_queued` event to its lead and filtering on owner_email,
+    so a batch_id from someone else's run 404s instead of leaking counts.
+    """
+    owner_email = effective_owner_email(request, user)
+    result = await db.execute(
+        select(LeadEvent, Lead)
+        .join(Lead, LeadEvent.lead_id == Lead.id)
+        .options(selectinload(Lead.assessment))
+        .where(
+            LeadEvent.event_type == EVENT_BULK_REASSESS_QUEUED,
+            LeadEvent.payload["batch_id"].astext == str(batch_id),
+            Lead.owner_email == owner_email,
+        )
+    )
+    rows = result.all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    return bulk_reassess.summarize_progress(batch_id, rows)
 
 
 @router.post("/{lead_id}/archive-no-reply")

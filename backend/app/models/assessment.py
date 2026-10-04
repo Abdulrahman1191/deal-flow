@@ -40,6 +40,15 @@ class AssessmentCard(Base):
     # and/or description only (issue #144) -- so the UI can flag it as
     # lower-confidence until a deck is attached and re-assessment refines it.
     assessed_without_deck: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # sha256 of every input that fed the assessor's prompt when this card was
+    # written -- company name, description, pitch deck text, and (deck-less
+    # leads only) scraped website content. The assessor runs at
+    # temperature=0, so an unchanged fingerprint guarantees a re-run would
+    # return the identical verdict (issue #203's bulk-reassess endpoint uses
+    # this to skip leads with nothing new to re-score). Null on cards written
+    # before this column existed -- app/services/bulk_reassess.py treats a
+    # null fingerprint as "changed" rather than guessing.
+    input_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
     user_override: Mapped[Optional[str]] = mapped_column(String(16))
     user_override_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     # Lightweight thumbs up/down on the AI recommendation ("up" | "down"),
