@@ -173,6 +173,12 @@ class Settings(BaseSettings):
     # filenames stay unmatched exactly as before this feature (no LLM calls,
     # no behavior change to the existing high-confidence auto-attach path).
     deck_match_verify_enabled: bool = True
+    # How long a cached verify_match_candidates verdict (see
+    # app/services/deck_verification_cache.py, issue #192) stays valid before
+    # the next sweep re-verifies regardless. 30 days comfortably outlasts the
+    # 30-minute sweep interval while still catching a stale verdict should
+    # the model/prompt ever change.
+    deck_verification_cache_ttl_days: int = 30
 
     # --- Deck-sweep minimum interval ---
     # Both deck sweeps run on a 1800s beat schedule. Beat enqueues them on that

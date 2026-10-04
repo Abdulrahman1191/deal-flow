@@ -434,7 +434,9 @@ def _resolve_match(
             deck_text = None
         if deck_text:
             try:
-                lead = verify_match_candidates(match.needs_verification, deck_text)
+                lead = verify_match_candidates(
+                    match.needs_verification, deck_text, drive_file["id"]
+                )
             except llm_breaker.LLMUnavailable as exc:
                 verification_paused = str(exc)
                 print(f"[sync_pitch_decks] deck verification paused for the rest of this run: {exc}")
@@ -776,7 +778,9 @@ async def sync_lead_pitch_deck(db: AsyncSession, lead: Lead, *, force: bool = Fa
             if not text:
                 continue
             try:
-                confirmed = verify_match_candidates(match.needs_verification, text)
+                confirmed = verify_match_candidates(
+                    match.needs_verification, text, drive_file["id"]
+                )
             except llm_breaker.LLMUnavailable as exc:
                 diagnostic["reason"] = f"Deck verification is paused (DeepSeek unavailable): {exc}"
                 return diagnostic
