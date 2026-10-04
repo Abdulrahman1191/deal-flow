@@ -40,6 +40,13 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
+function sameOwners(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((e, i) => e === sortedB[i]);
+}
+
 function BreakdownList({ counts }: { counts: Record<string, number> }) {
   const entries = Object.entries(counts).filter(([, n]) => n > 0);
   if (entries.length === 0) return <p className="text-xs text-muted-foreground">None</p>;
@@ -100,15 +107,30 @@ export default function ReassignLeadsPage() {
     setResult(null);
   };
 
+  type PreviewVars = {
+    from_owner: string;
+    to_owners: string[];
+    bucket: ReassignBucket | "";
+    include_converted: boolean;
+  };
+
   const previewMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (vars: PreviewVars) =>
       previewBulkReassign({
-        from_owner: fromOwner,
-        to_owners: toOwners,
-        bucket: bucket || undefined,
-        include_converted: includeConverted,
+        from_owner: vars.from_owner,
+        to_owners: vars.to_owners,
+        bucket: vars.bucket || undefined,
+        include_converted: vars.include_converted,
       }),
-    onSuccess: (data) => setPreview(data),
+    onSuccess: (data, vars) => {
+      const stale =
+        vars.from_owner !== fromOwner ||
+        vars.bucket !== bucket ||
+        vars.include_converted !== includeConverted ||
+        !sameOwners(vars.to_owners, toOwners);
+      if (stale) return;
+      setPreview(data);
+    },
     onError: () => toast("Couldn't load the preview — please try again."),
   });
 
@@ -248,7 +270,9 @@ export default function ReassignLeadsPage() {
 
         <div className="flex items-center gap-3 pt-1">
           <button
-            onClick={() => previewMutation.mutate()}
+            onClick={() =>
+              previewMutation.mutate({ from_owner: fromOwner, to_owners: toOwners, bucket, include_converted: includeConverted })
+            }
             disabled={!canPreview}
             className="px-4 py-2 text-sm font-medium rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
