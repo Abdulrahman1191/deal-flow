@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import axios from "axios";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchTeam } from "../api/users";
+import { fetchRoster, type RosterEntry } from "../api/users";
 import {
   executeBulkReassign,
   previewBulkReassign,
@@ -23,6 +23,11 @@ const BUCKETS: { value: ReassignBucket | ""; label: string }[] = [
 function displayName(email: string): string {
   const local = email.split("@")[0] ?? email;
   return local.charAt(0).toUpperCase() + local.slice(1);
+}
+
+/** Roster's User.full_name when set, else the email-derived fallback above. */
+function shortNameFor(email: string, nameByEmail: Record<string, string | null>): string {
+  return nameByEmail[email] || displayName(email);
 }
 
 function formatList(names: string[]): string {
@@ -66,11 +71,16 @@ export default function ReassignLeadsPage() {
   const qc = useQueryClient();
   const toast = useToast();
 
-  const { data: team = [], isLoading, isError, error } = useQuery({
-    queryKey: ["team"],
-    queryFn: fetchTeam,
+  const { data: roster = [], isLoading, isError, error } = useQuery<RosterEntry[]>({
+    queryKey: ["roster"],
+    queryFn: fetchRoster,
     staleTime: 5 * 60 * 1000,
   });
+
+  const nameByEmail = useMemo(
+    () => Object.fromEntries(roster.map((r) => [r.email, r.name])),
+    [roster],
+  );
 
   const [fromOwner, setFromOwner] = useState("");
   const [toOwners, setToOwners] = useState<string[]>([]);
@@ -80,7 +90,7 @@ export default function ReassignLeadsPage() {
   const [result, setResult] = useState<BulkReassignResult | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  const targets = team.filter((email) => email !== fromOwner);
+  const targets = roster.filter((r) => r.email !== fromOwner);
 
   const updateFromOwner = (email: string) => {
     setFromOwner(email);
@@ -162,9 +172,12 @@ export default function ReassignLeadsPage() {
     },
   });
 
-  const targetNames = useMemo(() => formatList(toOwners.map(displayName)), [toOwners]);
+  const targetNames = useMemo(
+    () => formatList(toOwners.map((email) => shortNameFor(email, nameByEmail))),
+    [toOwners, nameByEmail],
+  );
   const confirmSentence = preview
-    ? `Move ${preview.count} of ${displayName(fromOwner)}'s leads to ${targetNames}?`
+    ? `Move ${preview.count} of ${shortNameFor(fromOwner, nameByEmail)}'s leads to ${targetNames}?`
     : "";
 
   const canPreview = !!fromOwner && toOwners.length > 0 && !previewMutation.isPending;
@@ -198,9 +211,9 @@ export default function ReassignLeadsPage() {
               className="mt-1 w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
             >
               <option value="">Select an associate…</option>
-              {team.map((email) => (
-                <option key={email} value={email}>
-                  {email}
+              {roster.map((r) => (
+                <option key={r.email} value={r.email}>
+                  {r.name ? `${r.name} — ${r.email}` : r.email}
                 </option>
               ))}
             </select>
@@ -230,22 +243,22 @@ export default function ReassignLeadsPage() {
             </p>
           ) : (
             <div className="mt-2 flex flex-wrap gap-2">
-              {targets.map((email) => (
+              {targets.map((r) => (
                 <label
-                  key={email}
+                  key={r.email}
                   className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border cursor-pointer select-none transition-colors ${
-                    toOwners.includes(email)
+                    toOwners.includes(r.email)
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border bg-background text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   <input
                     type="checkbox"
-                    checked={toOwners.includes(email)}
-                    onChange={() => toggleToOwner(email)}
+                    checked={toOwners.includes(r.email)}
+                    onChange={() => toggleToOwner(r.email)}
                     className="h-3.5 w-3.5 rounded border-border accent-primary"
                   />
-                  {email}
+                  {r.name ? `${r.name} — ${r.email}` : r.email}
                 </label>
               ))}
             </div>
