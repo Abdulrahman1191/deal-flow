@@ -174,6 +174,11 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
                 # it so it lands on the current owner's board.
                 from_owner = existing_lead.owner_email
                 for field, value in map_copper_lead(raw).items():
+                    if field == "applied_at" and value is None:
+                        # Never null out an already-resolved applied_at just
+                        # because this refresh's raw payload didn't carry
+                        # date_created (issue #217).
+                        continue
                     setattr(existing_lead, field, value)
                 existing_lead.owner_email = user.email
                 existing_lead.status = "pending"
@@ -196,6 +201,14 @@ async def sync_one_user(db: AsyncSession, user: User) -> dict:
                 # end) also means a later lead's failure can't roll back leads
                 # already imported earlier in this same run.
                 await db.commit()
+                if lead.applied_at is None:
+                    # map_copper_lead couldn't resolve applied_at from
+                    # Copper's date_created -- fall back to our own import
+                    # timestamp (the commit above already populated
+                    # created_at via Postgres' implicit RETURNING), same rule
+                    # as the pre-column LeadOut.applied_at (issue #217).
+                    lead.applied_at = lead.created_at
+                    await db.commit()
                 new_count += 1
                 is_new_lead = True
         except Exception as exc:

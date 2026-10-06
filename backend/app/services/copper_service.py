@@ -4,12 +4,19 @@ Copper CRM API client.
 Fetches "My Open Leads" (leads with status=Open AND assignee=our user) and maps them.
 Auth: API key + user email in headers (Copper developer API format).
 """
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 
 from app.config import settings
+
+# Lead.source slugs (issue #217).
+SOURCE_EMAIL_INBOX = "email_inbox"
+SOURCE_WEBSITE_FORM = "website_form"
+SOURCE_OTHER = "other"
+SOURCE_UNKNOWN = "unknown"
 
 COPPER_BASE = "https://api.copper.com/developer_api/v1"
 PAGE_SIZE = 200
@@ -344,7 +351,67 @@ def map_copper_lead(p: dict) -> dict:
         "linkedin_urls": founder_linkedin_urls or None,
         "company_linkedin_url": company_linkedin_url,
         "raw_copper_data": {**p, "recipient_email": recipient_email},
+        **derive_lead_source(p),
+        "applied_at": derive_applied_at(p),
     }
+
+
+def _source_channel_from_text(text: str) -> Optional[str]:
+    """Reduces the free text after "Source detail"'s colon (e.g. "LinkedIn",
+    "Google search", "ChatGPT/Claude") to a short slug -- its first "/"- or
+    whitespace-delimited token, lowercased."""
+    token = re.split(r"[\/\s]+", text.strip(), maxsplit=1)[0].strip().lower()
+    return token or None
+
+
+def derive_lead_source(raw_copper_data: Optional[dict]) -> dict:
+    """Classifies where a lead came from (issue #217): `source` (a short
+    slug), `source_channel` (the website submission's sub-channel, if any),
+    and `source_detail` (the raw "Source detail" text, kept verbatim).
+
+    Measured on 1,143 open Copper leads (2026-10-06): the free-text "Source
+    detail" custom field (settings.copper_cf_source_detail_id) is accurate,
+    while the structured `customer_source_id` field is applied
+    inconsistently -- so detail is derived first, falling back to
+    `customer_source_id` only when detail is blank. Matching is
+    case-insensitive and anchored on substrings; unrecognised wording is
+    `other`, never a guess.
+    """
+    detail = get_custom_field_value(raw_copper_data, settings.copper_cf_source_detail_id)
+    if detail:
+        lowered = detail.lower()
+        inbox = settings.application_inbox_email.strip().lower()
+        if (bool(inbox) and inbox in lowered) or lowered.startswith("emailed"):
+            return {"source": SOURCE_EMAIL_INBOX, "source_channel": None, "source_detail": detail}
+        if "website" in lowered and "submission" in lowered:
+            _, _, after_colon = detail.partition(":")
+            return {
+                "source": SOURCE_WEBSITE_FORM,
+                "source_channel": _source_channel_from_text(after_colon),
+                "source_detail": detail,
+            }
+        return {"source": SOURCE_OTHER, "source_channel": None, "source_detail": detail}
+
+    customer_source_id = (raw_copper_data or {}).get("customer_source_id")
+    website_form_id = settings.copper_customer_source_id_website_form
+    if customer_source_id and website_form_id and int(customer_source_id) == website_form_id:
+        return {"source": SOURCE_WEBSITE_FORM, "source_channel": None, "source_detail": None}
+    return {"source": SOURCE_UNKNOWN, "source_channel": None, "source_detail": None}
+
+
+def derive_applied_at(raw_copper_data: Optional[dict]) -> Optional[datetime]:
+    """The lead's true application date from Copper's `date_created` (epoch
+    seconds), or None when it's missing/malformed -- callers fall back to
+    their own `created_at` once it's known (mirrors LeadOut.applied_at's
+    pre-column rule, issue #217)."""
+    if isinstance(raw_copper_data, dict):
+        date_created = raw_copper_data.get("date_created")
+        if isinstance(date_created, (int, float)) and not isinstance(date_created, bool):
+            try:
+                return datetime.fromtimestamp(date_created, tz=timezone.utc)
+            except (ValueError, OSError, OverflowError):
+                pass
+    return None
 
 
 def get_custom_field_value(raw_copper_data: Optional[dict], field_id: int) -> str:

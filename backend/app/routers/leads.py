@@ -1,6 +1,7 @@
 from __future__ import annotations
 import uuid
-from typing import Optional
+from datetime import date, datetime, time, timezone
+from typing import List, Optional
 
 from pathlib import Path
 
@@ -248,6 +249,12 @@ async def _import_new_copper_lead(db: AsyncSession, copper_id: str) -> dict:
         await db.rollback()
         return {"status": "duplicate", "copper_id": copper_id}
     await db.refresh(lead)
+    if lead.applied_at is None:
+        # map_copper_lead couldn't resolve applied_at from Copper's
+        # date_created -- fall back to our own import timestamp, the same
+        # rule LeadOut.applied_at used before it became a real column.
+        lead.applied_at = lead.created_at
+        await db.commit()
     assess_lead_task.delay(str(lead.id))
     return {"lead_id": str(lead.id), "status": "queued", "copper_id": copper_id}
 
@@ -283,7 +290,14 @@ async def _sync_updated_copper_lead(db: AsyncSession, copper_id_from_event: str,
             # The polling sync inserted it between our lookup and commit.
             await db.rollback()
             return {"status": "duplicate", "copper_id": copper_id_from_event}
-        await db.refresh(lead)
+        if lead.applied_at is None:
+            # map_copper_lead couldn't resolve applied_at from Copper's
+            # date_created -- fall back to our own import timestamp (the
+            # commit above already populated created_at via Postgres'
+            # implicit RETURNING), same rule the pre-column LeadOut.applied_at
+            # used.
+            lead.applied_at = lead.created_at
+            await db.commit()
         assess_lead_task.delay(str(lead.id))
         return {"lead_id": str(lead.id), "status": "queued_from_update"}
 
@@ -296,6 +310,11 @@ async def _sync_updated_copper_lead(db: AsyncSession, copper_id_from_event: str,
     for k, v in fresh_data.items():
         # Don't blow away our enriched fields (linkedin discovered, pitch deck, etc.)
         if k in ("company_linkedin_url",) and getattr(lead, k):
+            continue
+        if k == "applied_at" and v is None:
+            # Never null out an already-resolved applied_at (e.g. the
+            # created_at fallback set at import) just because this refresh's
+            # raw payload didn't carry date_created.
             continue
         if k == "raw_copper_data":
             # Merge instead of replace, preserve our `recipient_email` lookup etc.
@@ -457,6 +476,11 @@ async def list_leads(
     bucket: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    # Repeatable (?source=email_inbox&source=website_form); composes with
+    # bucket/status/search (issue #217).
+    source: Optional[List[str]] = Query(default=None),
+    applied_from: Optional[date] = Query(default=None),
+    applied_to: Optional[date] = Query(default=None),
     sort: str = Query(default="newest", pattern="^(newest|oldest)$"),
     page: int = Query(default=1, ge=1),
     # Cap raised to 1000 so the dashboard can load the full pipeline in one page
@@ -479,6 +503,12 @@ async def list_leads(
         query = query.where(Lead.status.notin_(["archived", "approved", "awaiting_deck"]))
     if search:
         query = query.where(Lead.company_name.ilike(f"%{search}%"))
+    if source:
+        query = query.where(Lead.source.in_(source))
+    if applied_from:
+        query = query.where(Lead.applied_at >= datetime.combine(applied_from, time.min, tzinfo=timezone.utc))
+    if applied_to:
+        query = query.where(Lead.applied_at <= datetime.combine(applied_to, time.max, tzinfo=timezone.utc))
 
     total_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = total_result.scalar()

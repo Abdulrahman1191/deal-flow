@@ -39,6 +39,22 @@ class Lead(Base):
     # https://drive.google.com/file/d/<id>/view.
     pitch_deck_drive_id: Mapped[Optional[str]] = mapped_column(String(64))
     raw_copper_data: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Where this lead came from, derived from Copper's "Source detail" custom
+    # field (falling back to customer_source_id when that's blank) -- issue
+    # #217. source: short slug (email_inbox/website_form/other/unknown).
+    # source_channel: the website submission's sub-channel (linkedin, google,
+    # ...), nullable since only website_form leads have one. source_detail:
+    # the raw "Source detail" text, kept verbatim for auditing. See
+    # app/services/copper_service.derive_lead_source.
+    source: Mapped[str] = mapped_column(String(32), index=True, default="unknown", server_default="unknown")
+    source_channel: Mapped[Optional[str]] = mapped_column(String(64))
+    source_detail: Mapped[Optional[str]] = mapped_column(Text)
+    # The lead's true application date (issue #217) -- persisted so the board
+    # can filter/sort on it in SQL. Populated from raw_copper_data's
+    # date_created, falling back to created_at; previously only ever computed
+    # at serialization time by LeadOut.applied_at, which still falls back to
+    # that same rule for any row where this column is null.
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     # Prior-contact signal from Copper's activity feed (issue #90): did the
     # company email us / did we correspond before this application, as
     # opposed to only our own post-application automated outreach? Left
