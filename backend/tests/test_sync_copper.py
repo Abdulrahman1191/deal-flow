@@ -127,10 +127,11 @@ def test_one_bad_lead_does_not_abort_the_rest_of_the_batch(monkeypatch):
     assert queued == []
     assert all(lead.status == "awaiting_deck" for lead in new_leads)
     assert all(lead.deck_wait_started_at is not None for lead in new_leads)
-    # One rollback for the bad lead; each good lead now commits twice (create
-    # + awaiting_deck park), plus the final archive-step commit.
+    # One rollback for the bad lead; each good lead now commits three times
+    # (create + applied_at fallback, since _fake_map doesn't set one +
+    # awaiting_deck park), plus the final archive-step commit.
     assert db.rollbacks == 1
-    assert db.commits == 5
+    assert db.commits == 7
 
 
 def test_new_deckless_lead_is_parked_awaiting_deck_not_assessed_immediately(monkeypatch):

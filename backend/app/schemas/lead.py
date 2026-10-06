@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal, Optional, List
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, model_validator
 from app.schemas.assessment import AssessmentOut
 
 
@@ -50,26 +50,35 @@ class LeadOut(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
-    # Only used to derive applied_at below — never serialized to the API.
+    # The lead's true application date (issue #217) -- a real column since
+    # #217, populated by copper_service.derive_applied_at on import/update.
+    # Only used to backfill it below for any row where it's still null (e.g.
+    # pre-#217 rows the migration's backfill couldn't resolve, or leads
+    # created outside the Copper import path) — never serialized itself.
     raw_copper_data: Optional[dict] = Field(default=None, exclude=True)
+    applied_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
-    @computed_field  # type: ignore[misc]
-    @property
-    def applied_at(self) -> Optional[datetime]:
-        """The lead's true application date from Copper, falling back to our
-        import timestamp (created_at) when Copper's date isn't available —
-        raw_copper_data["date_created"] is epoch seconds from Copper's API."""
+    @model_validator(mode="after")
+    def _fallback_applied_at(self) -> "LeadOut":
+        """Preserves the pre-#217 behaviour for any row whose `applied_at`
+        column is null: derive from raw_copper_data["date_created"] (epoch
+        seconds from Copper's API), falling back to created_at (our import
+        timestamp) when that's missing or malformed."""
+        if self.applied_at is not None:
+            return self
         raw = self.raw_copper_data
         if isinstance(raw, dict):
             date_created = raw.get("date_created")
             if isinstance(date_created, (int, float)) and not isinstance(date_created, bool):
                 try:
-                    return datetime.fromtimestamp(date_created, tz=timezone.utc)
+                    self.applied_at = datetime.fromtimestamp(date_created, tz=timezone.utc)
                 except (ValueError, OSError, OverflowError):
                     pass
-        return self.created_at
+        if self.applied_at is None:
+            self.applied_at = self.created_at
+        return self
 
 
 class LeadWithAssessment(LeadOut):

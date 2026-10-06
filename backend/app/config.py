@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     # will, so waiting for a Drive deck is pointless for them. See
     # app/tasks/sync_copper.py _is_email_sourced.
     application_inbox_email: str = "info@raed.vc"
+    # Copper's structured "Lead Source" field (customer_source_id) -- used
+    # only as a fallback for deriving Lead.source when "Source detail" is
+    # blank (issue #217), since it's applied inconsistently in practice (963
+    # "Inbound - Direct" vs. 823 "Emailed ..." Source detail values measured
+    # on the same leads). This is the id for "Inbound - Info/Website" in our
+    # account; any other customer_source_id falls back to "unknown" rather
+    # than guessing. See app/services/copper_service.derive_lead_source.
+    copper_customer_source_id_website_form: int = 1444487
 
     # Prior-contact detection (issue #90): how often (in days) to re-fetch a
     # lead's Copper activity feed to refresh prior_contact/_count/_last_at.
