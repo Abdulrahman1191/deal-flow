@@ -9,9 +9,11 @@ import LeadCard from "../components/leads/LeadCard";
 import BulkArchiveBar from "../components/leads/BulkArchiveBar";
 import BulkReassessModal from "../components/leads/BulkReassessModal";
 import BulkSendRejectionModal from "../components/leads/BulkSendRejectionModal";
+import LeadsFilterBar from "../components/leads/LeadsFilterBar";
 import SortToggle, { type SortOrder } from "../components/shared/SortToggle";
 import { useToast } from "../components/shared/Toast";
 import type { Lead } from "../types/lead";
+import { loadLeadFilters, saveLeadFilters, type LeadFiltersState } from "../lib/leadFilters";
 
 function LeadCardPending({
   lead,
@@ -52,10 +54,28 @@ export default function LeadsPage() {
   const [stage, setStage] = useState("");
   const [exporting, setExporting] = useState(false);
   const [sort, setSort] = useState<SortOrder>("newest");
+  const [filters, setFilters] = useState<LeadFiltersState>(() => loadLeadFilters());
+
+  useEffect(() => {
+    saveLeadFilters(filters);
+  }, [filters]);
+
+  const { source, appliedFrom, appliedTo, datePreset } = filters;
+  const setSource = (next: LeadFiltersState["source"]) =>
+    setFilters((f) => ({ ...f, source: next }));
+  const setDate = (next: Pick<LeadFiltersState, "appliedFrom" | "appliedTo" | "datePreset">) =>
+    setFilters((f) => ({ ...f, ...next }));
 
   const { data, isLoading } = useQuery({
-    queryKey: ["leads", sort],
-    queryFn: () => fetchLeads({ page_size: 1000, sort }),
+    queryKey: ["leads", sort, source, appliedFrom, appliedTo],
+    queryFn: () =>
+      fetchLeads({
+        page_size: 1000,
+        sort,
+        source: source.length > 0 ? source : undefined,
+        applied_from: appliedFrom ?? undefined,
+        applied_to: appliedTo ?? undefined,
+      }),
     refetchInterval: 15_000,
   });
 
@@ -95,7 +115,13 @@ export default function LeadsPage() {
 
   const bucket = (b: string) =>
     filtered.filter((l: Lead) => (l.assessment?.user_override ?? l.assessment?.bucket) === b);
-  const hasFilter = !!search.trim() || !!stage;
+  const hasServerFilter = source.length > 0 || !!appliedFrom || !!appliedTo;
+  const hasFilter = !!search.trim() || !!stage || hasServerFilter;
+  const clearAllFilters = () => {
+    setSearch("");
+    setStage("");
+    setFilters({ source: [], appliedFrom: null, appliedTo: null, datePreset: null });
+  };
 
   const selectableIds = useMemo(() => filtered.map((l) => l.id), [filtered]);
   const { selected, toggle, selectAll, selectIds, clear, allSelected } = useBulkSelection(selectableIds);
@@ -185,6 +211,14 @@ export default function LeadsPage() {
             ))}
           </select>
         )}
+        <LeadsFilterBar
+          source={source}
+          onSourceChange={setSource}
+          appliedFrom={appliedFrom}
+          appliedTo={appliedTo}
+          datePreset={datePreset}
+          onDateChange={setDate}
+        />
         <SortToggle value={sort} onChange={setSort} />
         <button
           onClick={handleExportYes}
@@ -223,7 +257,7 @@ export default function LeadsPage() {
             ))}
           </div>
         </>
-      ) : leads.length === 0 ? (
+      ) : leads.length === 0 && !hasServerFilter ? (
         <div className="border border-dashed border-border rounded-2xl bg-card/50 py-16 px-6 text-center max-w-md mx-auto">
           <h3 className="font-heading text-base font-semibold text-foreground">No deals yet</h3>
           <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
@@ -236,6 +270,19 @@ export default function LeadsPage() {
             className="mt-4 px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors disabled:opacity-50"
           >
             {sync.isPending ? "Syncing…" : "Sync my leads"}
+          </button>
+        </div>
+      ) : filtered.length === 0 && hasFilter ? (
+        <div className="border border-dashed border-border rounded-2xl bg-card/50 py-16 px-6 text-center max-w-md mx-auto">
+          <h3 className="font-heading text-base font-semibold text-foreground">No leads match these filters</h3>
+          <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
+            Try widening the date range, clearing the source filter, or removing the search term.
+          </p>
+          <button
+            onClick={clearAllFilters}
+            className="mt-4 px-4 py-2 text-sm font-medium rounded-lg bg-primary hover:bg-primary/90 text-white transition-colors"
+          >
+            Clear all filters
           </button>
         </div>
       ) : (
@@ -257,8 +304,11 @@ export default function LeadsPage() {
             readOnly={readOnly}
           />
           {hasFilter && bucket("YES").length + bucket("MAYBE").length + bucket("REJECT").length === 0 ? (
-            <div className="border border-dashed border-border rounded-2xl py-12 text-center text-sm text-muted-foreground">
-              No deals match your search.
+            <div className="border border-dashed border-border rounded-2xl py-12 text-center text-sm text-muted-foreground space-y-2">
+              <p>No leads match these filters.</p>
+              <button onClick={clearAllFilters} className="text-primary font-medium hover:underline">
+                Clear all filters
+              </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
