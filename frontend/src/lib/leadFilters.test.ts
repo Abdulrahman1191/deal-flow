@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { dateRangeForPreset, leadSourceLabel } from "./leadFilters";
+import {
+  dateRangeForPreset,
+  datePresetFilter,
+  leadSourceLabel,
+  loadLeadFilters,
+  saveLeadFilters,
+} from "./leadFilters";
 
 describe("dateRangeForPreset", () => {
   beforeEach(() => {
@@ -27,6 +33,91 @@ describe("dateRangeForPreset", () => {
     const { from, to } = dateRangeForPreset("year");
     expect(from).toBe("2026-01-01");
     expect(to).toBe("2026-03-15");
+  });
+});
+
+describe("datePresetFilter", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-15T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Regression test for issue #220: the preset button handler used to spread
+  // dateRangeForPreset's { from, to } directly into LeadFiltersState, which
+  // expects appliedFrom/appliedTo — so clicking a preset never actually
+  // filtered anything.
+  it("maps the preset's range onto appliedFrom/appliedTo, not from/to", () => {
+    const result = datePresetFilter("7d");
+    expect(result).toEqual({
+      appliedFrom: "2026-03-09",
+      appliedTo: "2026-03-15",
+      datePreset: "7d",
+    });
+    expect(result).not.toHaveProperty("from");
+    expect(result).not.toHaveProperty("to");
+  });
+});
+
+// Tests run under vitest's default "node" environment, which has no global
+// localStorage (that's a jsdom/browser API) — stand in with a minimal
+// in-memory mock rather than pulling in a jsdom dependency for this alone.
+function installLocalStorageMock() {
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => store.set(key, value),
+    clear: () => store.clear(),
+  });
+}
+
+describe("loadLeadFilters", () => {
+  beforeEach(() => {
+    installLocalStorageMock();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("re-derives a stale persisted preset's dates from today instead of trusting storage", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-15T12:00:00Z"));
+    saveLeadFilters({
+      source: [],
+      appliedFrom: "2020-01-01",
+      appliedTo: "2020-01-07",
+      datePreset: "7d",
+    });
+
+    vi.setSystemTime(new Date("2026-04-01T12:00:00Z"));
+    const restored = loadLeadFilters();
+
+    expect(restored.datePreset).toBe("7d");
+    expect(restored.appliedFrom).toBe("2026-03-26");
+    expect(restored.appliedTo).toBe("2026-04-01");
+  });
+
+  it("trusts the stored dates for a custom range, which has no preset to re-derive from", () => {
+    saveLeadFilters({
+      source: [],
+      appliedFrom: "2026-01-01",
+      appliedTo: "2026-01-15",
+      datePreset: "custom",
+    });
+
+    const restored = loadLeadFilters();
+
+    expect(restored).toEqual({
+      source: [],
+      appliedFrom: "2026-01-01",
+      appliedTo: "2026-01-15",
+      datePreset: "custom",
+    });
   });
 });
 

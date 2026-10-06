@@ -42,6 +42,17 @@ export function dateRangeForPreset(preset: DatePreset): { from: string; to: stri
   }
 }
 
+/** Date-portion state produced by picking a named preset — kept separate from
+ * `dateRangeForPreset`'s `{ from, to }` shape since callers (LeadsFilterBar)
+ * merge this straight into `LeadFiltersState`, which uses `appliedFrom`/
+ * `appliedTo`. Mapping the field names wrong here was issue #220's bug. */
+export function datePresetFilter(
+  preset: DatePreset,
+): Pick<LeadFiltersState, "appliedFrom" | "appliedTo" | "datePreset"> {
+  const { from, to } = dateRangeForPreset(preset);
+  return { appliedFrom: from, appliedTo: to, datePreset: preset };
+}
+
 export interface LeadFiltersState {
   source: LeadSource[];
   appliedFrom: string | null;
@@ -62,6 +73,10 @@ function isLeadSource(value: unknown): value is LeadSource {
   return typeof value === "string" && LEAD_SOURCE_OPTIONS.some((o) => o.value === value);
 }
 
+function isDatePreset(value: unknown): value is DatePreset {
+  return typeof value === "string" && DATE_PRESET_OPTIONS.some((o) => o.value === value);
+}
+
 /** Per-viewer convenience only — wrapped in try/catch since localStorage can
  * throw in private windows (issue #218). Falls back to no filters rather
  * than failing the board load. */
@@ -70,11 +85,22 @@ export function loadLeadFilters(): LeadFiltersState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_LEAD_FILTERS;
     const parsed = JSON.parse(raw) as Partial<LeadFiltersState>;
+    const datePreset = (parsed.datePreset as LeadFiltersState["datePreset"]) ?? null;
+    // A named preset's window is relative to "today" — re-derive it on every
+    // restore instead of trusting the stored dates, which freeze at the
+    // moment the preset was clicked and go stale after the viewer returns
+    // on a later day (issue #220 fix round 1).
+    if (isDatePreset(datePreset)) {
+      return {
+        source: Array.isArray(parsed.source) ? parsed.source.filter(isLeadSource) : [],
+        ...datePresetFilter(datePreset),
+      };
+    }
     return {
       source: Array.isArray(parsed.source) ? parsed.source.filter(isLeadSource) : [],
       appliedFrom: typeof parsed.appliedFrom === "string" ? parsed.appliedFrom : null,
       appliedTo: typeof parsed.appliedTo === "string" ? parsed.appliedTo : null,
-      datePreset: (parsed.datePreset as LeadFiltersState["datePreset"]) ?? null,
+      datePreset: datePreset === "custom" ? "custom" : null,
     };
   } catch {
     return DEFAULT_LEAD_FILTERS;

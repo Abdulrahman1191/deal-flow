@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   DATE_PRESET_OPTIONS,
   LEAD_SOURCE_OPTIONS,
-  dateRangeForPreset,
+  datePresetFilter,
   leadSourceLabel,
   type DatePreset,
   type LeadSource,
@@ -108,7 +108,7 @@ export default function LeadsFilterBar({
                   key={opt.value}
                   type="button"
                   onClick={() => {
-                    onDateChange({ ...dateRangeForPreset(opt.value), datePreset: opt.value });
+                    onDateChange(datePresetFilter(opt.value));
                     setDateOpen(false);
                   }}
                   className={`text-left px-2 py-1.5 text-sm rounded-md hover:bg-muted transition-colors ${
