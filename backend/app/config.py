@@ -106,6 +106,13 @@ class Settings(BaseSettings):
     # DeepSeek call fleet-wide for this long before probing again
     # (app/services/llm_breaker.py).
     llm_outage_pause_seconds: int = 900
+    # Where an operations fault pages its owner: reem's POST /internal/ops/alert
+    # (app/services/ops_alert.py), with reem's internal token. From these
+    # containers that is reem-edge on the host, e.g.
+    # http://host.docker.internal:4000/internal/ops/alert. Either empty = the
+    # page is printed to the log only.
+    reem_ops_alert_url: str = ""
+    reem_internal_token: str = ""
     # llm_usage rows (one per DeepSeek call, issue #191) older than this are
     # purged by the nightly dedupe-leads sweep (app/tasks/dedupe_leads.py) so
     # the table doesn't grow unbounded.
