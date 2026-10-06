@@ -107,10 +107,10 @@ class Settings(BaseSettings):
     # (app/services/llm_breaker.py).
     llm_outage_pause_seconds: int = 900
     # Where an operations fault pages its owner: reem's POST /internal/ops/alert
-    # (app/services/ops_alert.py), with reem's internal token. From these
-    # containers that is reem-edge on the host, e.g.
-    # http://host.docker.internal:4000/internal/ops/alert. Either empty = the
-    # page is printed to the log only.
+    # (app/services/ops_alert.py), with reem's internal token:
+    # http://reem:4000/internal/ops/alert over the raed_platform network, which
+    # the app and both workers join (the breaker trips in the workers). Either
+    # empty = the page is printed to the log only.
     reem_ops_alert_url: str = ""
     reem_internal_token: str = ""
     # llm_usage rows (one per DeepSeek call, issue #191) older than this are
