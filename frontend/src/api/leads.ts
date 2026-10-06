@@ -1,8 +1,27 @@
 import client from "./client";
 import type { Lead, PaginatedLeads } from "../types/lead";
 
+// FastAPI's `source: Optional[List[str]] = Query(...)` expects the array
+// repeated as `source=a&source=b` -- axios's default array serialization
+// isn't guaranteed to match that, so this is spelled out explicitly rather
+// than relying on it (issue #218).
+function serializeLeadsParams(params: Record<string, unknown>): string {
+  const usp = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    if (Array.isArray(value)) {
+      for (const v of value) usp.append(key, String(v));
+    } else {
+      usp.append(key, String(value));
+    }
+  }
+  return usp.toString();
+}
+
 export const fetchLeads = (params?: Record<string, unknown>) =>
-  client.get<PaginatedLeads>("/leads", { params }).then((r) => r.data);
+  client
+    .get<PaginatedLeads>("/leads", { params, paramsSerializer: { serialize: serializeLeadsParams } })
+    .then((r) => r.data);
 
 /** Pull the current user's Copper-assigned leads on demand (queues a sync). */
 export const syncMyLeads = () =>
