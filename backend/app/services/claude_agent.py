@@ -266,6 +266,16 @@ AT MOST 6 WORDS. It is never a full sentence, never a severity word ("High risk"
 about, `text` is the full sentence that explains it (write `text` exactly as you
 would today).
 
+`traction` is a SEPARATE array of at most 4 short strings, each ONE hard metric
+exactly as evidenced about THIS company — e.g. "$220K GMV", "550 vendors",
+"3 paying schools", "SAR 1.5M grant". A number belongs here ONLY if the deck,
+website, or research states it about the company itself, not about its market.
+Market-size figures, TAM/SAM, competitor revenue, and the fundraising ask/raise
+amount are NOT traction and must be excluded even when prominent in the deck —
+"$37B US creator ad spend" and "~$5M raise" are market/ask context, not evidence
+the company is working. When nothing is evidenced, return an empty array — never
+infer, never estimate, and never carry a number over from a precedent.
+
 Return your output as a valid JSON object matching the AssessmentResult schema."""
 
 NO_DECK_GUIDANCE = """
@@ -453,6 +463,7 @@ Return a JSON object with this exact structure:
   }},
   "positive_signals": [{{"label": "noun phrase, max 6 words", "text": "full sentence, as today"}}],
   "red_flags": [{{"label": "noun phrase, max 6 words", "text": "full sentence, as today"}}],
+  "traction": ["at most 4 short evidenced metrics, e.g. \"$220K GMV\" -- [] if none"],
   "data_gaps": ["..."],
   "research_sources": ["url"],
   "draft_type": "rejection" | "meeting_request" | null,
@@ -728,6 +739,29 @@ def _normalize_signal_list(items: Optional[list]) -> list:
     return normalized
 
 
+# Longest a model-supplied `traction` array may be (issue #221) -- the card
+# row is a scannable chip strip, not another paragraph, so it's capped the
+# same way `positive_signals`/`red_flags` labels are capped in length.
+MAX_TRACTION_ITEMS = 4
+
+
+def normalize_traction_list(items: Optional[list]) -> list:
+    """Normalises the model's `traction` array (issue #221): each entry is a
+    single evidenced metric exactly as the founder stated it ("$220K GMV",
+    "550 vendors"). Trims to at most `MAX_TRACTION_ITEMS` entries and drops
+    empty/non-string entries. Never raises -- read by both the assessor
+    (`_enforce_bucket_consistency`, right after the model responds) and the
+    API serializer (`AssessmentOut`, as a backstop for older rows/malformed
+    data), so a malformed entry can never reach a client.
+
+    Absent/None input normalises to `[]`, not `None` -- the card either has
+    evidenced traction or it visibly has none; there's no third state."""
+    if not items:
+        return []
+    normalized = [item.strip() for item in items if isinstance(item, str) and item.strip()]
+    return normalized[:MAX_TRACTION_ITEMS]
+
+
 def _enforce_bucket_consistency(result: dict) -> None:
     """Light guardrails on the model's pattern-based decision.
 
@@ -751,6 +785,7 @@ def _enforce_bucket_consistency(result: dict) -> None:
     # one back to the plain-string form, never raises.
     result["positive_signals"] = _normalize_signal_list(result.get("positive_signals"))
     result["red_flags"] = _normalize_signal_list(result.get("red_flags"))
+    result["traction"] = normalize_traction_list(result.get("traction"))
 
     # Draft type must match bucket
     if bucket == "YES":

@@ -296,6 +296,7 @@ async def write_no_context_maybe_placeholder(db, lead) -> dict:
         ),
         positive_signals=[],
         red_flags=[],
+        traction=[],
         data_gaps=[
             "no pitch deck provided",
             "no usable website content",
@@ -496,6 +497,7 @@ async def _run(lead_id: str) -> dict:
             summary=assessment_result.get("summary"),
             positive_signals=assessment_result.get("positive_signals"),
             red_flags=assessment_result.get("red_flags"),
+            traction=assessment_result.get("traction"),
             data_gaps=assessment_result.get("data_gaps"),
             scoring_breakdown=assessment_result.get("scoring_breakdown"),
             draft_subject=assessment_result.get("draft_subject"),

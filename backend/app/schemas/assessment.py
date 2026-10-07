@@ -4,7 +4,7 @@ from typing import Optional, List
 
 from pydantic import BaseModel, field_validator
 
-from app.services.claude_agent import normalize_signal
+from app.services.claude_agent import normalize_signal, normalize_traction_list
 
 
 def _sanitize_signal_list(items: Optional[List]) -> Optional[List]:
@@ -33,6 +33,12 @@ class AssessmentOut(BaseModel):
     summary: Optional[str]
     positive_signals: Optional[List]
     red_flags: Optional[List]
+    # Evidenced hard metrics (issue #221). Defaults to [] -- unlike
+    # positive_signals/red_flags above -- so an older card with no `traction`
+    # column value (None) and a freshly-assessed card with real evidence both
+    # serialize to a list the frontend can render identically; the card shows
+    # no row either way when it's empty, never a null-shaped gap.
+    traction: List[str] = []
     data_gaps: Optional[List]
     scoring_breakdown: Optional[dict]
     draft_subject: Optional[str]
@@ -65,6 +71,11 @@ class AssessmentOut(BaseModel):
     @classmethod
     def _normalize_signals(cls, v: Optional[List]) -> Optional[List]:
         return _sanitize_signal_list(v)
+
+    @field_validator("traction", mode="before")
+    @classmethod
+    def _normalize_traction(cls, v: Optional[List]) -> List[str]:
+        return normalize_traction_list(v)
 
 
 class DraftUpdate(BaseModel):
