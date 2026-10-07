@@ -78,6 +78,7 @@ async def capture_override(
             deck_excerpt=(lead.pitch_deck_text or "")[:_DECK_EXCERPT_CAP] or None,
             human_reason_tags=reason_tags or None,
             human_reason=(reason or "").strip() or None,
+            human_rejection_reasons=getattr(card, "rejection_reasons", None),
             acted_by_email=acted_by_email,
         )
         db.add(row)

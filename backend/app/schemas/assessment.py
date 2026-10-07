@@ -59,6 +59,11 @@ class AssessmentOut(BaseModel):
     assessed_without_deck: bool
     user_override: Optional[str]
     user_override_at: Optional[datetime]
+    # Partner-selected pass reasons for the current rejection draft (issue
+    # #223). Defaults to None so card objects/test doubles built before this
+    # column existed don't need updating just to satisfy response
+    # serialization (same pattern as draft_bucket above).
+    rejection_reasons: Optional[List[str]] = None
     user_rating: Optional[str]
     user_rating_at: Optional[datetime]
     approved_at: Optional[datetime]
@@ -81,6 +86,21 @@ class AssessmentOut(BaseModel):
 class DraftUpdate(BaseModel):
     draft_subject: Optional[str] = None
     draft_body: Optional[str] = None
+
+
+# Max reasons a partner may select when regenerating a rejection draft (issue
+# #223) -- a chip strip, not an essay; kept beside the request schema it
+# bounds so the router's validation and this cap can't drift apart.
+MAX_REJECTION_REASONS = 3
+
+
+class RegenerateDraftRequest(BaseModel):
+    """Optional body for POST /assessments/{lead_id}/regenerate-draft (issue
+    #223). `reasons` are canonical claude_agent.UNQUAL_REASON_OPTIONS labels
+    the partner picked to explain a rejection -- validated against that map
+    and capped at MAX_REJECTION_REASONS by the router (a 400, not a 422, so
+    the error reads the same way as the rest of this router's validation)."""
+    reasons: Optional[List[str]] = None
 
 
 class BucketOverride(BaseModel):

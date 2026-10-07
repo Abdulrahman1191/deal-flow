@@ -56,6 +56,14 @@ class AssessmentCard(Base):
     input_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
     user_override: Mapped[Optional[str]] = mapped_column(String(16))
     user_override_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Canonical UNQUAL_REASON_OPTIONS labels the partner picked when
+    # regenerating a rejection draft (issue #223) -- a human choice that
+    # outranks claude_agent.generate_unqualification_reason when the lead is
+    # later archived/sent (see claude_agent.resolve_unqualification_reason).
+    # Null until a reasoned regeneration happens; cleared back to null if the
+    # bucket is overridden away from REJECT, so a stale selection can't leak
+    # into a future, unrelated rejection.
+    rejection_reasons: Mapped[Optional[list]] = mapped_column(JSONB)
     # Lightweight thumbs up/down on the AI recommendation ("up" | "down"),
     # distinct from a bucket override. Persisted so the UI shows the active thumb.
     user_rating: Mapped[Optional[str]] = mapped_column(String(8))
