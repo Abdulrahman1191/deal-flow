@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Signal } from "../../types/lead";
 import { extractSignalLabel } from "../../lib/extractSignalLabel";
+import { highlightMetrics } from "../../lib/highlightMetrics";
 
 interface Props {
   positive_signals: Signal[] | null;
@@ -127,9 +128,11 @@ function SignalRow({
         </span>
       </button>
       {expanded && (
-        <p className="pl-3.5 mt-1 text-muted-foreground leading-relaxed" dir="auto">
-          {detail}
-        </p>
+        <p
+          className="pl-3.5 mt-1 text-muted-foreground leading-relaxed"
+          dir="auto"
+          dangerouslySetInnerHTML={{ __html: highlightMetrics(detail) }}
+        />
       )}
     </div>
   );

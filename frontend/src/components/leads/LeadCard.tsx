@@ -345,6 +345,24 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
               <ConfidenceBar score={assessment.confidence_score} bucket={aiBucket ?? ""} />
             </div>
           </div>
+          {/* Evidenced hard metrics (issue #221) -- chips, not a sentence,
+              directly under the confidence bar. Empty traction renders
+              nothing at all: no placeholder, no "No traction" label -- an
+              empty row on the ~40% of cards with nothing evidenced would
+              undo #199's density work. */}
+          {assessment.traction && assessment.traction.length > 0 && (
+            <div className="flex flex-wrap gap-1" data-testid="traction-row">
+              {assessment.traction.map((metric, i) => (
+                <span
+                  key={i}
+                  className="inline-block px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-medium border border-primary/20"
+                  data-testid="traction-chip"
+                >
+                  {metric}
+                </span>
+              ))}
+            </div>
+          )}
           {assessment.scoring_breakdown && (
             <ScoringStrip breakdown={assessment.scoring_breakdown} />
           )}

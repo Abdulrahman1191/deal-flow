@@ -36,6 +36,11 @@ export interface Assessment {
   summary: string | null;
   positive_signals: Signal[] | null;
   red_flags: Signal[] | null;
+  // Evidenced hard metrics (issue #221), e.g. "$220K GMV", "550 vendors" -- at
+  // most 4, in the model's order. Always an array (never null) -- an older
+  // card with no traction field and a freshly-assessed card with no evidence
+  // both come back as [], so the card shows no row either way.
+  traction: string[];
   data_gaps: string[] | null;
   scoring_breakdown: Record<string, { score: number; reasoning: string }> | null;
   draft_subject: string | null;

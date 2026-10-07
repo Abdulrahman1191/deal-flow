@@ -20,6 +20,11 @@ class AssessmentCard(Base):
     summary: Mapped[Optional[str]] = mapped_column(Text)
     positive_signals: Mapped[Optional[list]] = mapped_column(JSONB)
     red_flags: Mapped[Optional[list]] = mapped_column(JSONB)
+    # Evidenced hard metrics (issue #221) -- at most 4 short strings ("$220K
+    # GMV", "550 vendors"), as stated about the company itself. Null on rows
+    # written before this column existed; AssessmentOut normalises that to
+    # [] rather than surfacing a null traction row.
+    traction: Mapped[Optional[list]] = mapped_column(JSONB)
     scoring_breakdown: Mapped[Optional[dict]] = mapped_column(JSONB)
     draft_subject: Mapped[Optional[str]] = mapped_column(Text)
     draft_body: Mapped[Optional[str]] = mapped_column(Text)
