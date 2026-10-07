@@ -1502,12 +1502,15 @@ async def undo_last_action(
     user: User = Depends(get_current_user),
 ):
     """
-    Reverses the most recent undoable action for this lead -- currently
-    archive-no-reply or the rejection-send archive (issue #153; bucket
-    override / approve / bulk-archive undo are deferred follow-ups).
-    Restores app `status` and enqueues a Copper write-back reversing the
-    status + tags + clearing the AI-written Unqualification fields, through
-    the same outbox every other write-back uses.
+    Reverses the most recent undoable action for this lead -- archive-no-reply,
+    the rejection-send archive (issue #153), or the thumbs-down-on-YES
+    auto-reject (issue #225; manual override_bucket / approve / bulk-archive
+    undo are still deferred follow-ups). For the two archive actions, restores
+    app `status` and enqueues a Copper write-back reversing the status + tags
+    + clearing the AI-written Unqualification fields. For the auto-reject
+    action, restores the assessment card's bucket/override/draft instead and
+    mirrors the restored bucket tag back to Copper -- see
+    app.services.undo.undo_action.
 
     Owner-scoped, refused while impersonating. Idempotent: undoing an
     already-undone action returns `already_undone` rather than erroring.
@@ -1552,6 +1555,28 @@ async def undo_last_action(
             detail="This lead was converted to a Copper Opportunity — un-converting isn't supported. "
                    "Reverse it manually in Copper if needed.",
         )
+
+    if action.action_type == undo_service.ACTION_BUCKET_OVERRIDE:
+        # Different shape of staleness check: this action never touched
+        # lead.status, so compare the assessment card's current effective
+        # bucket against what the action produced instead (issue #225).
+        from app.models.assessment import AssessmentCard
+        card_result = await db.execute(
+            select(AssessmentCard).where(AssessmentCard.lead_id == lead.id)
+            .order_by(AssessmentCard.created_at.desc()).limit(1)
+        )
+        card = card_result.scalar_one_or_none()
+        if not card:
+            raise HTTPException(status_code=404, detail="Assessment not found")
+        expected_bucket = (action.prior_state or {}).get("new_bucket")
+        current_effective = card.user_override or card.bucket
+        if current_effective != expected_bucket:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Lead bucket has changed since this action (now '{current_effective}') — "
+                       "refusing to undo a stale action.",
+            )
+        return await undo_service.undo_action(db, lead=lead, action=action, card=card)
 
     if lead.status != "archived":
         raise HTTPException(

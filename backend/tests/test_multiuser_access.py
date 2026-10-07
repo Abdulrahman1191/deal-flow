@@ -174,6 +174,8 @@ def _fake_card(rated: bool, bucket: str = "YES", lead_id=None):
         draft_subject="Let's talk",
         draft_body="Hi there",
         draft_type="meeting_request" if bucket == "YES" else "rejection",
+        draft_bucket=bucket,
+        rejection_reasons=None,
         research_sources=[],
         research_data={},
         assessed_without_deck=False,
@@ -394,7 +396,14 @@ def test_rating_gate_applies_to_every_user(acting_email):
 
 
 @pytest.mark.parametrize("acting_email,rating", [(COLLEAGUE_EMAIL, "up"), (OWNER_EMAIL, "down")])
-def test_rate_records_acting_users_email(acting_email, rating):
+def test_rate_records_acting_users_email(acting_email, rating, monkeypatch):
+    import app.routers.assessments as assessments_router
+
+    monkeypatch.setattr(
+        assessments_router.claude_agent, "regenerate_draft",
+        lambda *a, **k: {"draft_type": "rejection", "draft_subject": "x", "draft_body": "y"},
+    )
+
     card = _fake_card(rated=False)
     lead = _fake_lead_for_assessment(acting_email, lead_id=card.lead_id)
     _auth_as(acting_email)

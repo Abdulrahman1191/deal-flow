@@ -594,6 +594,79 @@ async def override_bucket(
     return _override_response(card, lead, draft_regen_failed)
 
 
+async def _auto_reject_on_rate_down(
+    db: AsyncSession, card: AssessmentCard, lead: Lead, body: AssessmentRating, user: User
+) -> None:
+    """Thumbs-down on a YES lead is unambiguous: "worth a meeting" was wrong,
+    and the only thing to disagree with that direction is "don't meet them" —
+    so unlike a thumbs-down on MAYBE/REJECT, this one names a destination and
+    moves the bucket (issue #225). Mirrors override_bucket's regen-with-retry,
+    null-on-failure, and Copper-tag-mirror behaviour for this one transition
+    rather than duplicating it ad hoc, and snapshots enough to undo."""
+    prior_bucket = card.bucket
+    prior_user_override = card.user_override
+    prior_user_override_at = card.user_override_at
+    prior_draft_type = card.draft_type
+    prior_draft_subject = card.draft_subject
+    prior_draft_body = card.draft_body
+    prior_draft_bucket = card.draft_bucket
+    prior_rejection_reasons = card.rejection_reasons
+
+    card.user_override = "REJECT"
+    card.user_override_at = datetime.now(timezone.utc)
+    card.bucket = "REJECT"
+    if body.reason_tags:
+        card.rejection_reasons = body.reason_tags
+
+    await log_event(
+        db, lead.id, EVENT_BUCKET_OVERRIDDEN,
+        {"from": "YES", "to": "REJECT", "source": "rate_down_auto"},
+    )
+
+    try:
+        owner_fields = await _load_owner_draft_fields(db, lead)
+        new_draft = _regenerate_draft_for_bucket(lead, "REJECT", card.summary or "", owner_fields)
+        card.draft_type = new_draft.get("draft_type")
+        card.draft_subject = new_draft.get("draft_subject")
+        card.draft_body = new_draft.get("draft_body")
+        card.draft_bucket = "REJECT"
+    except Exception as exc:
+        # Same issue #150 safety net as override_bucket: never leave a stale
+        # meeting-request draft in place on a lead that just moved to REJECT.
+        print(f"[rate_assessment] auto-reject draft regen failed for lead {lead.id} after retries: {exc!r}")
+        card.draft_type = None
+        card.draft_subject = None
+        card.draft_body = None
+        card.draft_bucket = None
+
+    existing_tags = (lead.raw_copper_data or {}).get("tags") if lead.raw_copper_data else None
+
+    from app.services.undo import record_bucket_override_action
+    await record_bucket_override_action(
+        db, lead=lead, card=card,
+        prior_bucket=prior_bucket,
+        prior_user_override=prior_user_override,
+        prior_user_override_at=prior_user_override_at,
+        prior_draft_type=prior_draft_type,
+        prior_draft_subject=prior_draft_subject,
+        prior_draft_body=prior_draft_body,
+        prior_draft_bucket=prior_draft_bucket,
+        prior_rejection_reasons=prior_rejection_reasons,
+        new_bucket="REJECT",
+        prior_tags=existing_tags,
+        actor_email=user.email,
+    )
+
+    await db.commit()
+    await db.refresh(card)
+
+    if lead.copper_id:
+        try:
+            copper_writer.set_bucket_tag(lead.copper_id, "REJECT", existing_tags)
+        except Exception as exc:
+            print(f"[rate_assessment] Copper write failed (local commit succeeded): {exc!r}")
+
+
 @router.post("/{lead_id}/rate", response_model=AssessmentOut)
 async def rate_assessment(
     lead_id: str,
@@ -604,11 +677,15 @@ async def rate_assessment(
 ):
     """Thumbs up/down on the AI recommendation — enforced-learning signal.
 
-    Unlike /override this does NOT change the bucket or regenerate the draft.
-    "up" registers agreement with the current effective bucket; "down" registers
-    disagreement. Both snapshot a training row into assessment_overrides so the
-    model can later be tuned against the human's judgement — including the cases
-    where the AI was *right*, which an override-only flow never captures.
+    Unlike /override this does NOT change the bucket or regenerate the draft
+    — EXCEPT for a thumbs-down on an effective YES, which unambiguously means
+    "don't meet them" and auto-rejects (issue #225; see
+    _auto_reject_on_rate_down). "up" registers agreement with the current
+    effective bucket; "down" on MAYBE/REJECT registers disagreement with no
+    bucket change, same as always. Both snapshot a training row into
+    assessment_overrides so the model can later be tuned against the human's
+    judgement — including the cases where the AI was *right*, which an
+    override-only flow never captures.
     """
     block_if_impersonating(request, user)
     if body.rating not in ("up", "down"):
@@ -616,20 +693,26 @@ async def rate_assessment(
 
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     effective_bucket = card.user_override or card.bucket
+    auto_reject = body.rating == "down" and effective_bucket == "YES"
 
     card.user_rating = body.rating
     card.user_rating_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(card)
+
+    if auto_reject:
+        await _auto_reject_on_rate_down(db, card, lead, body, user)
+    else:
+        await db.commit()
+        await db.refresh(card)
 
     await capture_override(
         db,
         lead=lead,
         card=card,
-        human_bucket=effective_bucket,
-        trigger="confirm" if body.rating == "up" else "rate_down",
+        human_bucket=card.user_override or card.bucket,
+        trigger="rate_down_auto_reject" if auto_reject else ("confirm" if body.rating == "up" else "rate_down"),
         reason_tags=body.reason_tags,
         reason=body.reason,
+        ai_bucket="YES" if auto_reject else None,
         acted_by_email=user.email,
     )
 

@@ -60,6 +60,10 @@ class AssessmentCard(Base):
     # distinct from a bucket override. Persisted so the UI shows the active thumb.
     user_rating: Mapped[Optional[str]] = mapped_column(String(8))
     user_rating_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Reason tags carried forward from a thumbs-down that auto-rejected a YES
+    # lead (issue #225), so the rejection email / Copper write-back can reuse
+    # them without the partner re-typing. Null for every other path.
+    rejection_reasons: Mapped[Optional[list]] = mapped_column(JSONB)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
