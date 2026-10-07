@@ -15,9 +15,10 @@ class LeadActionLog(Base):
     restore exactly what it overwrote rather than guessing a default
     (issue #153). One row per undoable action.
 
-    Scoped for now to the archive paths: `archive_no_reply` (leads.py) and
-    `archive_after_send` (the rejection-send archive in
-    assessments.py::_finalize_sent). Bucket-override/approve/bulk-archive
+    Scoped for now to the archive paths (`archive_no_reply`,
+    `archive_after_send`) plus the one bucket-override path that's
+    unambiguous enough to automate -- rate_assessment's thumbs-down-on-YES
+    auto-reject (issue #225). Manual override_bucket/approve/bulk-archive
     undo, and a full multi-step undo history, are deferred follow-ups --
     /undo only ever reverses the single most recent row per lead.
     """

@@ -24,8 +24,13 @@ from app.services.portfolio_retrieval import _keywords
 # Triggers that carry a usable human verdict. "confirm"/"approve" = the team
 # endorsed the AI bucket; "override"/"re-override" = the team set a different
 # bucket; "rate_down" = the team flagged the AI bucket as wrong (a caution, no
-# positive label). "skip" is excluded — it's an archive action, not a judgment.
-_USABLE_TRIGGERS = {"confirm", "approve", "override", "re-override", "rate_down"}
+# positive label). "rate_down_auto_reject" = a thumbs-down on YES, which names
+# an unambiguous destination (REJECT) -- a strong correction like
+# override/re-override, not a plain caution. "skip" is excluded — it's an
+# archive action, not a judgment.
+_USABLE_TRIGGERS = {
+    "confirm", "approve", "override", "re-override", "rate_down", "rate_down_auto_reject",
+}
 
 
 async def retrieve_labeled_exemplars(
@@ -103,7 +108,7 @@ def format_for_prompt(exemplars: list[dict]) -> str:
             verdict = f"team CONFIRMED the AI's {e['human_bucket']}"
         elif trig == "approve":
             verdict = f"team APPROVED ({e['human_bucket']})"
-        elif trig in ("override", "re-override"):
+        elif trig in ("override", "re-override", "rate_down_auto_reject"):
             verdict = f"team CORRECTED {e['ai_bucket']} → {e['human_bucket']}"
         elif trig == "rate_down":
             verdict = f"team flagged the AI's {e['ai_bucket']} as WRONG"

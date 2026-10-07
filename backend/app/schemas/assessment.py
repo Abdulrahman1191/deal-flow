@@ -61,6 +61,9 @@ class AssessmentOut(BaseModel):
     user_override_at: Optional[datetime]
     user_rating: Optional[str]
     user_rating_at: Optional[datetime]
+    # Carried forward from a thumbs-down auto-reject (issue #225). None for
+    # every other path (manual override, approve/skip, up-rating, ...).
+    rejection_reasons: Optional[List[str]] = None
     approved_at: Optional[datetime]
     sent_at: Optional[datetime]
     created_at: datetime
