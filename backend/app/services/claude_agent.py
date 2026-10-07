@@ -853,7 +853,7 @@ Rules per bucket — you MUST follow these exactly:
   change; the pass should read as polite and final. IMPORTANT: Never cite lack of
   information or insufficient data as a reason — always use a fit-based reason
   (stage, sector focus, model type). Sign off as "Raed Ventures" — do NOT sign with
-  an individual's name.
+  an individual's name.{reasons_clause}
 
 Return strict JSON:
 {{
@@ -941,6 +941,18 @@ UNQUAL_REASON_OPTIONS: dict[str, int] = {
     "Other": 367311,
 }
 
+# Reasons from UNQUAL_REASON_OPTIONS that are judgements about the PEOPLE
+# involved rather than the business (issue #223). These must never become a
+# sentence in an email the founder reads -- regenerate_draft silently drops
+# them from the reasons it writes from, even when explicitly selected. They
+# are still recorded verbatim (AssessmentCard.rejection_reasons) and still
+# drive the Copper Unqualification Reasons field -- they just never reach the
+# founder's inbox. Kept as a named constant, beside the option list it's
+# carved out of, so the internal-only set is reviewable in one place.
+INTERNAL_ONLY_REASONS: frozenset[str] = frozenset(
+    {"Founder(s)", "Dedication and focus", "Ownership structure"}
+)
+
 UNQUAL_REASON_SYSTEM = """You are a senior investment analyst at Raed Ventures writing a short
 internal CRM note explaining why a lead was passed on. This is NOT an email to the
 founder — it is an internal record for the team's CRM, so be plain and factual.
@@ -1008,6 +1020,54 @@ def generate_unqualification_reason(
     return {"reason_option_ids": reason_option_ids, "detail_text": detail_text}
 
 
+def resolve_unqualification_reason(
+    *,
+    rejection_reasons: Optional[list[str]],
+    company_name: str,
+    bucket: str,
+    summary: Optional[str] = None,
+    red_flags: Optional[list] = None,
+    lead_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """A human-selected `rejection_reasons` (issue #223 -- the partner picking
+    reasons at draft-regeneration time, persisted on
+    AssessmentCard.rejection_reasons) outranks the AI generator: map it
+    straight to Copper option ids with no LLM call. Falls back to
+    `generate_unqualification_reason` when nothing was human-selected, exactly
+    as every archive/send path behaved before issue #223.
+
+    Unlike the AI path, a human selection never raises -- there's no LLM call
+    on this branch to fail -- so callers that wrap this in a best-effort
+    try/except for the AI fallback keep working unchanged.
+    """
+    if rejection_reasons:
+        reason_option_ids = [
+            UNQUAL_REASON_OPTIONS[label] for label in rejection_reasons if label in UNQUAL_REASON_OPTIONS
+        ]
+        return {"reason_option_ids": reason_option_ids, "detail_text": None}
+    return generate_unqualification_reason(
+        company_name=company_name, bucket=bucket, summary=summary, red_flags=red_flags, lead_id=lead_id,
+    )
+
+
+def _rejection_reasons_clause(shareable_reasons: list[str]) -> str:
+    """Builds the extra sentence appended to the REJECT bullet in
+    DRAFT_REGEN_USER_TEMPLATE (issue #223) so the model works the partner's
+    actual pass reason(s) into the email -- as ONE factual clause, not a
+    critique, list, or piece of advice. Callers must pre-filter out
+    INTERNAL_ONLY_REASONS; this function has no opinion on which reasons are
+    shareable, it only renders whatever list it's handed."""
+    if not shareable_reasons:
+        return ""
+    joined = ", ".join(shareable_reasons)
+    return (
+        f" The investment team's actual reason(s) for passing: {joined}. Work this "
+        "into the email as exactly ONE factual clause explaining the pass -- not a "
+        "critique, not a bulleted list, not advice -- staying within the word limit "
+        "and tone above."
+    )
+
+
 def regenerate_draft(
     lead_data: dict,
     bucket: str,
@@ -1015,6 +1075,7 @@ def regenerate_draft(
     owner_calendly: Optional[str] = None,
     owner_name: Optional[str] = None,
     lead_id: Optional[str] = None,
+    reasons: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Produces a fresh draft email for a manually-set bucket. No re-assessment.
 
@@ -1029,11 +1090,27 @@ def regenerate_draft(
     `lead_data`'s `description` / `pitch_deck_text` (the applicant's original
     submission, not the AI-written `summary`) drive language detection — see
     `detect_applicant_language` (issue #92).
+
+    `reasons` (issue #223) are the partner's selected pass reasons -- canonical
+    `UNQUAL_REASON_OPTIONS` labels -- used only when bucket == "REJECT". Any
+    label in `INTERNAL_ONLY_REASONS` (judgements about the people, never about
+    the business) is dropped before it ever reaches the prompt: when only
+    internal-only reasons were selected, the email is the unchanged generic
+    rejection; when a mix was selected, the email is written from the
+    shareable ones alone. Unknown labels are silently ignored (the API layer
+    is responsible for rejecting those with a 400 before calling this).
     """
     if bucket not in ("YES", "MAYBE", "REJECT"):
         raise ValueError(f"bucket must be YES/MAYBE/REJECT, got {bucket!r}")
 
     effective_calendly = owner_calendly or DEFAULT_CALENDLY_URL
+
+    reasons_clause = ""
+    if bucket == "REJECT" and reasons:
+        shareable_reasons = [
+            r for r in reasons if r in UNQUAL_REASON_OPTIONS and r not in INTERNAL_ONLY_REASONS
+        ]
+        reasons_clause = _rejection_reasons_clause(shareable_reasons)
 
     prompt = DRAFT_REGEN_USER_TEMPLATE.format(
         calendly_url=effective_calendly,
@@ -1042,6 +1119,7 @@ def regenerate_draft(
         company_name=lead_data.get("company_name", ""),
         founder_names=", ".join(lead_data.get("founder_names") or []) or "N/A",
         summary=summary or "(no prior summary)",
+        reasons_clause=reasons_clause,
     )
     response = _chat_completion(
         purpose="draft_regen",

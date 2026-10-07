@@ -49,6 +49,12 @@ class AssessmentOverride(Base):
     # prompt as labelled signal. Free-text `human_reason` is bonus context.
     human_reason_tags: Mapped[Optional[Any]] = mapped_column(JSONB)
     human_reason: Mapped[Optional[str]] = mapped_column(Text)
+    # Snapshot of AssessmentCard.rejection_reasons at capture time (issue
+    # #223) -- the partner's selected pass reasons, canonical labels, distinct
+    # from the free-text human_reason/human_reason_tags above. Null whenever
+    # the card had no reasoned rejection draft (the common case pre-#223, and
+    # every non-REJECT row).
+    human_rejection_reasons: Mapped[Optional[Any]] = mapped_column(JSONB)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Set when the action that produced this row (archive, override, ...) was

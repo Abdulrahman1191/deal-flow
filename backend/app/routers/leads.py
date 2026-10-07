@@ -1451,7 +1451,8 @@ async def archive_no_reply(
         reason_option_ids, detail_text = None, None
         if card:
             try:
-                unqual = claude_agent.generate_unqualification_reason(
+                unqual = claude_agent.resolve_unqualification_reason(
+                    rejection_reasons=getattr(card, "rejection_reasons", None),
                     company_name=lead.company_name,
                     bucket=card.user_override or card.bucket,
                     summary=card.summary,

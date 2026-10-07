@@ -12,7 +12,14 @@ from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
 from app.models.lead_action_log import LeadActionLog
 from app.models.user import User
-from app.schemas.assessment import AssessmentOut, AssessmentRating, BucketOverride, DraftUpdate
+from app.schemas.assessment import (
+    MAX_REJECTION_REASONS,
+    AssessmentOut,
+    AssessmentRating,
+    BucketOverride,
+    DraftUpdate,
+    RegenerateDraftRequest,
+)
 from app.config import settings
 from app.services import claude_agent, copper_service, copper_writer, email_sender, language_audit
 from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
@@ -256,11 +263,14 @@ async def _finalize_sent(
                 lead.copper_id = None
                 await log_event(db, lead.id, EVENT_CONVERTED, converted_payload)
         elif card.draft_type == "rejection" and lead.copper_id:
-            # AI-generated reason/detail are additive and best-effort: a failed
-            # AI call must never block the archive write (status=Unqualified).
+            # A human-picked card.rejection_reasons (issue #223) outranks the
+            # AI generator -- see claude_agent.resolve_unqualification_reason.
+            # Either way this is additive and best-effort: a failed AI call
+            # must never block the archive write (status=Unqualified).
             reason_option_ids, detail_text = None, None
             try:
-                unqual = claude_agent.generate_unqualification_reason(
+                unqual = claude_agent.resolve_unqualification_reason(
+                    rejection_reasons=getattr(card, "rejection_reasons", None),
                     company_name=lead.company_name,
                     bucket=effective_bucket,
                     summary=card.summary,
@@ -429,11 +439,18 @@ async def update_draft(
     return card
 
 
-def _regenerate_draft_for_bucket(lead: Lead, bucket: str, summary: str, owner_fields: dict) -> dict:
+def _regenerate_draft_for_bucket(
+    lead: Lead, bucket: str, summary: str, owner_fields: dict, reasons: Optional[list[str]] = None
+) -> dict:
     """Calls claude_agent.regenerate_draft with up to
     _DRAFT_REGEN_MAX_ATTEMPTS tries so one transient LLM hiccup doesn't leave
     a stale draft in place (issue #150). Raises the last exception once every
-    attempt has failed."""
+    attempt has failed.
+
+    `reasons` (issue #223) are passed straight through to
+    claude_agent.regenerate_draft, which already ignores them for any bucket
+    other than REJECT and drops internal-only labels before they reach the
+    prompt -- this function has no bucket-specific logic of its own."""
     last_exc: Optional[Exception] = None
     for attempt in range(1, _DRAFT_REGEN_MAX_ATTEMPTS + 1):
         try:
@@ -452,6 +469,7 @@ def _regenerate_draft_for_bucket(lead: Lead, bucket: str, summary: str, owner_fi
                 bucket,
                 summary,
                 lead_id=str(lead.id),
+                reasons=reasons,
                 **owner_fields,
             )
         except Exception as exc:
@@ -502,6 +520,12 @@ async def override_bucket(
     card.user_override = body.bucket
     card.user_override_at = datetime.now(timezone.utc)
     card.bucket = body.bucket
+    if body.bucket != "REJECT":
+        # A prior REJECT's selected reasons (issue #223) must not survive a
+        # bucket flip -- leaving them in place could later feed a stale,
+        # wrong-context selection into Copper CF 244358 if the lead is
+        # overridden back to REJECT without the partner re-picking reasons.
+        card.rejection_reasons = None
 
     # Regenerate the draft email to match the new bucket.
     await log_event(
@@ -724,11 +748,22 @@ async def rate_assessment(
 async def regenerate_draft(
     lead_id: str,
     request: Request,
+    body: Optional[RegenerateDraftRequest] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Force the LLM to write a fresh draft email matching the current effective bucket.
-    Used when a draft is missing (silent regen failure) or the user wants a rewrite."""
+    Used when a draft is missing (silent regen failure) or the user wants a rewrite.
+
+    `body.reasons` (issue #223) lets the partner pick which canonical
+    UNQUAL_REASON_OPTIONS reasons explain a REJECT -- validated here (unknown
+    label or more than MAX_REJECTION_REASONS -> 400, nothing written) before
+    any LLM call, then passed through to shape the draft and persisted on
+    `card.rejection_reasons` so a later archive/send can drive Copper's
+    Unqualification Reasons field from this human choice instead of the AI
+    generator. Ignored (and not persisted) for a YES/meeting-request
+    regeneration -- that path is unchanged.
+    """
     block_if_impersonating(request, user)
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
 
@@ -739,9 +774,23 @@ async def regenerate_draft(
             detail=f"Cannot regenerate draft for bucket={effective_bucket}",
         )
 
+    reasons = (body.reasons if body else None) or []
+    if len(reasons) > MAX_REJECTION_REASONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_REJECTION_REASONS} rejection reasons may be selected.",
+        )
+    unknown = [r for r in reasons if r not in claude_agent.UNQUAL_REASON_OPTIONS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown rejection reason(s): {', '.join(unknown)}")
+    if effective_bucket != "REJECT":
+        reasons = []
+
     try:
         owner_fields = await _load_owner_draft_fields(db, lead)
-        new_draft = _regenerate_draft_for_bucket(lead, effective_bucket, card.summary or "", owner_fields)
+        new_draft = _regenerate_draft_for_bucket(
+            lead, effective_bucket, card.summary or "", owner_fields, reasons=reasons
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc!r}")
 
@@ -749,6 +798,8 @@ async def regenerate_draft(
     card.draft_type = new_draft.get("draft_type")
     card.draft_subject = new_draft.get("draft_subject")
     card.draft_body = new_draft.get("draft_body")
+    if effective_bucket == "REJECT":
+        card.rejection_reasons = reasons or None
     await db.commit()
     await db.refresh(card)
     _apply_language_audit(card, lead)
