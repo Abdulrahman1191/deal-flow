@@ -42,6 +42,16 @@ REENGAGEMENT_PHRASES = [
     "reapply",
 ]
 
+# issue #239: an earlier build reintroduced a re-engagement invitation after
+# it had been removed -- this is the regression test that stops a third
+# round.
+FORBIDDEN_PHRASES = [
+    "تغيّرت",
+    "مجدداً",
+    "permanent no",
+    "hear from you again",
+]
+
 
 # ---------------------------------------------------------------------------
 # 1. select_template
@@ -180,6 +190,19 @@ def test_no_rendered_body_invites_reapplication():
             )
             lowered = result["body"].lower()
             for phrase in REENGAGEMENT_PHRASES:
+                assert phrase not in lowered
+
+
+def test_no_rendered_body_contains_forbidden_reengagement_wording():
+    for language in ("en", "ar"):
+        for template_key in rejection_templates.TEMPLATE_KEYS:
+            reasons_by_key = {v: k for k, v in rejection_templates.REASON_TO_TEMPLATE.items()}
+            result = rejection_templates.render_rejection_email(
+                first_name="Sara", company="Acme", partner_name="Reem",
+                reasons=[reasons_by_key[template_key]], language=language,
+            )
+            lowered = result["body"].lower()
+            for phrase in FORBIDDEN_PHRASES:
                 assert phrase not in lowered
 
 
