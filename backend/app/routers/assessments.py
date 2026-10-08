@@ -19,9 +19,10 @@ from app.schemas.assessment import (
     BucketOverride,
     DraftUpdate,
     RegenerateDraftRequest,
+    RejectionTemplateRequest,
 )
 from app.config import settings
-from app.services import claude_agent, copper_service, copper_writer, email_sender, language_audit
+from app.services import claude_agent, copper_service, copper_writer, email_sender, language_audit, rejection_templates
 from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
 from app.services.override_capture import capture_override
 from app.tasks.sync_copper import resolve_copper_id
@@ -803,6 +804,82 @@ async def regenerate_draft(
     await db.commit()
     await db.refresh(card)
     _apply_language_audit(card, lead)
+    return card
+
+
+@router.post("/{lead_id}/rejection-template", response_model=AssessmentOut)
+async def apply_rejection_template(
+    lead_id: str,
+    request: Request,
+    body: Optional[RejectionTemplateRequest] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Renders one of the four fixed rejection_templates straight onto the
+    card -- plain string formatting, zero LLM calls (issue #232). Sits
+    beside `regenerate_draft` rather than inside it: the template is the
+    DEFAULT action for a REJECT draft; "Regenerate with AI" (unchanged,
+    still calls regenerate_draft above) is the opt-in escape hatch for the
+    rare lead that needs bespoke wording.
+
+    `body.reasons` (same canonical UNQUAL_REASON_OPTIONS labels and cap as
+    regenerate-draft's `reasons`) pick the template per
+    rejection_templates.select_template and are persisted on
+    `card.rejection_reasons`, same as a reasoned AI regeneration -- a later
+    archive/send still drives Copper's Unqualification Reasons field from
+    this human choice. `body.language` optionally overrides the detected
+    applicant language with an explicit "en"/"ar" toggle.
+    """
+    block_if_impersonating(request, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
+
+    effective_bucket = card.user_override or card.bucket
+    if effective_bucket != "REJECT":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot apply a rejection template for bucket={effective_bucket}",
+        )
+
+    reasons = (body.reasons if body else None) or []
+    if len(reasons) > MAX_REJECTION_REASONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_REJECTION_REASONS} rejection reasons may be selected.",
+        )
+    unknown = [r for r in reasons if r not in claude_agent.UNQUAL_REASON_OPTIONS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown rejection reason(s): {', '.join(unknown)}")
+
+    language = body.language if body else None
+    if language is not None and language not in ("en", "ar"):
+        raise HTTPException(status_code=400, detail="language must be 'en' or 'ar'")
+
+    rendered = rejection_templates.render_rejection_email(
+        lead_data={
+            "company_name": lead.company_name,
+            "founder_names": lead.founder_names,
+            "description": lead.description,
+            "pitch_deck_text": lead.pitch_deck_text,
+            # Applicant-authored language signal (issue #168) -- see
+            # claude_agent.detect_applicant_language.
+            "source_detail": copper_service.get_custom_field_value(
+                getattr(lead, "raw_copper_data", None), settings.copper_cf_source_detail_id
+            ),
+        },
+        reasons=reasons,
+        language=language,
+    )
+
+    card.draft_bucket = effective_bucket
+    card.draft_type = "rejection"
+    card.draft_subject = rendered["subject"]
+    card.draft_body = rendered["body"]
+    card.rejection_reasons = reasons or None
+    await db.commit()
+    await db.refresh(card)
+    _apply_language_audit(card, lead)
+    card.rejection_template = rendered["template"]
+    card.rejection_language = rendered["language"]
     return card
 
 

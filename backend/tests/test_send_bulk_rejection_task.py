@@ -339,3 +339,44 @@ def test_task_missing_lead_is_reported_as_failed(monkeypatch):
     assert result["status"] == "failed"
     assert result["reason"] == "lead_or_assessment_missing"
     assert item.status == "failed"
+
+
+# ---------------------------------------------------------------------------
+# issue #232: bulk send of N leads makes zero LLM calls -- the task only
+# ever ships whatever rejection_templates (or a prior template/AI
+# regeneration) already wrote onto card.draft_body; it never calls the
+# model itself.
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_send_of_n_leads_produces_n_emails_and_zero_llm_calls(monkeypatch):
+    from app.services import claude_agent
+
+    def _fail_if_called(**_kwargs):
+        raise AssertionError("_chat_completion must never be entered on the bulk send path")
+
+    monkeypatch.setattr(claude_agent, "_chat_completion", _fail_if_called)
+    monkeypatch.setattr(send_bulk_rejection, "capture_override", _noop_capture)
+
+    sent_calls = []
+    monkeypatch.setattr(
+        email_sender, "send_email",
+        lambda to, subject, body, **kw: sent_calls.append({"to": to, "subject": subject, "body": body}),
+    )
+
+    leads_and_cards = [
+        (_fake_lead(recipient=f"founder-{i}@acme.test"), _fake_card(draft_body=f"Templated rejection #{i}."))
+        for i in range(5)
+    ]
+
+    for lead, card in leads_and_cards:
+        session = _FakeTaskSession(lead=lead, card=card, item=_fake_item())
+        _install_fake_session(monkeypatch, session)
+        result = asyncio.run(send_bulk_rejection._run(str(uuid.uuid4()), str(lead.id), "reviewer@raed.vc"))
+        assert result["status"] == "sent"
+
+    assert len(sent_calls) == 5
+    assert {c["to"] for c in sent_calls} == {f"founder-{i}@acme.test" for i in range(5)}
+    # Each email is the distinct templated body that was on its own card --
+    # one separate email per lead, never a shared/merged draft.
+    assert {c["body"] for c in sent_calls} == {f"Templated rejection #{i}." for i in range(5)}

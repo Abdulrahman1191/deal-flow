@@ -54,6 +54,17 @@ export interface Assessment {
   assessed_without_deck: boolean;
   user_override: string | null;
   user_override_at: string | null;
+  // Canonical UNQUAL_REASON_OPTIONS labels picked for the current rejection
+  // draft (issue #223/#232) -- drives both the rejection_templates mapping
+  // and Copper's Unqualification Reasons field. Null until a reasoned
+  // template/AI regen happens.
+  rejection_reasons: string[] | null;
+  // Computed, not stored (issue #232) -- which of the four
+  // rejection_templates keys / which language the draft_body was last
+  // rendered from. Only set right after POST .../rejection-template; null
+  // otherwise (including an untouched LLM-written REJECT draft).
+  rejection_template: "CONFLICT" | "MARKET_SIZE" | "TRACTION" | "MANDATE" | null;
+  rejection_language: "en" | "ar" | null;
   user_rating: "up" | "down" | null;
   user_rating_at: string | null;
   approved_at: string | null;

@@ -58,5 +58,18 @@ export const rateAssessment = (
 export const reassess = (leadId: string) =>
   client.post(`/assessments/${leadId}/reassess`).then((r) => r.data);
 
-export const regenerateDraft = (leadId: string) =>
-  client.post<Assessment>(`/assessments/${leadId}/regenerate-draft`).then((r) => r.data);
+export const regenerateDraft = (leadId: string, reasons?: string[]) =>
+  client
+    .post<Assessment>(`/assessments/${leadId}/regenerate-draft`, reasons?.length ? { reasons } : {})
+    .then((r) => r.data);
+
+// Renders one of the four fixed rejection templates (issue #232) straight
+// onto the card -- zero LLM calls. The default action for a REJECT draft;
+// regenerateDraft above ("Regenerate with AI") is the opt-in escape hatch.
+export const applyRejectionTemplate = (
+  leadId: string,
+  data: { reasons?: string[]; language?: "en" | "ar" | null },
+) =>
+  client
+    .post<Assessment>(`/assessments/${leadId}/rejection-template`, data)
+    .then((r) => r.data);

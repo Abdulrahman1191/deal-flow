@@ -69,6 +69,14 @@ class AssessmentOut(BaseModel):
     # Carried forward from a thumbs-down auto-reject (issue #225). None for
     # every other path (manual override, approve/skip, up-rating, ...).
     rejection_reasons: Optional[List[str]] = None
+    # Computed, not stored (issue #232) -- which of the four fixed
+    # rejection_templates keys / which language the current draft_body was
+    # last rendered from. Only set right after POST
+    # .../rejection-template; None on every other response (including a
+    # REJECT draft that's still the original LLM-written one), same pattern
+    # as language_mismatch/draft_missing above.
+    rejection_template: Optional[str] = None
+    rejection_language: Optional[str] = None
     approved_at: Optional[datetime]
     sent_at: Optional[datetime]
     created_at: datetime
@@ -104,6 +112,17 @@ class RegenerateDraftRequest(BaseModel):
     and capped at MAX_REJECTION_REASONS by the router (a 400, not a 422, so
     the error reads the same way as the rest of this router's validation)."""
     reasons: Optional[List[str]] = None
+
+
+class RejectionTemplateRequest(BaseModel):
+    """Body for POST /assessments/{lead_id}/rejection-template (issue #232).
+    `reasons` are canonical claude_agent.UNQUAL_REASON_OPTIONS labels, same
+    validation as RegenerateDraftRequest above (max MAX_REJECTION_REASONS,
+    must be known labels). `language` optionally overrides the deterministic
+    detect_applicant_language signal with an explicit "en"/"ar" toggle;
+    omitted or anything else falls back to detection."""
+    reasons: Optional[List[str]] = None
+    language: Optional[str] = None
 
 
 class BucketOverride(BaseModel):
