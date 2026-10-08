@@ -52,6 +52,15 @@ FORBIDDEN_PHRASES = [
     "hear from you again",
 ]
 
+# issue #239: pinned byte-for-byte from the v4 copy appendix. The
+# byte-identical-outside-reason tests below only compare the four rendered
+# bodies against each other, not against this appendix, so they can't catch
+# the closing sentence drifting back to a stale wording (e.g. the v3
+# "ما تتمنونه" that slipped back in) -- this assertion is what catches that.
+AR_CLOSING_SENTENCE = (
+    "هذا القرار يعكس وضع رائد فنتشرز في الوقت الحالي أكثر مما يعكس حكمًا على ما يتم بناؤه."
+)
+
 
 # ---------------------------------------------------------------------------
 # 1. select_template
@@ -204,6 +213,16 @@ def test_no_rendered_body_contains_forbidden_reengagement_wording():
             lowered = result["body"].lower()
             for phrase in FORBIDDEN_PHRASES:
                 assert phrase not in lowered
+
+
+def test_arabic_closing_sentence_matches_v4_copy_exactly():
+    for template_key in rejection_templates.TEMPLATE_KEYS:
+        reasons_by_key = {v: k for k, v in rejection_templates.REASON_TO_TEMPLATE.items()}
+        result = rejection_templates.render_rejection_email(
+            first_name="سارة", company="أكمي", partner_name="ريم",
+            reasons=[reasons_by_key[template_key]], language="ar",
+        )
+        assert AR_CLOSING_SENTENCE in result["body"]
 
 
 def test_missing_first_name_degrades_to_usable_greeting_english():
