@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
-import { regenerateDraft, sendEmail, updateDraft } from "../../api/assessments";
+import { regenerateDraft, renderRejectionTemplate, sendEmail, updateDraft } from "../../api/assessments";
 import { fetchMyReasons } from "../../api/overrides";
 import { useToast } from "../shared/Toast";
 import type { Lead } from "../../types/lead";
@@ -66,6 +66,12 @@ export default function EmailModal({ lead, onClose }: Props) {
   const canonicalSelectedReasons = Array.from(selectedReasons).filter((r) => UNQUAL_REASON_LABELS.includes(r));
   const hasLearnedReasonSelected = canonicalSelectedReasons.length < selectedReasons.size;
 
+  // EN/AR toggle (issue #232) -- defaults to whatever the backend's
+  // zero-LLM template endpoint auto-detected from the applicant's own text
+  // (claude_agent.detect_applicant_language) the first time it renders;
+  // once the partner picks a value it stays pinned to that override.
+  const [language, setLanguage] = useState<"en" | "ar" | null>(assessment?.draft_language ?? null);
+
   const toggleReason = (label: string) =>
     setSelectedReasons((prev) => {
       const next = new Set(prev);
@@ -102,10 +108,31 @@ export default function EmailModal({ lead, onClose }: Props) {
     },
   });
 
-  // Auto-regenerate whenever the modal is showing a stale draft: on open with
-  // a missing/mismatched draft (e.g. a silent regen failure), and again if
-  // the effective bucket changes out from under an already-open modal. Never
-  // fires for MAYBE — there's no email to write for it.
+  // Zero-LLM prebuilt rejection template (issue #232) -- the default path for
+  // a REJECT draft. "Regenerate with AI" (regenMutation above) stays as an
+  // explicit, demoted opt-in for bespoke wording.
+  const templateMutation = useMutation({
+    mutationFn: (params: { reasons?: string[]; language?: "en" | "ar" }) =>
+      renderRejectionTemplate(lead.id, params),
+    onSuccess: (data) => {
+      loadedSignature.current = `${data.draft_type}:${data.draft_body}`;
+      setSubject(data.draft_subject ?? "");
+      setBody(data.draft_body ?? "");
+      setError(null);
+      if (data.draft_language) setLanguage(data.draft_language);
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+    onError: (err: unknown) => {
+      setError(extractDetail(err) ?? "Couldn't render the template — try again.");
+    },
+  });
+
+  // Auto-render whenever the modal is showing a stale draft: on open with a
+  // missing/mismatched draft (e.g. a silent regen failure), and again if the
+  // effective bucket changes out from under an already-open modal. A REJECT
+  // lead renders from the zero-LLM template by default; YES still uses the
+  // AI path (unchanged, out of scope for issue #232). Never fires for
+  // MAYBE — there's no email to write for it.
   useEffect(() => {
     const signature = `${assessment?.draft_type}:${assessment?.draft_body}`;
     if (signature !== loadedSignature.current) {
@@ -119,8 +146,10 @@ export default function EmailModal({ lead, onClose }: Props) {
       }
       setError(null);
     }
-    if (isStale && effectiveBucket !== "MAYBE" && !regenMutation.isPending) {
-      regenMutation.mutate(effectiveBucket === "REJECT" ? canonicalSelectedReasons : undefined);
+    if (isStale && effectiveBucket === "REJECT" && !templateMutation.isPending) {
+      templateMutation.mutate({ reasons: canonicalSelectedReasons, language: language ?? undefined });
+    } else if (isStale && effectiveBucket === "YES" && !regenMutation.isPending) {
+      regenMutation.mutate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assessment?.draft_type, assessment?.draft_body, effectiveBucket]);
@@ -167,7 +196,8 @@ export default function EmailModal({ lead, onClose }: Props) {
     return effectiveBucket === "YES" ? "Meeting Request" : "Rejection";
   })();
 
-  const generating = regenMutation.isPending;
+  const rendering = templateMutation.isPending;
+  const generating = regenMutation.isPending || rendering;
   const fieldsDisabled = generating || isStale;
   const canSend = !isStale && !generating && !sendMutation.isPending && !!body.trim() && !!subject.trim();
 
@@ -181,9 +211,14 @@ export default function EmailModal({ lead, onClose }: Props) {
             <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${bucketColor}`}>
               {headerLabel}
             </p>
-            {generating && (
+            {regenMutation.isPending && (
               <p className="text-[10px] text-info mt-1 animate-pulse">
                 AI is writing the draft…
+              </p>
+            )}
+            {rendering && (
+              <p className="text-[10px] text-info mt-1 animate-pulse">
+                Rendering template…
               </p>
             )}
           </div>
@@ -218,11 +253,37 @@ export default function EmailModal({ lead, onClose }: Props) {
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Pass reasons (up to {MAX_REJECTION_REASONS})
               </label>
-              {atReasonLimit && (
-                <span className="text-[10px] text-warning" data-testid="reason-limit-notice">
-                  Limit reached — deselect one to pick another
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {atReasonLimit && (
+                  <span className="text-[10px] text-warning" data-testid="reason-limit-notice">
+                    Limit reached — deselect one to pick another
+                  </span>
+                )}
+                {/* EN/AR toggle (issue #232) -- defaults to the backend's
+                    detected applicant language; re-renders the template
+                    immediately on change. */}
+                <div className="flex rounded-md border border-border overflow-hidden" data-testid="language-toggle">
+                  {(["en", "ar"] as const).map((lang) => (
+                    <button
+                      key={lang}
+                      type="button"
+                      disabled={rendering}
+                      onClick={() => {
+                        setLanguage(lang);
+                        templateMutation.mutate({ reasons: canonicalSelectedReasons, language: lang });
+                      }}
+                      data-testid={`language-toggle-${lang}`}
+                      className={`text-[10px] uppercase px-2 py-1 transition-colors disabled:opacity-50 ${
+                        (language ?? "en") === lang
+                          ? "bg-primary text-white"
+                          : "bg-transparent text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {lang}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
               {UNQUAL_REASON_LABELS.map((label) => {
@@ -281,15 +342,33 @@ export default function EmailModal({ lead, onClose }: Props) {
               </p>
             )}
 
-            <button
-              type="button"
-              onClick={() => regenMutation.mutate(canonicalSelectedReasons)}
-              disabled={generating}
-              className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
-              data-testid="regenerate-with-reasons-btn"
-            >
-              {generating ? "Regenerating…" : "Regenerate with these reasons ↻"}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  templateMutation.mutate({ reasons: canonicalSelectedReasons, language: language ?? undefined })
+                }
+                disabled={generating}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
+                data-testid="render-template-btn"
+              >
+                {rendering ? "Rendering…" : "Use template with these reasons"}
+              </button>
+              {/* "Regenerate with AI" (issue #232) -- demoted to an explicit
+                  secondary action for the rare lead that needs bespoke
+                  wording (issue #223's reason-aware regeneration, kept but
+                  no longer the default). */}
+              <button
+                type="button"
+                onClick={() => regenMutation.mutate(canonicalSelectedReasons)}
+                disabled={generating}
+                title="Ask the AI to write a bespoke draft instead of the template"
+                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+                data-testid="regenerate-with-reasons-btn"
+              >
+                {regenMutation.isPending ? "Regenerating…" : "Regenerate with AI ↻"}
+              </button>
+            </div>
           </div>
         )}
 

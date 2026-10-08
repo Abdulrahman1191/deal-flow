@@ -55,6 +55,12 @@ class AssessmentOut(BaseModel):
     # real values before returning.
     language_mismatch: bool = False
     draft_missing: bool = False
+    # The language a prebuilt rejection template was last rendered in (issue
+    # #232) -- "en"/"ar", computed at render time, not stored. None for every
+    # card that's never gone through POST .../rejection-template (including
+    # every YES/MAYBE card and any REJECT card only ever regenerated via the
+    # LLM path), same pattern as draft_bucket/language_mismatch above.
+    draft_language: Optional[str] = None
     research_sources: Optional[List]
     assessed_without_deck: bool
     user_override: Optional[str]
@@ -104,6 +110,17 @@ class RegenerateDraftRequest(BaseModel):
     and capped at MAX_REJECTION_REASONS by the router (a 400, not a 422, so
     the error reads the same way as the rest of this router's validation)."""
     reasons: Optional[List[str]] = None
+
+
+class RejectionTemplateRequest(BaseModel):
+    """Optional body for POST /assessments/{lead_id}/rejection-template
+    (issue #232) -- the zero-LLM template path that sits beside
+    RegenerateDraftRequest/regenerate-draft above rather than inside it.
+    `reasons` are validated identically (canonical label, capped at
+    MAX_REJECTION_REASONS). `language` ("en"/"ar") overrides
+    claude_agent.detect_applicant_language's default; omit to use it."""
+    reasons: Optional[List[str]] = None
+    language: Optional[str] = None
 
 
 class BucketOverride(BaseModel):
