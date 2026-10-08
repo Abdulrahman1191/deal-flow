@@ -58,5 +58,24 @@ export const rateAssessment = (
 export const reassess = (leadId: string) =>
   client.post(`/assessments/${leadId}/reassess`).then((r) => r.data);
 
-export const regenerateDraft = (leadId: string) =>
-  client.post<Assessment>(`/assessments/${leadId}/regenerate-draft`).then((r) => r.data);
+export const regenerateDraft = (leadId: string, reasons?: string[]) =>
+  client
+    .post<Assessment>(`/assessments/${leadId}/regenerate-draft`, reasons ? { reasons } : undefined)
+    .then((r) => r.data);
+
+// Zero-LLM counterpart to regenerateDraft (issue #232) -- renders one of the
+// four prebuilt rejection templates instead of calling the model. `language`
+// omitted lets the backend default to claude_agent.detect_applicant_language;
+// pass "en"/"ar" to reflect the partner's toggle override.
+export interface RejectionTemplateResult extends Assessment {
+  rejection_template_key: "CONFLICT" | "MARKET_SIZE" | "TRACTION" | "MANDATE";
+  rejection_template_language: "en" | "ar";
+}
+
+export const renderRejectionTemplate = (
+  leadId: string,
+  data: { reasons?: string[]; language?: "en" | "ar" },
+) =>
+  client
+    .post<RejectionTemplateResult>(`/assessments/${leadId}/rejection-template`, data)
+    .then((r) => r.data);

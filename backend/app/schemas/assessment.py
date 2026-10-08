@@ -106,6 +106,16 @@ class RegenerateDraftRequest(BaseModel):
     reasons: Optional[List[str]] = None
 
 
+class RejectionTemplateRequest(BaseModel):
+    """Optional body for POST /assessments/{lead_id}/rejection-template (issue
+    #232), the zero-LLM counterpart to RegenerateDraftRequest above. `reasons`
+    -- same canonical labels, same validation. `language` optionally overrides
+    claude_agent.detect_applicant_language's "en"/"ar" default, for the
+    partner's EN/AR toggle in the modal."""
+    reasons: Optional[List[str]] = None
+    language: Optional[str] = None
+
+
 class BucketOverride(BaseModel):
     bucket: str
     # Optional human reason captured by the post-click ReasonModal.

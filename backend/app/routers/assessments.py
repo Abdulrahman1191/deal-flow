@@ -19,9 +19,10 @@ from app.schemas.assessment import (
     BucketOverride,
     DraftUpdate,
     RegenerateDraftRequest,
+    RejectionTemplateRequest,
 )
 from app.config import settings
-from app.services import claude_agent, copper_service, copper_writer, email_sender, language_audit
+from app.services import claude_agent, copper_service, copper_writer, email_sender, language_audit, rejection_templates
 from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
 from app.services.override_capture import capture_override
 from app.tasks.sync_copper import resolve_copper_id
@@ -804,6 +805,95 @@ async def regenerate_draft(
     await db.refresh(card)
     _apply_language_audit(card, lead)
     return card
+
+
+@router.post("/{lead_id}/rejection-template")
+async def render_rejection_template(
+    lead_id: str,
+    request: Request,
+    body: Optional[RejectionTemplateRequest] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Zero-LLM counterpart to /regenerate-draft for REJECT leads (issue
+    #232): renders one of four prebuilt templates (rejection_templates.py)
+    instead of calling the model. Sits beside regenerate_draft rather than
+    inside it -- "Regenerate with AI" above stays available as an explicit
+    opt-in for the rare lead that needs bespoke wording.
+
+    `body.reasons` -- same canonical UNQUAL_REASON_OPTIONS labels as
+    regenerate-draft, same validation -- select which of the four templates
+    renders (rejection_templates.select_template_key), by precedence when
+    several map to different templates. Internal-only reasons never select a
+    template (fall back to MANDATE) but are still persisted on
+    `card.rejection_reasons` exactly as today, so Copper's Unqualification
+    Reasons field is unaffected.
+
+    `body.language` optionally overrides claude_agent.detect_applicant_language's
+    en/ar default -- the partner's EN/AR toggle in the modal.
+
+    Writes the rendered subject/body onto the card exactly like
+    regenerate-draft does, so the bulk rejection flow (which only ever reads
+    card.draft_body/draft_type/draft_bucket) picks up template content with
+    no changes of its own.
+    """
+    block_if_impersonating(request, user)
+    card, lead = await _get_card_and_lead(lead_id, request, db, user)
+
+    effective_bucket = card.user_override or card.bucket
+    if effective_bucket != "REJECT":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot render a rejection template for bucket={effective_bucket}",
+        )
+
+    reasons = (body.reasons if body else None) or []
+    if len(reasons) > MAX_REJECTION_REASONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_REJECTION_REASONS} rejection reasons may be selected.",
+        )
+    unknown = [r for r in reasons if r not in claude_agent.UNQUAL_REASON_OPTIONS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown rejection reason(s): {', '.join(unknown)}")
+
+    language = (body.language if body else None)
+    if language is None:
+        language = claude_agent.detect_applicant_language(
+            {
+                "company_name": lead.company_name,
+                "pitch_deck_text": lead.pitch_deck_text,
+                "source_detail": copper_service.get_custom_field_value(
+                    getattr(lead, "raw_copper_data", None), settings.copper_cf_source_detail_id
+                ),
+                "description": lead.description,
+            }
+        )
+    elif language not in ("en", "ar"):
+        raise HTTPException(status_code=400, detail="language must be 'en' or 'ar'")
+
+    owner_fields = await _load_owner_draft_fields(db, lead)
+    rendered = rejection_templates.render_rejection_email(
+        reasons=reasons,
+        language=language,
+        first_name=rejection_templates.first_name_from_founders(lead.founder_names),
+        company=lead.company_name,
+        partner_name=owner_fields.get("owner_name"),
+    )
+
+    card.draft_bucket = effective_bucket
+    card.draft_type = "rejection"
+    card.draft_subject = rendered["subject"]
+    card.draft_body = rendered["body"]
+    card.rejection_reasons = reasons or None
+    await db.commit()
+    await db.refresh(card)
+    _apply_language_audit(card, lead)
+
+    data = AssessmentOut.model_validate(card).model_dump(mode="json")
+    data["rejection_template_key"] = rendered["template_key"]
+    data["rejection_template_language"] = rendered["language"]
+    return data
 
 
 @router.post("/{lead_id}/reassess", status_code=202)

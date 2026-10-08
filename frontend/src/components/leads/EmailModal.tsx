@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
-import { regenerateDraft, sendEmail, updateDraft } from "../../api/assessments";
+import { regenerateDraft, renderRejectionTemplate, sendEmail, updateDraft } from "../../api/assessments";
 import { useToast } from "../shared/Toast";
+import RejectionReasonPicker from "./RejectionReasonPicker";
 import type { Lead } from "../../types/lead";
 
 interface Props {
@@ -43,6 +44,15 @@ export default function EmailModal({ lead, onClose }: Props) {
   const [body, setBody] = useState(isStale ? "" : assessment?.draft_body ?? "");
   const [error, setError] = useState<string | null>(null);
 
+  // Partner-picked canonical reasons (issue #223/#232) driving which of the
+  // four prebuilt rejection templates renders. REJECT-only; irrelevant for a
+  // YES/meeting-request draft.
+  const [reasons, setReasons] = useState<Set<string>>(new Set(assessment?.rejection_reasons ?? []));
+  // null = no explicit override yet -- let the backend's
+  // detect_applicant_language default stand. Once the partner taps EN/AR,
+  // every future render (reason change, regenerate) pins to that choice.
+  const [languageOverride, setLanguageOverride] = useState<"en" | "ar" | null>(null);
+
   // Signature of the draft currently reflected in the fields above, so we can
   // tell "the draft changed under us" (a bucket override or background
   // reassessment landing while this modal is open) apart from the user's own
@@ -50,7 +60,7 @@ export default function EmailModal({ lead, onClose }: Props) {
   const loadedSignature = useRef(`${assessment?.draft_type}:${assessment?.draft_body}`);
 
   const regenMutation = useMutation({
-    mutationFn: () => regenerateDraft(lead.id),
+    mutationFn: () => regenerateDraft(lead.id, effectiveBucket === "REJECT" ? Array.from(reasons) : undefined),
     onSuccess: (data) => {
       loadedSignature.current = `${data.draft_type}:${data.draft_body}`;
       setSubject(data.draft_subject ?? "");
@@ -65,6 +75,44 @@ export default function EmailModal({ lead, onClose }: Props) {
       );
     },
   });
+
+  // Zero-LLM default for a REJECT draft (issue #232) -- renders one of the
+  // four prebuilt templates. "Regenerate with AI" (regenMutation above)
+  // stays available as an explicit, opt-in secondary action.
+  const templateMutation = useMutation({
+    mutationFn: (vars: { reasons: string[]; language?: "en" | "ar" }) => renderRejectionTemplate(lead.id, vars),
+    onSuccess: (data) => {
+      loadedSignature.current = `${data.draft_type}:${data.draft_body}`;
+      setSubject(data.draft_subject ?? "");
+      setBody(data.draft_body ?? "");
+      setError(null);
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+    onError: (err: unknown) => {
+      const msg = extractDetail(err);
+      setError(msg ?? "Couldn't render the rejection template — try again.");
+    },
+  });
+
+  const toggleReason = (label: string) => {
+    setReasons((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) {
+        next.delete(label);
+      } else if (next.size < 3) {
+        next.add(label);
+      } else {
+        return prev;
+      }
+      templateMutation.mutate({ reasons: Array.from(next), language: languageOverride ?? undefined });
+      return next;
+    });
+  };
+
+  const changeLanguage = (language: "en" | "ar") => {
+    setLanguageOverride(language);
+    templateMutation.mutate({ reasons: Array.from(reasons), language });
+  };
 
   // Auto-regenerate whenever the modal is showing a stale draft: on open with
   // a missing/mismatched draft (e.g. a silent regen failure), and again if
@@ -83,8 +131,14 @@ export default function EmailModal({ lead, onClose }: Props) {
       }
       setError(null);
     }
-    if (isStale && effectiveBucket !== "MAYBE" && !regenMutation.isPending) {
+    if (isStale && effectiveBucket === "YES" && !regenMutation.isPending) {
       regenMutation.mutate();
+    } else if (isStale && effectiveBucket === "REJECT" && !templateMutation.isPending) {
+      // Template is the default for a REJECT draft (issue #232) -- no LLM
+      // call. Uses whatever reasons/language are already picked (e.g. a
+      // reload of a card with persisted rejection_reasons); starts from
+      // MANDATE with none picked yet.
+      templateMutation.mutate({ reasons: Array.from(reasons), language: languageOverride ?? undefined });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assessment?.draft_type, assessment?.draft_body, effectiveBucket]);
@@ -131,9 +185,10 @@ export default function EmailModal({ lead, onClose }: Props) {
     return effectiveBucket === "YES" ? "Meeting Request" : "Rejection";
   })();
 
-  const generating = regenMutation.isPending;
+  const generating = regenMutation.isPending || templateMutation.isPending;
   const fieldsDisabled = generating || isStale;
   const canSend = !isStale && !generating && !sendMutation.isPending && !!body.trim() && !!subject.trim();
+  const activeLanguage = languageOverride ?? templateMutation.data?.rejection_template_language ?? "en";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
@@ -145,9 +200,14 @@ export default function EmailModal({ lead, onClose }: Props) {
             <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${bucketColor}`}>
               {headerLabel}
             </p>
-            {generating && (
+            {regenMutation.isPending && (
               <p className="text-[10px] text-info mt-1 animate-pulse">
                 AI is writing the draft…
+              </p>
+            )}
+            {templateMutation.isPending && (
+              <p className="text-[10px] text-info mt-1 animate-pulse">
+                Loading template…
               </p>
             )}
           </div>
@@ -158,10 +218,14 @@ export default function EmailModal({ lead, onClose }: Props) {
               className={`text-xs transition-colors disabled:opacity-50 ${
                 isStale ? "font-semibold text-warning hover:text-warning" : "text-info hover:text-info"
               }`}
-              title="Ask the AI to rewrite this draft"
+              title={
+                effectiveBucket === "REJECT"
+                  ? "Opt in to an AI-written draft instead of the template (bespoke wording)"
+                  : "Ask the AI to rewrite this draft"
+              }
               data-testid="regenerate-draft-btn"
             >
-              {generating ? "…" : "Regenerate ↻"}
+              {regenMutation.isPending ? "…" : "Regenerate with AI ↻"}
             </button>
             <button
               onClick={onClose}
@@ -184,10 +248,22 @@ export default function EmailModal({ lead, onClose }: Props) {
               </p>
               <p className="text-warning/80">
                 The lead's current call is <strong>{effectiveBucket}</strong>, but the saved draft
-                {assessment?.draft_type ? ` was written as "${assessment.draft_type}"` : " is missing"}.
-                Click Regenerate above before sending.
+                {assessment?.draft_type ? ` was written as "${assessment.draft_type}"` : " is missing"}.{" "}
+                {effectiveBucket === "REJECT"
+                  ? "Loading the rejection template…"
+                  : "Click Regenerate above before sending."}
               </p>
             </div>
+          )}
+          {effectiveBucket === "REJECT" && (
+            <RejectionReasonPicker
+              selected={reasons}
+              onToggle={toggleReason}
+              language={activeLanguage}
+              onLanguageChange={changeLanguage}
+              templateKey={templateMutation.data?.rejection_template_key}
+              disabled={generating}
+            />
           )}
           <div>
             <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">

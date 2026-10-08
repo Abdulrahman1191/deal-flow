@@ -50,6 +50,10 @@ export interface Assessment {
   // written for (issue #150). Compared against the effective bucket
   // (user_override ?? bucket) to detect a stale draft — see EmailModal.
   draft_bucket: "YES" | "MAYBE" | "REJECT" | null;
+  // Partner-selected pass reasons for the current rejection draft (issue
+  // #223), canonical UNQUAL_REASON_OPTIONS labels -- see EmailModal's reason
+  // chip picker.
+  rejection_reasons: string[] | null;
   research_sources: string[] | null;
   assessed_without_deck: boolean;
   user_override: string | null;
