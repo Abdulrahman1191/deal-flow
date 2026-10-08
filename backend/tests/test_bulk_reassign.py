@@ -456,6 +456,144 @@ def test_bucket_filter_narrows_to_matching_effective_bucket():
     assert response.json()["count"] == 2  # yes_lead + overridden_lead (override wins)
 
 
+def test_buckets_list_moves_exactly_those_buckets_and_no_others():
+    yes_lead = _lead(1, bucket="YES")
+    maybe_lead = _lead(2, bucket="MAYBE")
+    reject_lead = _lead(3, bucket="REJECT")
+    leads = [yes_lead, maybe_lead, reject_lead]
+
+    _auth_as(OWNER_EMAIL)
+    _use_db(_FakeSession(leads=leads))
+    try:
+        response = client.post(
+            PREVIEW_URL,
+            json={
+                "from_owner": FROM_OWNER,
+                "to_owners": ["waleed@raed.vc"],
+                "buckets": ["YES", "MAYBE"],
+            },
+        )
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.json()["count"] == 2
+    assert response.json()["by_bucket"] == {"YES": 1, "MAYBE": 1}
+
+
+def test_empty_buckets_list_absent_buckets_and_null_bucket_all_match_everything():
+    leads = [_lead(1, bucket="YES"), _lead(2, bucket="MAYBE"), _lead(3, bucket="REJECT")]
+
+    _auth_as(OWNER_EMAIL)
+    try:
+        _use_db(_FakeSession(leads=leads))
+        empty_list = client.post(
+            PREVIEW_URL,
+            json={"from_owner": FROM_OWNER, "to_owners": ["waleed@raed.vc"], "buckets": []},
+        )
+        _clear_db()
+
+        _use_db(_FakeSession(leads=leads))
+        absent = client.post(
+            PREVIEW_URL,
+            json={"from_owner": FROM_OWNER, "to_owners": ["waleed@raed.vc"]},
+        )
+        _clear_db()
+
+        _use_db(_FakeSession(leads=leads))
+        null_bucket = client.post(
+            PREVIEW_URL,
+            json={"from_owner": FROM_OWNER, "to_owners": ["waleed@raed.vc"], "bucket": None},
+        )
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert empty_list.json()["count"] == absent.json()["count"] == null_bucket.json()["count"] == 3
+
+
+def test_buckets_wins_when_both_bucket_and_buckets_are_sent():
+    yes_lead = _lead(1, bucket="YES")
+    reject_lead = _lead(2, bucket="REJECT")
+    leads = [yes_lead, reject_lead]
+
+    _auth_as(OWNER_EMAIL)
+    _use_db(_FakeSession(leads=leads))
+    try:
+        response = client.post(
+            PREVIEW_URL,
+            json={
+                "from_owner": FROM_OWNER,
+                "to_owners": ["waleed@raed.vc"],
+                "bucket": "YES",
+                "buckets": ["REJECT"],
+            },
+        )
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.json()["count"] == 1
+    assert response.json()["by_bucket"] == {"REJECT": 1}
+
+
+def test_singular_bucket_request_shape_still_works_unchanged():
+    yes_lead = _lead(1, bucket="YES")
+    maybe_lead = _lead(2, bucket="MAYBE")
+    leads = [yes_lead, maybe_lead]
+
+    _auth_as(OWNER_EMAIL)
+    _use_db(_FakeSession(leads=leads))
+    try:
+        response = client.post(
+            PREVIEW_URL,
+            json={"from_owner": FROM_OWNER, "to_owners": ["waleed@raed.vc"], "bucket": "YES"},
+        )
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.json()["count"] == 1
+    assert response.json()["by_bucket"] == {"YES": 1}
+
+
+def test_multi_bucket_execute_moves_only_those_buckets_with_deterministic_round_robin(monkeypatch):
+    yes_lead = _lead(1, bucket="YES")
+    maybe_lead = _lead(2, bucket="MAYBE")
+    reject_lead = _lead(3, bucket="REJECT")
+    leads = [yes_lead, maybe_lead, reject_lead]
+    targets = [_user("waleed@raed.vc", copper_user_id=1), _user("uday@raed.vc", copper_user_id=2)]
+    session = _FakeSession(leads=leads, users=targets)
+
+    monkeypatch.setattr(
+        leads_router.copper_writer, "push_assignee", lambda copper_id, assignee_id: None,
+    )
+
+    _auth_as(OWNER_EMAIL)
+    _use_db(session)
+    try:
+        response = client.post(
+            EXECUTE_URL,
+            json={
+                "from_owner": FROM_OWNER,
+                "to_owners": ["waleed@raed.vc", "uday@raed.vc"],
+                "buckets": ["YES", "MAYBE"],
+                "confirm_count": 2,
+            },
+        )
+    finally:
+        _clear_auth()
+        _clear_db()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["moved"] == 2
+    # sorted by id: yes_lead (1) -> waleed, maybe_lead (2) -> uday; reject_lead untouched.
+    assert yes_lead.owner_email == "waleed@raed.vc"
+    assert maybe_lead.owner_email == "uday@raed.vc"
+    assert reject_lead.owner_email == FROM_OWNER
+
+
 # ---------- per-lead isolation ----------
 
 

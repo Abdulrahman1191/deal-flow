@@ -130,7 +130,19 @@ class BulkReassignPreviewRequest(BaseModel):
     from_owner: str
     to_owners: List[str] = Field(min_length=1)
     bucket: Optional[Literal["YES", "MAYBE", "REJECT"]] = None
+    buckets: Optional[List[Literal["YES", "MAYBE", "REJECT"]]] = None
     include_converted: bool = False
+
+    def resolved_buckets(self) -> Optional[List[str]]:
+        """The effective bucket filter: `buckets` wins whenever it's a
+        non-empty list; the singular `bucket` is the fallback for existing
+        callers; neither set means match every bucket, same as `None` does
+        today."""
+        if self.buckets:
+            return self.buckets
+        if self.bucket:
+            return [self.bucket]
+        return None
 
 
 class BulkReassignRequest(BulkReassignPreviewRequest):

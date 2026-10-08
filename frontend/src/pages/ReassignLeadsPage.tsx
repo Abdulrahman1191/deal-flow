@@ -12,8 +12,7 @@ import {
 import Modal from "../components/shared/Modal";
 import { useToast } from "../components/shared/Toast";
 
-const BUCKETS: { value: ReassignBucket | ""; label: string }[] = [
-  { value: "", label: "Any bucket" },
+const BUCKETS: { value: ReassignBucket; label: string }[] = [
   { value: "YES", label: "YES" },
   { value: "MAYBE", label: "MAYBE" },
   { value: "REJECT", label: "REJECT" },
@@ -84,7 +83,7 @@ export default function ReassignLeadsPage() {
 
   const [fromOwner, setFromOwner] = useState("");
   const [toOwners, setToOwners] = useState<string[]>([]);
-  const [bucket, setBucket] = useState<ReassignBucket | "">("");
+  const [buckets, setBuckets] = useState<ReassignBucket[]>([]);
   const [includeConverted, setIncludeConverted] = useState(false);
   const [preview, setPreview] = useState<BulkReassignPreviewResult | null>(null);
   const [result, setResult] = useState<BulkReassignResult | null>(null);
@@ -105,8 +104,14 @@ export default function ReassignLeadsPage() {
     setResult(null);
   };
 
-  const updateBucket = (value: ReassignBucket | "") => {
-    setBucket(value);
+  const toggleBucket = (value: ReassignBucket) => {
+    setBuckets((prev) => (prev.includes(value) ? prev.filter((b) => b !== value) : [...prev, value]));
+    setPreview(null);
+    setResult(null);
+  };
+
+  const clearBuckets = () => {
+    setBuckets([]);
     setPreview(null);
     setResult(null);
   };
@@ -120,7 +125,7 @@ export default function ReassignLeadsPage() {
   type PreviewVars = {
     from_owner: string;
     to_owners: string[];
-    bucket: ReassignBucket | "";
+    buckets: ReassignBucket[];
     include_converted: boolean;
   };
 
@@ -129,15 +134,15 @@ export default function ReassignLeadsPage() {
       previewBulkReassign({
         from_owner: vars.from_owner,
         to_owners: vars.to_owners,
-        bucket: vars.bucket || undefined,
+        buckets: vars.buckets.length > 0 ? vars.buckets : undefined,
         include_converted: vars.include_converted,
       }),
     onSuccess: (data, vars) => {
       const stale =
         vars.from_owner !== fromOwner ||
-        vars.bucket !== bucket ||
         vars.include_converted !== includeConverted ||
-        !sameOwners(vars.to_owners, toOwners);
+        !sameOwners(vars.to_owners, toOwners) ||
+        !sameOwners(vars.buckets, buckets);
       if (stale) return;
       setPreview(data);
     },
@@ -149,7 +154,7 @@ export default function ReassignLeadsPage() {
       executeBulkReassign({
         from_owner: fromOwner,
         to_owners: toOwners,
-        bucket: bucket || undefined,
+        buckets: buckets.length > 0 ? buckets : undefined,
         include_converted: includeConverted,
         confirm_count: preview!.count,
       }),
@@ -181,6 +186,11 @@ export default function ReassignLeadsPage() {
     : "";
 
   const canPreview = !!fromOwner && toOwners.length > 0 && !previewMutation.isPending;
+  const confirmDisabledReason = !preview
+    ? "Run a preview first"
+    : preview.count === 0
+      ? "No leads match these filters"
+      : "";
 
   if (isLoading) return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Loading team…</p>;
   if (isError) {
@@ -219,20 +229,47 @@ export default function ReassignLeadsPage() {
             </select>
           </label>
 
-          <label className="block">
+          <div>
             <span className="text-xs font-medium text-muted-foreground">Bucket filter</span>
-            <select
-              value={bucket}
-              onChange={(e) => updateBucket(e.target.value as ReassignBucket | "")}
-              className="mt-1 w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
-            >
+            <p className="mt-1 text-xs text-muted-foreground">
+              None checked moves every bucket — check one or more to move only those.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <label
+                className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border cursor-pointer select-none transition-colors ${
+                  buckets.length === 0
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "border-border bg-background text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={buckets.length === 0}
+                  onChange={clearBuckets}
+                  className="h-3.5 w-3.5 rounded border-border accent-primary"
+                />
+                All buckets
+              </label>
               {BUCKETS.map((b) => (
-                <option key={b.value} value={b.value}>
+                <label
+                  key={b.value}
+                  className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border cursor-pointer select-none transition-colors ${
+                    buckets.includes(b.value)
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border bg-background text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={buckets.includes(b.value)}
+                    onChange={() => toggleBucket(b.value)}
+                    className="h-3.5 w-3.5 rounded border-border accent-primary"
+                  />
                   {b.label}
-                </option>
+                </label>
               ))}
-            </select>
-          </label>
+            </div>
+          </div>
         </div>
 
         <div>
@@ -284,7 +321,7 @@ export default function ReassignLeadsPage() {
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={() =>
-              previewMutation.mutate({ from_owner: fromOwner, to_owners: toOwners, bucket, include_converted: includeConverted })
+              previewMutation.mutate({ from_owner: fromOwner, to_owners: toOwners, buckets, include_converted: includeConverted })
             }
             disabled={!canPreview}
             className="px-4 py-2 text-sm font-medium rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -294,10 +331,14 @@ export default function ReassignLeadsPage() {
           <button
             onClick={() => setShowConfirm(true)}
             disabled={!preview || preview.count === 0}
+            title={confirmDisabledReason}
             className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Confirm reassignment
           </button>
+          {confirmDisabledReason && (
+            <span className="text-xs text-muted-foreground">{confirmDisabledReason}</span>
+          )}
         </div>
       </div>
 
