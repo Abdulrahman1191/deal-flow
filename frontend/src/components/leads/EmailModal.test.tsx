@@ -13,8 +13,16 @@ const regenerateDraft = vi.fn().mockResolvedValue({
   draft_body: "Body",
 });
 
+const renderRejectionTemplate = vi.fn().mockResolvedValue({
+  draft_type: "rejection",
+  draft_subject: "Template subject",
+  draft_body: "Template body",
+  draft_language: "en",
+});
+
 vi.mock("../../api/assessments", () => ({
   regenerateDraft: (...args: unknown[]) => regenerateDraft(...args),
+  renderRejectionTemplate: (...args: unknown[]) => renderRejectionTemplate(...args),
   sendEmail: vi.fn(),
   updateDraft: vi.fn(),
 }));
@@ -46,6 +54,7 @@ const baseAssessment: Assessment = {
   draft_body: "Thanks, but we're passing.",
   draft_type: "rejection",
   draft_bucket: "REJECT",
+  draft_language: null,
   research_sources: null,
   assessed_without_deck: false,
   user_override: null,
@@ -95,6 +104,7 @@ function renderModal(assessmentOverrides: Partial<Assessment> = {}) {
 afterEach(() => {
   cleanup();
   regenerateDraft.mockClear();
+  renderRejectionTemplate.mockClear();
 });
 
 describe("EmailModal rejection reason chips", () => {
@@ -134,5 +144,44 @@ describe("EmailModal rejection reason chips", () => {
 
     await waitFor(() => expect(regenerateDraft).toHaveBeenCalled());
     expect(regenerateDraft).toHaveBeenCalledWith("lead-1", ["Market size"]);
+  });
+});
+
+describe("EmailModal rejection template (issue #232)", () => {
+  it("renders the stale draft from the zero-LLM template, not the AI path", async () => {
+    renderModal({ draft_body: null, draft_subject: null, draft_type: null, draft_bucket: null });
+
+    await waitFor(() => expect(renderRejectionTemplate).toHaveBeenCalled());
+    expect(regenerateDraft).not.toHaveBeenCalled();
+    expect(renderRejectionTemplate).toHaveBeenCalledWith("lead-1", { reasons: [], language: undefined });
+  });
+
+  it("'Use template with these reasons' calls the template endpoint, not the AI one", async () => {
+    renderModal();
+    await waitFor(() => expect(fetchMyReasons).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText("Market size"));
+    fireEvent.click(screen.getByTestId("render-template-btn"));
+
+    await waitFor(() => expect(renderRejectionTemplate).toHaveBeenCalled());
+    expect(renderRejectionTemplate).toHaveBeenCalledWith("lead-1", { reasons: ["Market size"], language: undefined });
+    expect(regenerateDraft).not.toHaveBeenCalled();
+  });
+
+  it("the EN/AR toggle re-renders the template in the chosen language", async () => {
+    renderModal();
+    await waitFor(() => expect(fetchMyReasons).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("language-toggle-ar"));
+
+    await waitFor(() => expect(renderRejectionTemplate).toHaveBeenCalledWith("lead-1", { reasons: [], language: "ar" }));
+  });
+
+  it("'Regenerate with AI' stays available as a secondary action beside the template button", async () => {
+    renderModal();
+    await waitFor(() => expect(fetchMyReasons).toHaveBeenCalled());
+
+    expect(screen.getByTestId("render-template-btn")).toBeInTheDocument();
+    expect(screen.getByTestId("regenerate-with-reasons-btn")).toBeInTheDocument();
   });
 });

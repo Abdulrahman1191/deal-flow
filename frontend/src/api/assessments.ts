@@ -66,3 +66,17 @@ export const regenerateDraft = (leadId: string, reasons?: string[]) =>
   client
     .post<Assessment>(`/assessments/${leadId}/regenerate-draft`, reasons?.length ? { reasons } : undefined)
     .then((r) => r.data);
+
+// Zero-LLM prebuilt rejection template (issue #232) -- sits beside
+// regenerateDraft above rather than replacing it. `language` ("en"/"ar")
+// overrides the backend's applicant-language auto-detection; omit to use it.
+export const renderRejectionTemplate = (
+  leadId: string,
+  params?: { reasons?: string[]; language?: "en" | "ar" },
+) =>
+  client
+    .post<Assessment>(`/assessments/${leadId}/rejection-template`, {
+      ...(params?.reasons?.length ? { reasons: params.reasons } : {}),
+      ...(params?.language ? { language: params.language } : {}),
+    })
+    .then((r) => r.data);

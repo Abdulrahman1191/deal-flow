@@ -50,6 +50,12 @@ export interface Assessment {
   // written for (issue #150). Compared against the effective bucket
   // (user_override ?? bucket) to detect a stale draft — see EmailModal.
   draft_bucket: "YES" | "MAYBE" | "REJECT" | null;
+  // Language a prebuilt rejection template was last rendered in (issue
+  // #232) -- "en"/"ar", computed at render time. Null for a YES/MAYBE card
+  // or a REJECT draft that's never gone through the template endpoint (e.g.
+  // only ever regenerated via "Regenerate with AI"). Lets EmailModal default
+  // its EN/AR toggle to whatever the backend auto-detected.
+  draft_language: "en" | "ar" | null;
   research_sources: string[] | null;
   assessed_without_deck: boolean;
   user_override: string | null;
