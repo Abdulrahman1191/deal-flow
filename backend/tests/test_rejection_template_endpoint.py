@@ -302,4 +302,4 @@ def test_apply_template_arabic_language_override():
     assert response.status_code == 200
     body = response.json()
     assert body["rejection_language"] == "ar"
-    assert "رايد فنتشرز" in body["draft_body"]
+    assert "رائد فنتشرز" in body["draft_body"]

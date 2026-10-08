@@ -10,8 +10,9 @@ an LLM, and what makes a bulk send of N leads cost zero LLM calls regardless
 of batch size.
 
 The surrounding copy is byte-identical across all four templates within a
-language -- only the one `{reason_sentence}` sentence differs -- so wording
-changes are a one-line edit to the constants below, never a prompt rewrite.
+language -- only the one reason placeholder differs (`{reason_clause}` in
+English, `{reason_sentence}` in Arabic) -- so wording changes are a one-line
+edit to the constants below, never a prompt rewrite.
 """
 from __future__ import annotations
 from typing import Any, Optional
@@ -47,17 +48,17 @@ REASON_TO_TEMPLATE: dict[str, str] = {
 }
 
 _EN_SUBJECT = "Raed Ventures — update on your application"
-_AR_SUBJECT = "رايد فنتشرز — تحديث بخصوص طلبكم"
+_AR_SUBJECT = "رائد فنتشرز — تحديث بخصوص طلبكم"
 
 _EN_BODY = """Hi {first_name},
 
 Thank you for sharing {company} with us, and for the time you put into the application.
 
-We reviewed it carefully. {reason_sentence}
+After reviewing your application, {reason_clause}
 
-This reflects where Raed is today rather than a judgement on what you are building, and it is not a permanent no — if things change on either side, we would be glad to hear from you again.
+This reflects where Raed Ventures is today rather than a judgement on what you are building.
 
-Wishing you the best with it.
+We wish you the best of luck with it.
 
 {partner_name}
 Raed Ventures"""
@@ -66,39 +67,35 @@ _AR_BODY = """مرحباً {first_name}،
 
 شكراً لمشاركتكم {company} معنا، وعلى الوقت الذي خصصتموه لتقديم الطلب.
 
-لقد اطّلعنا عليه باهتمام. {reason_sentence}
+لقد اطلعنا على الفرصة. {reason_sentence}
 
-هذا القرار يعكس وضع رايد في الوقت الحالي أكثر مما يعكس حكماً على ما تبنونه، وهو ليس رفضاً نهائياً — وإن تغيّرت المعطيات لدى أيٍّ من الطرفين، فيسعدنا أن نسمع منكم مجدداً.
+هذا القرار يعكس وضع رائد فنتشرز في الوقت الحالي أكثر مما يعكس حكمًا على ما يتم بناؤه.
 
-نتمنى لكم كل التوفيق.
+نتمنى لكم التوفيق.
 
 {partner_name}
-رايد فنتشرز"""
+رائد فنتشرز"""
 
+# Lower-case clauses completing the "After reviewing your application, ..."
+# sentence (issue #232 appendix v4) -- never a standalone sentence in English.
 _EN_REASON_SENTENCES: dict[str, str] = {
     TEMPLATE_CONFLICT: (
-        "We are not able to take it further, as we have an existing commitment in your "
+        "we are not able to take it further, as we have an existing commitment in your "
         "space that would put us in a conflict of interest."
     ),
     TEMPLATE_MARKET_SIZE: (
-        "At this stage we are not able to get comfortable with the size of the market "
-        "you are addressing relative to the returns our fund needs to target."
+        "we don't believe the market you are addressing is large enough relative to the "
+        "returns our fund needs to target."
     ),
-    TEMPLATE_TRACTION: (
-        "We are not able to move forward yet, as we did not find enough evidence of "
-        "traction to build conviction at this point."
-    ),
-    TEMPLATE_MANDATE: (
-        "It falls outside the mandate we are investing against at the moment, so we "
-        "will not be taking it further."
-    ),
+    TEMPLATE_TRACTION: "we did not find enough evidence of traction to build conviction.",
+    TEMPLATE_MANDATE: "we found that it falls outside our investment strategy at this time.",
 }
 
 _AR_REASON_SENTENCES: dict[str, str] = {
     TEMPLATE_CONFLICT: "لا يمكننا المضي قدماً نظراً لوجود التزام قائم لدينا في المجال نفسه، ما يضعنا في موضع تعارض مصالح.",
-    TEMPLATE_MARKET_SIZE: "لم نتمكّن في هذه المرحلة من الاطمئنان إلى حجم السوق الذي تستهدفونه مقارنةً بالعوائد التي يستهدفها صندوقنا.",
+    TEMPLATE_MARKET_SIZE: "لم نتمكّن في هذه المرحلة من الاقتناع أنّ حجم السوق الذي تستهدفونه كبير مقارنةً بالعوائد التي يستهدفها صندوقنا.",
     TEMPLATE_TRACTION: "لم نتمكّن من المضي قدماً في الوقت الحالي، إذ لم نجد مؤشرات نمو ملموسة كافية لبناء قناعة استثمارية في هذه المرحلة.",
-    TEMPLATE_MANDATE: "يقع خارج نطاق التفويض الاستثماري الذي نعمل وفقه حالياً، لذا لن نتمكّن من المضي قدماً.",
+    TEMPLATE_MANDATE: "تقع فرصتكم خارج استراتيجية الاستثمار الخاصة بنا في الوقت الحالي.",
 }
 
 _SUBJECTS = {"en": _EN_SUBJECT, "ar": _AR_SUBJECT}
@@ -164,10 +161,17 @@ def render_rejection_email(
     first_name = _first_name(lead_data) or _FALLBACK_FIRST_NAME[lang]
     company = (lead_data.get("company_name") or "").strip() or _FALLBACK_COMPANY[lang]
     signer = partner_name or DEFAULT_PARTNER_NAME
-    reason_sentence = _REASON_SENTENCES[lang][template_key]
+    reason_text = _REASON_SENTENCES[lang][template_key]
 
+    # English's placeholder is {reason_clause} (a lower-case clause), Arabic's
+    # is {reason_sentence} (a standalone sentence) -- str.format() ignores
+    # whichever of the two a given language's body does not use.
     body = _BODIES[lang].format(
-        first_name=first_name, company=company, reason_sentence=reason_sentence, partner_name=signer,
+        first_name=first_name,
+        company=company,
+        reason_clause=reason_text,
+        reason_sentence=reason_text,
+        partner_name=signer,
     )
     return {
         "template": template_key,

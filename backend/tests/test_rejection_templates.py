@@ -223,7 +223,7 @@ def test_placeholders_substitute_correctly_in_arabic():
     )
     assert "مرحباً محمد،" in result["body"]
     assert "شركة التقنية" in result["body"]
-    assert "رايد فنتشرز" in result["body"]
+    assert "رائد فنتشرز" in result["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -248,3 +248,20 @@ def test_blank_founder_name_entries_also_degrade():
         lead_data=_lead(founder_names=["", "   "]), reasons=[], language="en",
     )
     assert "Hi there," in result["body"]
+
+
+# ---------------------------------------------------------------------------
+# 7. neither language invites the founder back (issue #232 appendix v4 --
+#    this copy was reverted into the templates once already)
+# ---------------------------------------------------------------------------
+
+
+_NO_INVITE_BACK_PHRASES = ("تغيّرت", "مجدداً", "permanent no", "hear from you again")
+
+
+def test_no_rendered_body_invites_the_founder_back():
+    for key, reason in _ONE_REASON_PER_TEMPLATE_EN.items():
+        for lang in ("en", "ar"):
+            body = rt.render_rejection_email(lead_data=_lead(), reasons=[reason], language=lang)["body"]
+            for phrase in _NO_INVITE_BACK_PHRASES:
+                assert phrase not in body
