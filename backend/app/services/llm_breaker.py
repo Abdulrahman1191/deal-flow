@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 import redis
 
 from app.config import settings
+from app.services import ops_alert
 
 ACCOUNT_LEVEL_STATUSES = (401, 402)
 _KEY = "llm:deepseek:circuit_open"
@@ -46,8 +47,25 @@ def _client() -> redis.Redis:
     return _redis
 
 
+def _page_for(reason: str, seconds: int) -> None:
+    """Tell someone, once per outage: the breaker going from closed to open. The
+    re-opens after each failed probe are the same outage; reem's per-key cooldown
+    keeps them from paging again."""
+    minutes = max(round(seconds / 60), 1)
+    if "401" in reason.split(":", 1)[0]:
+        action = (f"deal-flow paused its AI assessments: DeepSeek rejected the API key (401). "
+                  f"Put a valid key in deal-flow's DEEP_SEEK_API and restart deal-flow-app and both workers; "
+                  f"it retries on its own every {minutes} minutes.")
+    else:
+        action = (f"deal-flow paused its AI assessments: DeepSeek says the account is out of balance (402). "
+                  f"Top up the DeepSeek balance; deal-flow retries on its own every {minutes} minutes and resumes then.")
+    ops_alert.page("deal-flow-deepseek-paused", action,
+                   f"{reason}. New and pending leads wait in the queue; none are marked failed.")
+
+
 def open_breaker(reason: str) -> None:
     global _local_open_until, _local_opened_at
+    was_open = open_reason() is not None
     seconds = max(int(settings.llm_outage_pause_seconds), 1)
     _local_open_until = time.monotonic() + seconds
     _local_opened_at = datetime.now(timezone.utc).isoformat()
@@ -58,6 +76,8 @@ def open_breaker(reason: str) -> None:
     except Exception as exc:
         print(f"[llm_breaker] redis unavailable, breaker local to this process: {exc!r}")
     print(f"[llm_breaker] OPEN for {seconds}s: {reason}")
+    if not was_open:
+        _page_for(reason, seconds)
 
 
 def open_reason() -> str | None:

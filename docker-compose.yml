@@ -59,6 +59,9 @@ services:
     mem_limit: 3g
     networks:
       - internal
+      # reem's ops-alert route (REEM_OPS_ALERT_URL=http://reem:4000/internal/ops/alert): the
+      # DeepSeek breaker trips here, in the workers, and pages through it (app/services/ops_alert.py).
+      - raed_platform
     depends_on:
       - redis
 
@@ -92,6 +95,9 @@ services:
     mem_limit: 3g
     networks:
       - internal
+      # reem's ops-alert route (REEM_OPS_ALERT_URL=http://reem:4000/internal/ops/alert): the
+      # DeepSeek breaker trips here, in the workers, and pages through it (app/services/ops_alert.py).
+      - raed_platform
     depends_on:
       - redis
 
