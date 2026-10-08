@@ -912,7 +912,7 @@ async def preview_bulk_reassign(
 
     from_owner, to_owners = _normalize_reassign_request(body)
     leads = await bulk_reassign.matching_leads(
-        db, from_owner, bucket=body.bucket, include_converted=body.include_converted,
+        db, from_owner, buckets=body.resolved_buckets(), include_converted=body.include_converted,
     )
     assignments = bulk_reassign.round_robin_assignments(leads, to_owners)
     breakdown = bulk_reassign.breakdown_counts(leads, assignments, to_owners)
@@ -972,7 +972,7 @@ async def execute_bulk_reassign(
         )
 
     leads = await bulk_reassign.matching_leads(
-        db, from_owner, bucket=body.bucket, include_converted=body.include_converted,
+        db, from_owner, buckets=body.resolved_buckets(), include_converted=body.include_converted,
     )
     if len(leads) != body.confirm_count:
         raise HTTPException(

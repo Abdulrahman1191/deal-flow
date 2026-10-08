@@ -36,7 +36,7 @@ ACTIVE_STATUSES = ["assessed", "awaiting_deck", "pending", "processing", "failed
 async def matching_leads(
     db: AsyncSession,
     from_owner: str,
-    bucket: Optional[str] = None,
+    buckets: Optional[list[str]] = None,
     include_converted: bool = False,
 ) -> list[Lead]:
     """Leads eligible to move off `from_owner`, sorted by id for a
@@ -44,8 +44,9 @@ async def matching_leads(
     ACTIVE_STATUSES). Excludes a lead with a sent email or a
     copper_opportunity_id (converted) -- those represent a relationship
     already owned by a person -- unless `include_converted` is explicitly
-    set. `bucket` filters on the effective bucket (override-aware, same
-    resolution csv_export/the kanban use).
+    set. `buckets` filters on the effective bucket (override-aware, same
+    resolution csv_export/the kanban use) -- a lead matches if its effective
+    bucket is in the list; `None` or an empty list matches every bucket.
 
     The owner_email scope is pushed into SQL (indexed column, narrows a
     firm-wide table down to one associate's rows); status/converted/sent/
@@ -67,7 +68,7 @@ async def matching_leads(
                 continue
             if lead.assessment and lead.assessment.sent_at:
                 continue
-        if bucket and effective_bucket(lead.assessment) != bucket:
+        if buckets and effective_bucket(lead.assessment) not in buckets:
             continue
         matched.append(lead)
 

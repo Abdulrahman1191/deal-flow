@@ -5,7 +5,7 @@ export type ReassignBucket = "YES" | "MAYBE" | "REJECT";
 export interface BulkReassignPreviewRequest {
   from_owner: string;
   to_owners: string[];
-  bucket?: ReassignBucket;
+  buckets?: ReassignBucket[];
   include_converted: boolean;
 }
 
