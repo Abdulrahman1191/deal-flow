@@ -58,5 +58,11 @@ export const rateAssessment = (
 export const reassess = (leadId: string) =>
   client.post(`/assessments/${leadId}/reassess`).then((r) => r.data);
 
-export const regenerateDraft = (leadId: string) =>
-  client.post<Assessment>(`/assessments/${leadId}/regenerate-draft`).then((r) => r.data);
+// `reasons` (issue #223/#224) are canonical UNQUAL_REASON_OPTIONS labels the
+// partner picked to explain a REJECT -- omitted entirely (not sent as an
+// empty array) when there's nothing selected, matching the optional body
+// the backend accepts for YES/no-reasons regeneration.
+export const regenerateDraft = (leadId: string, reasons?: string[]) =>
+  client
+    .post<Assessment>(`/assessments/${leadId}/regenerate-draft`, reasons?.length ? { reasons } : undefined)
+    .then((r) => r.data);

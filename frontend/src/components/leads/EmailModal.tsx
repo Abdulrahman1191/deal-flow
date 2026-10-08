@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
 import { regenerateDraft, sendEmail, updateDraft } from "../../api/assessments";
+import { fetchMyReasons } from "../../api/overrides";
 import { useToast } from "../shared/Toast";
 import type { Lead } from "../../types/lead";
+import LearnedReasonChips from "./LearnedReasonChips";
+import { INTERNAL_ONLY_REASONS, MAX_REJECTION_REASONS, UNQUAL_REASON_LABELS } from "./rejectionReasons";
 
 interface Props {
   lead: Lead;
@@ -43,6 +46,29 @@ export default function EmailModal({ lead, onClose }: Props) {
   const [body, setBody] = useState(isStale ? "" : assessment?.draft_body ?? "");
   const [error, setError] = useState<string | null>(null);
 
+  // Reason chips (issue #223/#224) -- REJECT only. Preselected from
+  // whatever was stored on the card, so reopening the modal restores the
+  // prior choice rather than starting blank.
+  const [selectedReasons, setSelectedReasons] = useState<Set<string>>(
+    new Set(assessment?.rejection_reasons ?? []),
+  );
+  const isReject = effectiveBucket === "REJECT";
+  const atReasonLimit = selectedReasons.size >= MAX_REJECTION_REASONS;
+  const hasInternalOnlySelected = Array.from(selectedReasons).some((r) => INTERNAL_ONLY_REASONS.has(r));
+
+  const toggleReason = (label: string) =>
+    setSelectedReasons((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else if (next.size < MAX_REJECTION_REASONS) next.add(label);
+      return next;
+    });
+
+  // "Your reasons" chips (issue #152), scoped to the reject context -- same
+  // pattern as FeedbackModal/ReasonModal.
+  const { data: myReasons } = useQuery({ queryKey: ["my-reasons"], queryFn: fetchMyReasons, staleTime: 5 * 60 * 1000 });
+  const learnedReasons = myReasons?.bucket_reject ?? [];
+
   // Signature of the draft currently reflected in the fields above, so we can
   // tell "the draft changed under us" (a bucket override or background
   // reassessment landing while this modal is open) apart from the user's own
@@ -50,7 +76,7 @@ export default function EmailModal({ lead, onClose }: Props) {
   const loadedSignature = useRef(`${assessment?.draft_type}:${assessment?.draft_body}`);
 
   const regenMutation = useMutation({
-    mutationFn: () => regenerateDraft(lead.id),
+    mutationFn: (reasons?: string[]) => regenerateDraft(lead.id, reasons),
     onSuccess: (data) => {
       loadedSignature.current = `${data.draft_type}:${data.draft_body}`;
       setSubject(data.draft_subject ?? "");
@@ -84,7 +110,7 @@ export default function EmailModal({ lead, onClose }: Props) {
       setError(null);
     }
     if (isStale && effectiveBucket !== "MAYBE" && !regenMutation.isPending) {
-      regenMutation.mutate();
+      regenMutation.mutate(effectiveBucket === "REJECT" ? Array.from(selectedReasons) : undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assessment?.draft_type, assessment?.draft_body, effectiveBucket]);
@@ -152,17 +178,19 @@ export default function EmailModal({ lead, onClose }: Props) {
             )}
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => regenMutation.mutate()}
-              disabled={generating || effectiveBucket === "MAYBE"}
-              className={`text-xs transition-colors disabled:opacity-50 ${
-                isStale ? "font-semibold text-warning hover:text-warning" : "text-info hover:text-info"
-              }`}
-              title="Ask the AI to rewrite this draft"
-              data-testid="regenerate-draft-btn"
-            >
-              {generating ? "…" : "Regenerate ↻"}
-            </button>
+            {!isReject && (
+              <button
+                onClick={() => regenMutation.mutate()}
+                disabled={generating || effectiveBucket === "MAYBE"}
+                className={`text-xs transition-colors disabled:opacity-50 ${
+                  isStale ? "font-semibold text-warning hover:text-warning" : "text-info hover:text-info"
+                }`}
+                title="Ask the AI to rewrite this draft"
+                data-testid="regenerate-draft-btn"
+              >
+                {generating ? "…" : "Regenerate ↻"}
+              </button>
+            )}
             <button
               onClick={onClose}
               className="text-muted-foreground hover:text-foreground text-lg leading-none"
@@ -171,6 +199,83 @@ export default function EmailModal({ lead, onClose }: Props) {
             </button>
           </div>
         </div>
+
+        {/* Rejection reason chips (issue #223/#224) — REJECT only; a YES
+            lead's modal has no reasons section at all. */}
+        {isReject && (
+          <div className="px-5 py-4 border-b border-border space-y-3 bg-muted/20">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Pass reasons (up to {MAX_REJECTION_REASONS})
+              </label>
+              {atReasonLimit && (
+                <span className="text-[10px] text-warning" data-testid="reason-limit-notice">
+                  Limit reached — deselect one to pick another
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {UNQUAL_REASON_LABELS.map((label) => {
+                const isOn = selectedReasons.has(label);
+                const internal = INTERNAL_ONLY_REASONS.has(label);
+                const disabled = !isOn && atReasonLimit;
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => toggleReason(label)}
+                    disabled={disabled}
+                    title={internal ? "Recorded internally, not mentioned in the email" : undefined}
+                    className={`text-xs px-3 py-1.5 rounded-full transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
+                      isOn
+                        ? internal
+                          ? "bg-muted text-muted-foreground border-dashed border-muted-foreground/60"
+                          : "bg-error/20 text-error border-error"
+                        : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
+                    }`}
+                  >
+                    {label}
+                    {internal && <span className="ml-1 opacity-70">🔒</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              🔒 recorded internally only — never mentioned in the email.
+            </p>
+
+            <LearnedReasonChips
+              reasons={learnedReasons}
+              selected={selectedReasons}
+              onToggle={toggleReason}
+              activeClassName="bg-error/20 text-error border-error"
+              isDisabled={() => atReasonLimit}
+            />
+
+            {hasInternalOnlySelected && (
+              <p className="text-[11px] text-muted-foreground" data-testid="internal-only-note">
+                The founder won't see the internal-only reason(s) you picked — they're recorded
+                internally and never mentioned in the email.
+              </p>
+            )}
+            {selectedReasons.size > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                These reasons will be written to Copper's Unqualification Reasons field when this
+                lead is archived or the rejection is sent.
+              </p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => regenMutation.mutate(Array.from(selectedReasons))}
+              disabled={generating}
+              className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
+              data-testid="regenerate-with-reasons-btn"
+            >
+              {generating ? "Regenerating…" : "Regenerate with these reasons ↻"}
+            </button>
+          </div>
+        )}
 
         {/* Editable email */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">

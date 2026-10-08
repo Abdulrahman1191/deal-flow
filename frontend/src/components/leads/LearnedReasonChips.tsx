@@ -6,6 +6,9 @@ interface Props {
   onToggle: (text: string) => void;
   /** Classes applied to a chip while selected — matches the modal's accent. */
   activeClassName: string;
+  /** Per-chip disable (e.g. a selection cap already reached) — callers that
+   * don't cap selection can omit this; it defaults to never-disabled. */
+  isDisabled?: (text: string) => boolean;
 }
 
 /**
@@ -14,7 +17,7 @@ interface Props {
  * the empty state, so the modal never shows a placeholder box for a feature
  * a brand-new user hasn't triggered.
  */
-export default function LearnedReasonChips({ reasons, selected, onToggle, activeClassName }: Props) {
+export default function LearnedReasonChips({ reasons, selected, onToggle, activeClassName, isDisabled }: Props) {
   if (reasons.length === 0) return null;
 
   return (
@@ -25,13 +28,15 @@ export default function LearnedReasonChips({ reasons, selected, onToggle, active
       <div className="flex flex-wrap gap-2">
         {reasons.map((r) => {
           const isOn = selected.has(r.text);
+          const disabled = !isOn && (isDisabled?.(r.text) ?? false);
           return (
             <button
               key={r.text}
               type="button"
               onClick={() => onToggle(r.text)}
+              disabled={disabled}
               title={r.source === "team" ? "Common reason used by the team" : undefined}
-              className={`text-xs px-3 py-1.5 rounded-full transition-colors border ${
+              className={`text-xs px-3 py-1.5 rounded-full transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
                 isOn ? activeClassName : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
               }`}
             >
