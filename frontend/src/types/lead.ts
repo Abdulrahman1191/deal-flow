@@ -54,6 +54,11 @@ export interface Assessment {
   assessed_without_deck: boolean;
   user_override: string | null;
   user_override_at: string | null;
+  // Partner-selected pass reasons for the current REJECT draft (issue #223)
+  // -- canonical UNQUAL_REASON_OPTIONS labels, capped at 3. Null for a YES
+  // lead or a REJECT that's never had reasons chosen. Lets EmailModal
+  // preselect the same chips when the modal is reopened.
+  rejection_reasons: string[] | null;
   user_rating: "up" | "down" | null;
   user_rating_at: string | null;
   approved_at: string | null;
