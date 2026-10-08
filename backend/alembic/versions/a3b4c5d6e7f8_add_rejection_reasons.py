@@ -16,35 +16,37 @@ Lets the partner pick rejection reasons when regenerating a REJECT draft
 Both nullable -- existing rows, and any draft regenerated before this shipped,
 have no selection to record.
 
-Revision ID: a3b4c5d6e7f8
-Revises: c5e89de040a4
-Create Date: 2026-10-07
+Chained after e8f9a0b1c2d3 (#225) rather than branching from the same
+parent -- that produced the two-head collision #229/#230 cleaned up. Also
+re-adds assessment_cards.rejection_reasons with IF NOT EXISTS since
+e8f9a0b1c2d3 already created it on databases that applied it before #229's
+file deletion.
 
+Revision ID: a3b4c5d6e7f8
+Revises: e8f9a0b1c2d3
+Create Date: 2026-10-07
 """
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 
 revision: str = "a3b4c5d6e7f8"
-down_revision: Union[str, None] = "c5e89de040a4"
+down_revision: Union[str, None] = "e8f9a0b1c2d3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "assessment_cards",
-        sa.Column("rejection_reasons", postgresql.JSONB, nullable=True),
+    op.execute(
+        "ALTER TABLE assessment_cards "
+        "ADD COLUMN IF NOT EXISTS rejection_reasons JSONB"
     )
-    op.add_column(
-        "assessment_overrides",
-        sa.Column("human_rejection_reasons", postgresql.JSONB, nullable=True),
+    op.execute(
+        "ALTER TABLE assessment_overrides "
+        "ADD COLUMN IF NOT EXISTS human_rejection_reasons JSONB"
     )
 
 
 def downgrade() -> None:
     op.drop_column("assessment_overrides", "human_rejection_reasons")
-    op.drop_column("assessment_cards", "rejection_reasons")

@@ -57,3 +57,50 @@ def test_exactly_one_head():
         "one after the other instead of adding an `alembic merge` revision "
         "(a merge would run both and duplicate any overlapping add_column)."
     )
+
+
+def test_no_missing_parents():
+    script_dir = _script_directory()
+    known_ids = set(_revision_ids())
+    for path in sorted(VERSIONS_DIR.glob("*.py")):
+        revision = script_dir.get_revision(
+            REVISION_RE.search(path.read_text()).group(1)
+        )
+        if revision.down_revision is None:
+            continue
+        down_revisions = (
+            revision.down_revision
+            if isinstance(revision.down_revision, tuple)
+            else (revision.down_revision,)
+        )
+        for parent in down_revisions:
+            assert parent in known_ids, (
+                f"{path.name} declares down_revision {parent!r}, which no "
+                "file on disk provides. A database already stamped at that "
+                "revision would fail to resolve it on `alembic upgrade head`."
+            )
+
+
+def test_e8f9a0b1c2d3_not_deleted_again():
+    """Regression guard for issue #230.
+
+    #229 deleted e8f9a0b1c2d3 after production had already applied it
+    (51 seconds before #229's own collision was introduced), which left prod
+    stamped at a revision no longer resolvable and 502'd the app. Keep the
+    file on disk and chained as a3b4c5d6e7f8's direct parent so a database
+    stamped at either revision can always reach head.
+    """
+    ids = set(_revision_ids())
+    assert "e8f9a0b1c2d3" in ids, (
+        "e8f9a0b1c2d3_add_rejection_reasons.py must stay on disk -- it was "
+        "already applied in production. Deleting it breaks `alembic upgrade "
+        "head` for any database stamped at that revision."
+    )
+
+    script_dir = _script_directory()
+    a3b4 = script_dir.get_revision("a3b4c5d6e7f8")
+    assert a3b4.down_revision == "e8f9a0b1c2d3", (
+        "a3b4c5d6e7f8's down_revision must be e8f9a0b1c2d3 so the two "
+        "rejection_reasons migrations form one linear chain instead of two "
+        "branches off the same parent."
+    )
