@@ -48,13 +48,23 @@ export default function EmailModal({ lead, onClose }: Props) {
 
   // Reason chips (issue #223/#224) -- REJECT only. Preselected from
   // whatever was stored on the card, so reopening the modal restores the
-  // prior choice rather than starting blank.
+  // prior choice rather than starting blank. Filtered to the canonical
+  // UNQUAL_REASON_LABELS -- the rate-down auto-reject path (issue #225) can
+  // seed `rejection_reasons` with free-text FeedbackModal tags that match no
+  // rendered chip here, which would otherwise consume the 3-chip cap without
+  // being visible or deselectable (issue #233).
   const [selectedReasons, setSelectedReasons] = useState<Set<string>>(
-    new Set(assessment?.rejection_reasons ?? []),
+    new Set((assessment?.rejection_reasons ?? []).filter((r) => UNQUAL_REASON_LABELS.includes(r))),
   );
   const isReject = effectiveBucket === "REJECT";
   const atReasonLimit = selectedReasons.size >= MAX_REJECTION_REASONS;
   const hasInternalOnlySelected = Array.from(selectedReasons).some((r) => INTERNAL_ONLY_REASONS.has(r));
+  // Only canonical labels are valid /regenerate-draft input -- the backend
+  // 400s on anything else (claude_agent.UNQUAL_REASON_OPTIONS). "Your
+  // reasons" chips below are free-text learned phrases, not canonical
+  // labels, so they're dropped here before the request goes out (issue #233).
+  const canonicalSelectedReasons = Array.from(selectedReasons).filter((r) => UNQUAL_REASON_LABELS.includes(r));
+  const hasLearnedReasonSelected = canonicalSelectedReasons.length < selectedReasons.size;
 
   const toggleReason = (label: string) =>
     setSelectedReasons((prev) => {
@@ -110,7 +120,7 @@ export default function EmailModal({ lead, onClose }: Props) {
       setError(null);
     }
     if (isStale && effectiveBucket !== "MAYBE" && !regenMutation.isPending) {
-      regenMutation.mutate(effectiveBucket === "REJECT" ? Array.from(selectedReasons) : undefined);
+      regenMutation.mutate(effectiveBucket === "REJECT" ? canonicalSelectedReasons : undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assessment?.draft_type, assessment?.draft_body, effectiveBucket]);
@@ -258,7 +268,13 @@ export default function EmailModal({ lead, onClose }: Props) {
                 internally and never mentioned in the email.
               </p>
             )}
-            {selectedReasons.size > 0 && (
+            {hasLearnedReasonSelected && (
+              <p className="text-[11px] text-muted-foreground" data-testid="learned-reason-note">
+                "Your reasons" chips are personal shortcuts only — they don't shape the generated
+                email or get written to Copper. Only the categories above do that.
+              </p>
+            )}
+            {canonicalSelectedReasons.length > 0 && (
               <p className="text-[11px] text-muted-foreground">
                 These reasons will be written to Copper's Unqualification Reasons field when this
                 lead is archived or the rejection is sent.
@@ -267,7 +283,7 @@ export default function EmailModal({ lead, onClose }: Props) {
 
             <button
               type="button"
-              onClick={() => regenMutation.mutate(Array.from(selectedReasons))}
+              onClick={() => regenMutation.mutate(canonicalSelectedReasons)}
               disabled={generating}
               className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
               data-testid="regenerate-with-reasons-btn"
