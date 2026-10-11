@@ -65,6 +65,7 @@ export default function Navbar() {
         { id: "calibration" as const, label: "Calibration" },
         { id: "associates" as const, label: "Associates" },
         { id: "reassign" as const, label: "Reassign leads" },
+        { id: "email_templates" as const, label: "Email templates" },
       ]
     : baseTabs;
 

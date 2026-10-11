@@ -10,6 +10,7 @@ type Tab =
   | "calibration"
   | "associates"
   | "reassign"
+  | "email_templates"
   | "system";
 
 interface AppState {

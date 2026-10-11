@@ -9,6 +9,7 @@ import FeedbackInboxPage from "./pages/FeedbackInboxPage";
 import CalibrationPage from "./pages/CalibrationPage";
 import AssociatesPage from "./pages/AssociatesPage";
 import ReassignLeadsPage from "./pages/ReassignLeadsPage";
+import EmailTemplatesPage from "./pages/EmailTemplatesPage";
 import SystemPage from "./pages/SystemPage";
 import FeedbackButton from "./components/feedback/FeedbackButton";
 import ErrorBoundary from "./components/shared/ErrorBoundary";
@@ -85,6 +86,11 @@ function Dashboard() {
           {activeTab === "reassign" && (
             <div className="h-full overflow-y-auto animate-fade-in">
               <ReassignLeadsPage />
+            </div>
+          )}
+          {activeTab === "email_templates" && (
+            <div className="h-full overflow-y-auto animate-fade-in">
+              <EmailTemplatesPage />
             </div>
           )}
           {activeTab === "system" && (
