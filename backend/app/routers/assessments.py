@@ -22,7 +22,15 @@ from app.schemas.assessment import (
     RejectionTemplateRequest,
 )
 from app.config import settings
-from app.services import claude_agent, copper_service, copper_writer, email_sender, language_audit, rejection_templates
+from app.services import (
+    claude_agent,
+    copper_service,
+    copper_writer,
+    email_sender,
+    email_templates,
+    language_audit,
+    rejection_templates,
+)
 from app.services.auth import block_if_impersonating, effective_owner_email, get_current_user
 from app.services.override_capture import capture_override
 from app.tasks.sync_copper import resolve_copper_id
@@ -880,7 +888,8 @@ async def render_rejection_template(
         )
 
     owner_fields = await _load_owner_draft_fields(db, lead)
-    rendered = rejection_templates.render_rejection_email(
+    rendered = await email_templates.render_rejection_email(
+        db,
         first_name=_lead_first_name(lead),
         company=lead.company_name,
         partner_name=owner_fields.get("owner_name") or getattr(user, "full_name", None),

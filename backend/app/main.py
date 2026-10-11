@@ -21,7 +21,7 @@ from sqlalchemy import text
 from app.database import AsyncSessionLocal
 from app.routers import (
     auth, leads, assessments, briefings, feedback, overrides, portfolio, health,
-    users, associates, ops, duplicates,
+    users, associates, ops, duplicates, email_templates,
 )
 
 # Fails CLOSED, mirroring the ENV check in app.services.auth (SECURITY_AUDIT.md
@@ -95,6 +95,7 @@ app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(associates.router, prefix=API_PREFIX)
 app.include_router(ops.router, prefix=API_PREFIX)
 app.include_router(duplicates.router, prefix=API_PREFIX)
+app.include_router(email_templates.router, prefix=API_PREFIX)
 
 
 @app.get("/health")
