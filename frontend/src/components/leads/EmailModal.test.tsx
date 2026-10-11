@@ -5,7 +5,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import EmailModal from "./EmailModal";
 import type { Assessment, Lead } from "../../types/lead";
-import type { MyReasons } from "../../api/overrides";
 
 const regenerateDraft = vi.fn().mockResolvedValue({
   draft_type: "rejection",
@@ -25,18 +24,6 @@ vi.mock("../../api/assessments", () => ({
   renderRejectionTemplate: (...args: unknown[]) => renderRejectionTemplate(...args),
   sendEmail: vi.fn(),
   updateDraft: vi.fn(),
-}));
-
-const fetchMyReasons = vi.fn<[], Promise<MyReasons>>().mockResolvedValue({
-  rating_up: [],
-  rating_down: [],
-  bucket_yes: [],
-  bucket_maybe: [],
-  bucket_reject: [],
-});
-
-vi.mock("../../api/overrides", () => ({
-  fetchMyReasons: () => fetchMyReasons(),
 }));
 
 const baseAssessment: Assessment = {
@@ -107,14 +94,31 @@ afterEach(() => {
   renderRejectionTemplate.mockClear();
 });
 
+describe("EmailModal layout (issue #243)", () => {
+  it("never renders the duplicated 'Your reasons' block", () => {
+    renderModal({
+      rejection_reasons: ["Weak founder-market fit", "Founder(s)", "Market size"],
+    });
+
+    expect(screen.queryByText("Your reasons")).not.toBeInTheDocument();
+  });
+
+  it("gives the body textarea the remaining height instead of a fixed row count", () => {
+    renderModal();
+
+    const textarea = screen.getByDisplayValue("Thanks, but we're passing.");
+    expect(textarea).not.toHaveAttribute("rows");
+    expect(textarea.className).toContain("flex-1");
+  });
+});
+
 describe("EmailModal rejection reason chips", () => {
-  it("drops free-text reasons seeded on the card so they don't consume the 3-chip cap", async () => {
+  it("drops free-text reasons seeded on the card so they don't consume the 3-chip cap", () => {
     renderModal({
       // "Weak founder-market fit" mirrors a FeedbackModal tag stored via the
       // rate-down auto-reject path (issue #225) -- it renders no chip here.
       rejection_reasons: ["Weak founder-market fit", "Founder(s)", "Market size"],
     });
-    await waitFor(() => expect(fetchMyReasons).toHaveBeenCalled());
 
     expect(screen.queryByText("Weak founder-market fit")).not.toBeInTheDocument();
     expect(screen.queryByTestId("reason-limit-notice")).not.toBeInTheDocument();
@@ -124,22 +128,10 @@ describe("EmailModal rejection reason chips", () => {
     expect(screen.getByTestId("reason-limit-notice")).toBeInTheDocument();
   });
 
-  it("filters learned (non-canonical) chips out of the regenerate-draft request and flags them as not shaping the draft", async () => {
-    fetchMyReasons.mockResolvedValueOnce({
-      rating_up: [],
-      rating_down: [],
-      bucket_yes: [],
-      bucket_maybe: [],
-      bucket_reject: [{ text: "Not deep tech / wrong model", count: 3, last_used_at: "2026-01-01T00:00:00Z", source: "personal" }],
-    });
+  it("'Regenerate with AI' sends the selected canonical reasons", async () => {
     renderModal();
 
-    const learnedChip = await screen.findByText("Not deep tech / wrong model");
-    fireEvent.click(learnedChip);
     fireEvent.click(screen.getByText("Market size"));
-
-    expect(screen.getByTestId("learned-reason-note")).toBeInTheDocument();
-
     fireEvent.click(screen.getByTestId("regenerate-with-reasons-btn"));
 
     await waitFor(() => expect(regenerateDraft).toHaveBeenCalled());
@@ -158,7 +150,6 @@ describe("EmailModal rejection template (issue #232)", () => {
 
   it("'Use template with these reasons' calls the template endpoint, not the AI one", async () => {
     renderModal();
-    await waitFor(() => expect(fetchMyReasons).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText("Market size"));
     fireEvent.click(screen.getByTestId("render-template-btn"));
@@ -170,16 +161,14 @@ describe("EmailModal rejection template (issue #232)", () => {
 
   it("the EN/AR toggle re-renders the template in the chosen language", async () => {
     renderModal();
-    await waitFor(() => expect(fetchMyReasons).toHaveBeenCalled());
 
     fireEvent.click(screen.getByTestId("language-toggle-ar"));
 
     await waitFor(() => expect(renderRejectionTemplate).toHaveBeenCalledWith("lead-1", { reasons: [], language: "ar" }));
   });
 
-  it("'Regenerate with AI' stays available as a secondary action beside the template button", async () => {
+  it("'Regenerate with AI' stays available as a secondary action beside the template button", () => {
     renderModal();
-    await waitFor(() => expect(fetchMyReasons).toHaveBeenCalled());
 
     expect(screen.getByTestId("render-template-btn")).toBeInTheDocument();
     expect(screen.getByTestId("regenerate-with-reasons-btn")).toBeInTheDocument();
