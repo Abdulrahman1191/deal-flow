@@ -198,8 +198,12 @@ export default function EmailModal({ lead, onClose }: Props) {
       <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh] animate-scale-in">
         {/* Header */}
         <div className="shrink-0 flex items-center justify-between px-5 py-4 border-b border-border">
-          <div>
-            <p className="text-foreground font-semibold">{lead.company_name}</p>
+          <div className="flex-1 min-w-0 mr-3">
+            {/* truncate, not wrap -- a long company name must never add a
+                second line here, since the header's height is part of the
+                fixed budget the body textarea's 200px-visible guarantee
+                below is computed against (issue #244). */}
+            <p className="text-foreground font-semibold truncate">{lead.company_name}</p>
             <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${bucketColor}`}>
               {headerLabel}
             </p>
@@ -250,7 +254,7 @@ export default function EmailModal({ lead, onClose }: Props) {
               driving a template. Capture of those phrases (ReasonModal,
               GET /overrides/my-reasons) is untouched, just not rendered here. */}
           {isReject && (
-            <div className="shrink-0 px-5 py-4 border-b border-border space-y-3 bg-muted/20">
+            <div className="shrink-0 px-5 py-3 border-b border-border space-y-2 bg-muted/20">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Pass reasons (up to {MAX_REJECTION_REASONS})
@@ -287,78 +291,87 @@ export default function EmailModal({ lead, onClose }: Props) {
                   </div>
                 </div>
               </div>
-              {/* Capped + internally scrollable so 13 canonical chips (which
-                  wrap to ~5 rows) can never again push Subject/Body off
-                  screen (issue #243). */}
-              <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto pr-1" data-testid="reason-chips-scroll">
-                {UNQUAL_REASON_LABELS.map((label) => {
-                  const isOn = selectedReasons.has(label);
-                  const internal = INTERNAL_ONLY_REASONS.has(label);
-                  const disabled = !isOn && atReasonLimit;
-                  return (
-                    <button
-                      key={label}
-                      type="button"
-                      onClick={() => toggleReason(label)}
-                      disabled={disabled}
-                      title={internal ? "Recorded internally, not mentioned in the email" : undefined}
-                      className={`text-xs px-3 py-1.5 rounded-full transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
-                        isOn
-                          ? internal
-                            ? "bg-muted text-muted-foreground border-dashed border-muted-foreground/60"
-                            : "bg-error/20 text-error border-error"
-                          : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
-                      }`}
-                    >
-                      {label}
-                      {internal && <span className="ml-1 opacity-70">🔒</span>}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                🔒 recorded internally only — never mentioned in the email.
-              </p>
-
-              {hasInternalOnlySelected && (
-                <p className="text-[11px] text-muted-foreground" data-testid="internal-only-note">
-                  The founder won't see the internal-only reason(s) you picked — they're recorded
-                  internally and never mentioned in the email.
+              {/* Chips + notes + actions are capped and scroll internally as
+                  one unit -- a hard max-height, not just the chip row, so
+                  this block's worst-case contribution stays small and fixed
+                  no matter how many optional notes render below the chips
+                  (internal-only note, Copper note). That keeps the body
+                  textarea's top at least 200px visible at an 823px viewport
+                  without the user scrolling (issue #244). */}
+              <div className="max-h-[135px] overflow-y-auto space-y-2 pr-1">
+                {/* Capped + internally scrollable so 13 canonical chips (which
+                    wrap to ~5 rows) can never again push Subject/Body off
+                    screen (issue #243). */}
+                <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto" data-testid="reason-chips-scroll">
+                  {UNQUAL_REASON_LABELS.map((label) => {
+                    const isOn = selectedReasons.has(label);
+                    const internal = INTERNAL_ONLY_REASONS.has(label);
+                    const disabled = !isOn && atReasonLimit;
+                    return (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => toggleReason(label)}
+                        disabled={disabled}
+                        title={internal ? "Recorded internally, not mentioned in the email" : undefined}
+                        className={`text-xs px-3 py-1.5 rounded-full transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
+                          isOn
+                            ? internal
+                              ? "bg-muted text-muted-foreground border-dashed border-muted-foreground/60"
+                              : "bg-error/20 text-error border-error"
+                            : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
+                        }`}
+                      >
+                        {label}
+                        {internal && <span className="ml-1 opacity-70">🔒</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  🔒 recorded internally only — never mentioned in the email.
                 </p>
-              )}
-              {canonicalSelectedReasons.length > 0 && (
-                <p className="text-[11px] text-muted-foreground">
-                  These reasons will be written to Copper's Unqualification Reasons field when this
-                  lead is archived or the rejection is sent.
-                </p>
-              )}
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    templateMutation.mutate({ reasons: canonicalSelectedReasons, language: language ?? undefined })
-                  }
-                  disabled={generating}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
-                  data-testid="render-template-btn"
-                >
-                  {rendering ? "Rendering…" : "Use template with these reasons"}
-                </button>
-                {/* "Regenerate with AI" (issue #232) -- demoted to an explicit
-                    secondary action for the rare lead that needs bespoke
-                    wording (issue #223's reason-aware regeneration, kept but
-                    no longer the default). */}
-                <button
-                  type="button"
-                  onClick={() => regenMutation.mutate(canonicalSelectedReasons)}
-                  disabled={generating}
-                  title="Ask the AI to write a bespoke draft instead of the template"
-                  className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
-                  data-testid="regenerate-with-reasons-btn"
-                >
-                  {regenMutation.isPending ? "Regenerating…" : "Regenerate with AI ↻"}
-                </button>
+                {hasInternalOnlySelected && (
+                  <p className="text-[11px] text-muted-foreground" data-testid="internal-only-note">
+                    The founder won't see the internal-only reason(s) you picked — they're recorded
+                    internally and never mentioned in the email.
+                  </p>
+                )}
+                {canonicalSelectedReasons.length > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    These reasons will be written to Copper's Unqualification Reasons field when this
+                    lead is archived or the rejection is sent.
+                  </p>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      templateMutation.mutate({ reasons: canonicalSelectedReasons, language: language ?? undefined })
+                    }
+                    disabled={generating}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
+                    data-testid="render-template-btn"
+                  >
+                    {rendering ? "Rendering…" : "Use template with these reasons"}
+                  </button>
+                  {/* "Regenerate with AI" (issue #232) -- demoted to an explicit
+                      secondary action for the rare lead that needs bespoke
+                      wording (issue #223's reason-aware regeneration, kept but
+                      no longer the default). */}
+                  <button
+                    type="button"
+                    onClick={() => regenMutation.mutate(canonicalSelectedReasons)}
+                    disabled={generating}
+                    title="Ask the AI to write a bespoke draft instead of the template"
+                    className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+                    data-testid="regenerate-with-reasons-btn"
+                  >
+                    {regenMutation.isPending ? "Regenerating…" : "Regenerate with AI ↻"}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -369,7 +382,7 @@ export default function EmailModal({ lead, onClose }: Props) {
           <div className="flex-1 min-h-0 flex flex-col px-5 py-4 space-y-3">
             {isStale && !generating && (
               <div
-                className="shrink-0 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning space-y-1"
+                className="shrink-0 max-h-[60px] overflow-y-auto rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning space-y-1"
                 data-testid="stale-draft-notice"
               >
                 <p className="font-medium">
@@ -405,7 +418,12 @@ export default function EmailModal({ lead, onClose }: Props) {
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 disabled={fieldsDisabled}
-                className="flex-1 min-h-[140px] w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border resize-none font-mono leading-relaxed disabled:opacity-50"
+                data-testid="email-body-textarea"
+                // 200px floor -- at an 823px viewport this is guaranteed
+                // visible without scrolling even in the worst case (stale
+                // notice + all reason-block notes showing at once). See the
+                // geometry note on issue #244 for the arithmetic.
+                className="flex-1 min-h-[200px] w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border resize-none font-mono leading-relaxed disabled:opacity-50"
               />
             </div>
             {error && <p className="shrink-0 text-xs text-error">{error}</p>}

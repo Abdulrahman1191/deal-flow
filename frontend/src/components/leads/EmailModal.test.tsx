@@ -146,6 +146,46 @@ describe("EmailModal rejection reason chips", () => {
   });
 });
 
+// issue #244: at an 823px viewport, the body textarea's top must be above
+// the fold with at least 200px visible on open. jsdom doesn't do real
+// layout, so this can't assert rendered pixels -- instead it locks down the
+// structural guarantees the geometry note's arithmetic relies on: every
+// variable-height block above the textarea (reason-block notes, the
+// stale-draft notice) is hard-capped rather than left to grow with content,
+// and the textarea's own floor matches the 200px requirement.
+describe("EmailModal body textarea fold guarantee (issue #244)", () => {
+  it("floors the body textarea at 200px, not the old 140px", () => {
+    renderModal();
+
+    expect(screen.getByTestId("email-body-textarea").className).toMatch(/min-h-\[200px\]/);
+  });
+
+  it("caps the reason block's notes/actions region as a whole, not just the chip row", () => {
+    renderModal({
+      rejection_reasons: ["Founder(s)", "Dedication and focus", "Market size"],
+    });
+
+    const notesRegion = screen.getByTestId("reason-chips-scroll").parentElement;
+    expect(notesRegion?.className).toMatch(/max-h-\[135px\]/);
+    expect(notesRegion?.className).toMatch(/overflow-y-auto/);
+  });
+
+  it("caps the stale-draft notice so it can't grow unbounded above the textarea", async () => {
+    renderModal({ draft_body: null, draft_subject: null, draft_type: null, draft_bucket: null });
+
+    const notice = await screen.findByTestId("stale-draft-notice");
+    expect(notice.className).toMatch(/max-h-\[60px\]/);
+    expect(notice.className).toMatch(/overflow-y-auto/);
+  });
+
+  it("truncates a long company name instead of letting the header wrap to a second line", () => {
+    renderModal();
+
+    const name = screen.getByText("Acme Robotics");
+    expect(name.className).toMatch(/truncate/);
+  });
+});
+
 describe("EmailModal rejection template (issue #232)", () => {
   it("renders the stale draft from the zero-LLM template, not the AI path", async () => {
     renderModal({ draft_body: null, draft_subject: null, draft_type: null, draft_bucket: null });
