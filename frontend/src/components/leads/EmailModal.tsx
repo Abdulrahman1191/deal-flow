@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
 import { regenerateDraft, renderRejectionTemplate, sendEmail, updateDraft } from "../../api/assessments";
-import { fetchMyReasons } from "../../api/overrides";
 import { useToast } from "../shared/Toast";
 import type { Lead } from "../../types/lead";
-import LearnedReasonChips from "./LearnedReasonChips";
 import { INTERNAL_ONLY_REASONS, MAX_REJECTION_REASONS, UNQUAL_REASON_LABELS } from "./rejectionReasons";
 
 interface Props {
@@ -59,12 +57,10 @@ export default function EmailModal({ lead, onClose }: Props) {
   const isReject = effectiveBucket === "REJECT";
   const atReasonLimit = selectedReasons.size >= MAX_REJECTION_REASONS;
   const hasInternalOnlySelected = Array.from(selectedReasons).some((r) => INTERNAL_ONLY_REASONS.has(r));
-  // Only canonical labels are valid /regenerate-draft input -- the backend
-  // 400s on anything else (claude_agent.UNQUAL_REASON_OPTIONS). "Your
-  // reasons" chips below are free-text learned phrases, not canonical
-  // labels, so they're dropped here before the request goes out (issue #233).
-  const canonicalSelectedReasons = Array.from(selectedReasons).filter((r) => UNQUAL_REASON_LABELS.includes(r));
-  const hasLearnedReasonSelected = canonicalSelectedReasons.length < selectedReasons.size;
+  // Selection is seeded and toggled from UNQUAL_REASON_LABELS chips only, so
+  // this is already canonical -- kept as its own array for the
+  // /regenerate-draft and template calls below.
+  const canonicalSelectedReasons = Array.from(selectedReasons);
 
   // EN/AR toggle (issue #232) -- defaults to whatever the backend's
   // zero-LLM template endpoint auto-detected from the applicant's own text
@@ -79,11 +75,6 @@ export default function EmailModal({ lead, onClose }: Props) {
       else if (next.size < MAX_REJECTION_REASONS) next.add(label);
       return next;
     });
-
-  // "Your reasons" chips (issue #152), scoped to the reject context -- same
-  // pattern as FeedbackModal/ReasonModal.
-  const { data: myReasons } = useQuery({ queryKey: ["my-reasons"], queryFn: fetchMyReasons, staleTime: 5 * 60 * 1000 });
-  const learnedReasons = myReasons?.bucket_reject ?? [];
 
   // Signature of the draft currently reflected in the fields above, so we can
   // tell "the draft changed under us" (a bucket override or background
@@ -203,9 +194,9 @@ export default function EmailModal({ lead, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh] animate-scale-in">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col h-[90vh] max-h-[760px] animate-scale-in">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <div>
             <p className="text-foreground font-semibold">{lead.company_name}</p>
             <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${bucketColor}`}>
@@ -248,7 +239,7 @@ export default function EmailModal({ lead, onClose }: Props) {
         {/* Rejection reason chips (issue #223/#224) — REJECT only; a YES
             lead's modal has no reasons section at all. */}
         {isReject && (
-          <div className="px-5 py-4 border-b border-border space-y-3 bg-muted/20">
+          <div className="px-5 py-4 border-b border-border space-y-3 bg-muted/20 shrink-0">
             <div className="flex items-center justify-between">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Pass reasons (up to {MAX_REJECTION_REASONS})
@@ -285,7 +276,10 @@ export default function EmailModal({ lead, onClose }: Props) {
                 </div>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
+            {/* Capped and internally scrollable so thirteen canonical chips
+                (five wrapped rows) can never push Subject/Body off screen
+                (issue #243). */}
+            <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto pr-1">
               {UNQUAL_REASON_LABELS.map((label) => {
                 const isOn = selectedReasons.has(label);
                 const internal = INTERNAL_ONLY_REASONS.has(label);
@@ -315,24 +309,10 @@ export default function EmailModal({ lead, onClose }: Props) {
               🔒 recorded internally only — never mentioned in the email.
             </p>
 
-            <LearnedReasonChips
-              reasons={learnedReasons}
-              selected={selectedReasons}
-              onToggle={toggleReason}
-              activeClassName="bg-error/20 text-error border-error"
-              isDisabled={() => atReasonLimit}
-            />
-
             {hasInternalOnlySelected && (
               <p className="text-[11px] text-muted-foreground" data-testid="internal-only-note">
                 The founder won't see the internal-only reason(s) you picked — they're recorded
                 internally and never mentioned in the email.
-              </p>
-            )}
-            {hasLearnedReasonSelected && (
-              <p className="text-[11px] text-muted-foreground" data-testid="learned-reason-note">
-                "Your reasons" chips are personal shortcuts only — they don't shape the generated
-                email or get written to Copper. Only the categories above do that.
               </p>
             )}
             {canonicalSelectedReasons.length > 0 && (
@@ -372,11 +352,14 @@ export default function EmailModal({ lead, onClose }: Props) {
           </div>
         )}
 
-        {/* Editable email */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+        {/* Editable email -- the only scrollable region, so the body (the
+            whole point of this modal) always gets whatever height is left
+            after the fixed header/reasons/footer rather than a fixed row
+            count (issue #243). */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3 flex flex-col">
           {isStale && !generating && (
             <div
-              className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning space-y-1"
+              className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning space-y-1 shrink-0"
               data-testid="stale-draft-notice"
             >
               <p className="font-medium">
@@ -389,7 +372,7 @@ export default function EmailModal({ lead, onClose }: Props) {
               </p>
             </div>
           )}
-          <div>
+          <div className="shrink-0">
             <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
               Subject
             </label>
@@ -404,23 +387,22 @@ export default function EmailModal({ lead, onClose }: Props) {
               <p className="text-[10px] text-error mt-1">Subject is required</p>
             )}
           </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+          <div className="flex-1 flex flex-col min-h-0">
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1 shrink-0">
               Body
             </label>
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
               disabled={fieldsDisabled}
-              rows={12}
-              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border resize-none font-mono leading-relaxed disabled:opacity-50"
+              className="w-full flex-1 min-h-[160px] bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border resize-none font-mono leading-relaxed disabled:opacity-50"
             />
           </div>
-          {error && <p className="text-xs text-error">{error}</p>}
+          {error && <p className="text-xs text-error shrink-0">{error}</p>}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
+        <div className="flex items-center justify-between px-5 py-4 border-t border-border shrink-0">
           <button
             onClick={onClose}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
