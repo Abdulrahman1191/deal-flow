@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
 import { regenerateDraft, renderRejectionTemplate, sendEmail, updateDraft } from "../../api/assessments";
-import { fetchMyReasons } from "../../api/overrides";
 import { useToast } from "../shared/Toast";
 import type { Lead } from "../../types/lead";
-import LearnedReasonChips from "./LearnedReasonChips";
 import { INTERNAL_ONLY_REASONS, MAX_REJECTION_REASONS, UNQUAL_REASON_LABELS } from "./rejectionReasons";
 
 interface Props {
@@ -60,11 +58,10 @@ export default function EmailModal({ lead, onClose }: Props) {
   const atReasonLimit = selectedReasons.size >= MAX_REJECTION_REASONS;
   const hasInternalOnlySelected = Array.from(selectedReasons).some((r) => INTERNAL_ONLY_REASONS.has(r));
   // Only canonical labels are valid /regenerate-draft input -- the backend
-  // 400s on anything else (claude_agent.UNQUAL_REASON_OPTIONS). "Your
-  // reasons" chips below are free-text learned phrases, not canonical
-  // labels, so they're dropped here before the request goes out (issue #233).
+  // 400s on anything else (claude_agent.UNQUAL_REASON_OPTIONS). Defensive
+  // filter in case selectedReasons is ever seeded from non-canonical
+  // free text (issue #233).
   const canonicalSelectedReasons = Array.from(selectedReasons).filter((r) => UNQUAL_REASON_LABELS.includes(r));
-  const hasLearnedReasonSelected = canonicalSelectedReasons.length < selectedReasons.size;
 
   // EN/AR toggle (issue #232) -- defaults to whatever the backend's
   // zero-LLM template endpoint auto-detected from the applicant's own text
@@ -79,11 +76,6 @@ export default function EmailModal({ lead, onClose }: Props) {
       else if (next.size < MAX_REJECTION_REASONS) next.add(label);
       return next;
     });
-
-  // "Your reasons" chips (issue #152), scoped to the reject context -- same
-  // pattern as FeedbackModal/ReasonModal.
-  const { data: myReasons } = useQuery({ queryKey: ["my-reasons"], queryFn: fetchMyReasons, staleTime: 5 * 60 * 1000 });
-  const learnedReasons = myReasons?.bucket_reject ?? [];
 
   // Signature of the draft currently reflected in the fields above, so we can
   // tell "the draft changed under us" (a bucket override or background
@@ -205,7 +197,7 @@ export default function EmailModal({ lead, onClose }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
       <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh] animate-scale-in">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+        <div className="shrink-0 flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
             <p className="text-foreground font-semibold">{lead.company_name}</p>
             <p className={`text-xs font-medium uppercase tracking-wider mt-0.5 ${bucketColor}`}>
@@ -245,182 +237,183 @@ export default function EmailModal({ lead, onClose }: Props) {
           </div>
         </div>
 
-        {/* Rejection reason chips (issue #223/#224) — REJECT only; a YES
-            lead's modal has no reasons section at all. */}
-        {isReject && (
-          <div className="px-5 py-4 border-b border-border space-y-3 bg-muted/20">
-            <div className="flex items-center justify-between">
-              <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Pass reasons (up to {MAX_REJECTION_REASONS})
-              </label>
-              <div className="flex items-center gap-2">
-                {atReasonLimit && (
-                  <span className="text-[10px] text-warning" data-testid="reason-limit-notice">
-                    Limit reached — deselect one to pick another
-                  </span>
-                )}
-                {/* EN/AR toggle (issue #232) -- defaults to the backend's
-                    detected applicant language; re-renders the template
-                    immediately on change. */}
-                <div className="flex rounded-md border border-border overflow-hidden" data-testid="language-toggle">
-                  {(["en", "ar"] as const).map((lang) => (
-                    <button
-                      key={lang}
-                      type="button"
-                      disabled={rendering}
-                      onClick={() => {
-                        setLanguage(lang);
-                        templateMutation.mutate({ reasons: canonicalSelectedReasons, language: lang });
-                      }}
-                      data-testid={`language-toggle-${lang}`}
-                      className={`text-[10px] uppercase px-2 py-1 transition-colors disabled:opacity-50 ${
-                        (language ?? "en") === lang
-                          ? "bg-primary text-white"
-                          : "bg-transparent text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {lang}
-                    </button>
-                  ))}
+        {/* Middle: header/footer stay fixed, this region scrolls as a whole
+            and the body textarea (below) claims whatever space the reason
+            block doesn't need -- the reason block is capped and scrolls
+            internally instead of pushing the email down (issue #243). */}
+        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+          {/* Rejection reason chips (issue #223/#224) — REJECT only; a YES
+              lead's modal has no reasons section at all. "Your reasons"
+              (free-text, learned per-user phrases) used to render here too;
+              removed per issue #243 -- that judgement was already recorded
+              at thumbs-up/down time and repeating it cost 240px without
+              driving a template. Capture of those phrases (ReasonModal,
+              GET /overrides/my-reasons) is untouched, just not rendered here. */}
+          {isReject && (
+            <div className="shrink-0 px-5 py-4 border-b border-border space-y-3 bg-muted/20">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Pass reasons (up to {MAX_REJECTION_REASONS})
+                </label>
+                <div className="flex items-center gap-2">
+                  {atReasonLimit && (
+                    <span className="text-[10px] text-warning" data-testid="reason-limit-notice">
+                      Limit reached — deselect one to pick another
+                    </span>
+                  )}
+                  {/* EN/AR toggle (issue #232) -- defaults to the backend's
+                      detected applicant language; re-renders the template
+                      immediately on change. */}
+                  <div className="flex rounded-md border border-border overflow-hidden" data-testid="language-toggle">
+                    {(["en", "ar"] as const).map((lang) => (
+                      <button
+                        key={lang}
+                        type="button"
+                        disabled={rendering}
+                        onClick={() => {
+                          setLanguage(lang);
+                          templateMutation.mutate({ reasons: canonicalSelectedReasons, language: lang });
+                        }}
+                        data-testid={`language-toggle-${lang}`}
+                        className={`text-[10px] uppercase px-2 py-1 transition-colors disabled:opacity-50 ${
+                          (language ?? "en") === lang
+                            ? "bg-primary text-white"
+                            : "bg-transparent text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {lang}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {UNQUAL_REASON_LABELS.map((label) => {
-                const isOn = selectedReasons.has(label);
-                const internal = INTERNAL_ONLY_REASONS.has(label);
-                const disabled = !isOn && atReasonLimit;
-                return (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => toggleReason(label)}
-                    disabled={disabled}
-                    title={internal ? "Recorded internally, not mentioned in the email" : undefined}
-                    className={`text-xs px-3 py-1.5 rounded-full transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
-                      isOn
-                        ? internal
-                          ? "bg-muted text-muted-foreground border-dashed border-muted-foreground/60"
-                          : "bg-error/20 text-error border-error"
-                        : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
-                    }`}
-                  >
-                    {label}
-                    {internal && <span className="ml-1 opacity-70">🔒</span>}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              🔒 recorded internally only — never mentioned in the email.
-            </p>
+              {/* Capped + internally scrollable so 13 canonical chips (which
+                  wrap to ~5 rows) can never again push Subject/Body off
+                  screen (issue #243). */}
+              <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto pr-1" data-testid="reason-chips-scroll">
+                {UNQUAL_REASON_LABELS.map((label) => {
+                  const isOn = selectedReasons.has(label);
+                  const internal = INTERNAL_ONLY_REASONS.has(label);
+                  const disabled = !isOn && atReasonLimit;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => toggleReason(label)}
+                      disabled={disabled}
+                      title={internal ? "Recorded internally, not mentioned in the email" : undefined}
+                      className={`text-xs px-3 py-1.5 rounded-full transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
+                        isOn
+                          ? internal
+                            ? "bg-muted text-muted-foreground border-dashed border-muted-foreground/60"
+                            : "bg-error/20 text-error border-error"
+                          : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
+                      }`}
+                    >
+                      {label}
+                      {internal && <span className="ml-1 opacity-70">🔒</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                🔒 recorded internally only — never mentioned in the email.
+              </p>
 
-            <LearnedReasonChips
-              reasons={learnedReasons}
-              selected={selectedReasons}
-              onToggle={toggleReason}
-              activeClassName="bg-error/20 text-error border-error"
-              isDisabled={() => atReasonLimit}
-            />
+              {hasInternalOnlySelected && (
+                <p className="text-[11px] text-muted-foreground" data-testid="internal-only-note">
+                  The founder won't see the internal-only reason(s) you picked — they're recorded
+                  internally and never mentioned in the email.
+                </p>
+              )}
+              {canonicalSelectedReasons.length > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  These reasons will be written to Copper's Unqualification Reasons field when this
+                  lead is archived or the rejection is sent.
+                </p>
+              )}
 
-            {hasInternalOnlySelected && (
-              <p className="text-[11px] text-muted-foreground" data-testid="internal-only-note">
-                The founder won't see the internal-only reason(s) you picked — they're recorded
-                internally and never mentioned in the email.
-              </p>
-            )}
-            {hasLearnedReasonSelected && (
-              <p className="text-[11px] text-muted-foreground" data-testid="learned-reason-note">
-                "Your reasons" chips are personal shortcuts only — they don't shape the generated
-                email or get written to Copper. Only the categories above do that.
-              </p>
-            )}
-            {canonicalSelectedReasons.length > 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                These reasons will be written to Copper's Unqualification Reasons field when this
-                lead is archived or the rejection is sent.
-              </p>
-            )}
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  templateMutation.mutate({ reasons: canonicalSelectedReasons, language: language ?? undefined })
-                }
-                disabled={generating}
-                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
-                data-testid="render-template-btn"
-              >
-                {rendering ? "Rendering…" : "Use template with these reasons"}
-              </button>
-              {/* "Regenerate with AI" (issue #232) -- demoted to an explicit
-                  secondary action for the rare lead that needs bespoke
-                  wording (issue #223's reason-aware regeneration, kept but
-                  no longer the default). */}
-              <button
-                type="button"
-                onClick={() => regenMutation.mutate(canonicalSelectedReasons)}
-                disabled={generating}
-                title="Ask the AI to write a bespoke draft instead of the template"
-                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
-                data-testid="regenerate-with-reasons-btn"
-              >
-                {regenMutation.isPending ? "Regenerating…" : "Regenerate with AI ↻"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Editable email */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-          {isStale && !generating && (
-            <div
-              className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning space-y-1"
-              data-testid="stale-draft-notice"
-            >
-              <p className="font-medium">
-                This draft was written for a different decision — regenerate it.
-              </p>
-              <p className="text-warning/80">
-                The lead's current call is <strong>{effectiveBucket}</strong>, but the saved draft
-                {assessment?.draft_type ? ` was written as "${assessment.draft_type}"` : " is missing"}.
-                Click Regenerate above before sending.
-              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    templateMutation.mutate({ reasons: canonicalSelectedReasons, language: language ?? undefined })
+                  }
+                  disabled={generating}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
+                  data-testid="render-template-btn"
+                >
+                  {rendering ? "Rendering…" : "Use template with these reasons"}
+                </button>
+                {/* "Regenerate with AI" (issue #232) -- demoted to an explicit
+                    secondary action for the rare lead that needs bespoke
+                    wording (issue #223's reason-aware regeneration, kept but
+                    no longer the default). */}
+                <button
+                  type="button"
+                  onClick={() => regenMutation.mutate(canonicalSelectedReasons)}
+                  disabled={generating}
+                  title="Ask the AI to write a bespoke draft instead of the template"
+                  className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+                  data-testid="regenerate-with-reasons-btn"
+                >
+                  {regenMutation.isPending ? "Regenerating…" : "Regenerate with AI ↻"}
+                </button>
+              </div>
             </div>
           )}
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
-              Subject
-            </label>
-            <input
-              type="text"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              disabled={fieldsDisabled}
-              className={`w-full bg-background border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border disabled:opacity-50 ${!subject.trim() && !fieldsDisabled ? "border-error" : "border-border"}`}
-            />
-            {!subject.trim() && !fieldsDisabled && (
-              <p className="text-[10px] text-error mt-1">Subject is required</p>
+
+          {/* Editable email -- the body textarea is the dominant element
+              (issue #243): it flexes to fill whatever height the reason
+              block above doesn't use, instead of a fixed row count. */}
+          <div className="flex-1 min-h-0 flex flex-col px-5 py-4 space-y-3">
+            {isStale && !generating && (
+              <div
+                className="shrink-0 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-warning space-y-1"
+                data-testid="stale-draft-notice"
+              >
+                <p className="font-medium">
+                  This draft was written for a different decision — regenerate it.
+                </p>
+                <p className="text-warning/80">
+                  The lead's current call is <strong>{effectiveBucket}</strong>, but the saved draft
+                  {assessment?.draft_type ? ` was written as "${assessment.draft_type}"` : " is missing"}.
+                  Click Regenerate above before sending.
+                </p>
+              </div>
             )}
+            <div className="shrink-0">
+              <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+                Subject
+              </label>
+              <input
+                type="text"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                disabled={fieldsDisabled}
+                className={`w-full bg-background border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border disabled:opacity-50 ${!subject.trim() && !fieldsDisabled ? "border-error" : "border-border"}`}
+              />
+              {!subject.trim() && !fieldsDisabled && (
+                <p className="text-[10px] text-error mt-1">Subject is required</p>
+              )}
+            </div>
+            <div className="flex-1 min-h-0 flex flex-col">
+              <label className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+                Body
+              </label>
+              <textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                disabled={fieldsDisabled}
+                className="flex-1 min-h-[140px] w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border resize-none font-mono leading-relaxed disabled:opacity-50"
+              />
+            </div>
+            {error && <p className="shrink-0 text-xs text-error">{error}</p>}
           </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
-              Body
-            </label>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              disabled={fieldsDisabled}
-              rows={12}
-              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-border resize-none font-mono leading-relaxed disabled:opacity-50"
-            />
-          </div>
-          {error && <p className="text-xs text-error">{error}</p>}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
+        <div className="shrink-0 flex items-center justify-between px-5 py-4 border-t border-border">
           <button
             onClick={onClose}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
