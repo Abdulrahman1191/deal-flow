@@ -76,7 +76,10 @@ def seed_rows() -> list[dict]:
 def validate_body(body: str) -> None:
     """Rejects an empty body, a body missing a required placeholder, or one
     carrying a placeholder outside the known set -- naming the offending
-    placeholder rather than failing generically."""
+    placeholder rather than failing generically. Also rejects a body that
+    would raise at render time (e.g. a stray/unmatched brace) even when the
+    four required placeholders are all present elsewhere, by attempting the
+    same str.format() call render_rejection_email() does."""
     if not body or not body.strip():
         raise TemplateValidationError("body must not be empty")
     found = set(_PLACEHOLDER_RE.findall(body))
@@ -86,6 +89,10 @@ def validate_body(body: str) -> None:
     unknown = found - REQUIRED_PLACEHOLDERS
     if unknown:
         raise TemplateValidationError(f"body contains unknown placeholder {{{sorted(unknown)[0]}}}")
+    try:
+        body.format(**{p: "" for p in REQUIRED_PLACEHOLDERS})
+    except (ValueError, KeyError, IndexError) as exc:
+        raise TemplateValidationError(f"body has a malformed placeholder or brace: {exc}") from exc
 
 
 async def get_template(db: AsyncSession, language: str, template_key: str) -> Optional[EmailTemplate]:

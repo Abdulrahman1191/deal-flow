@@ -310,6 +310,28 @@ def test_validate_body_rejects_unknown_placeholder_and_names_it():
         email_templates.validate_body(body)
 
 
+def test_validate_body_rejects_malformed_brace_even_with_all_placeholders_present():
+    # All four required placeholders are present, but the stray "{growth"
+    # has no closing brace -- str.format() would raise at render time even
+    # though the placeholder-set checks above pass it.
+    body = "{greeting_line} {company} grew 100% {growth -- {reason} -- {partner_name}"
+    with pytest.raises(email_templates.TemplateValidationError, match="malformed"):
+        email_templates.validate_body(body)
+
+
+def test_update_template_rejects_malformed_brace_without_touching_db():
+    session = _FakeSession([])  # update_template must validate before any execute()
+    body = "{greeting_line} {company} {reason} {partner_name} 100% {growth"
+    with pytest.raises(email_templates.TemplateValidationError, match="malformed"):
+        asyncio.run(
+            email_templates.update_template(
+                session, language="en", template_key="MANDATE", subject="Subject",
+                body=body, reason_text="reason", updated_by=OWNER_EMAIL,
+            )
+        )
+    assert session.commits == 0
+
+
 def test_update_template_rejects_bad_body_without_touching_db():
     session = _FakeSession([])  # update_template must validate before any execute()
     with pytest.raises(email_templates.TemplateValidationError):
