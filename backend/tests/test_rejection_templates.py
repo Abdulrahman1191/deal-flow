@@ -433,7 +433,10 @@ def test_rejection_template_endpoint_makes_no_llm_call(monkeypatch):
     card = _fake_card_row(bucket="REJECT")
 
     _auth_as("owner@raed.vc")
-    _use_db([(card, lead)])
+    # Second queued result is the email_templates lookup (issue #234) --
+    # None means "no row", so rendering falls back to the #232 constants,
+    # same as before that table existed.
+    _use_db([(card, lead), None])
     try:
         response = client.post(
             f"/api/v1/assessments/{lead.id}/rejection-template",
@@ -454,7 +457,7 @@ def test_rejection_template_endpoint_persists_reasons_and_draft_fields():
     card = _fake_card_row(bucket="REJECT")
 
     _auth_as("owner@raed.vc")
-    _use_db([(card, lead)])
+    _use_db([(card, lead), None])
     try:
         response = client.post(
             f"/api/v1/assessments/{lead.id}/rejection-template",
@@ -478,7 +481,7 @@ def test_rejection_template_endpoint_founder_only_records_but_writes_mandate():
     card = _fake_card_row(bucket="REJECT")
 
     _auth_as("owner@raed.vc")
-    _use_db([(card, lead)])
+    _use_db([(card, lead), None])
     try:
         response = client.post(
             f"/api/v1/assessments/{lead.id}/rejection-template",
@@ -503,7 +506,7 @@ def test_rejection_template_endpoint_defaults_to_detected_arabic_language():
     card = _fake_card_row(bucket="REJECT")
 
     _auth_as("owner@raed.vc")
-    _use_db([(card, lead)])
+    _use_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{lead.id}/rejection-template")
     finally:
@@ -524,7 +527,7 @@ def test_rejection_template_endpoint_language_override_beats_detection():
     card = _fake_card_row(bucket="REJECT")
 
     _auth_as("owner@raed.vc")
-    _use_db([(card, lead)])
+    _use_db([(card, lead), None])
     try:
         response = client.post(
             f"/api/v1/assessments/{lead.id}/rejection-template",
@@ -545,7 +548,7 @@ def test_rejection_template_endpoint_missing_founder_name_degrades_greeting():
     card = _fake_card_row(bucket="REJECT")
 
     _auth_as("owner@raed.vc")
-    _use_db([(card, lead)])
+    _use_db([(card, lead), None])
     try:
         response = client.post(f"/api/v1/assessments/{lead.id}/rejection-template")
     finally:
