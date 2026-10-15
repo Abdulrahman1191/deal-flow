@@ -57,7 +57,7 @@ from app.models.assessment import AssessmentCard
 from app.models.lead import Lead
 from app.models.processed_drive_file import ProcessedDriveFile
 from app.services.copper_service import fetch_lead_by_id
-from app.services import deck_cache, llm_breaker, task_guard
+from app.services import av_scan, deck_cache, llm_breaker, task_guard
 from app.services.pitch_deck import (
     MATCH_THRESHOLD,
     extract_text_from_pdf,
@@ -185,6 +185,11 @@ def _download_and_extract(service, drive_file: dict) -> str:
     with tempfile.TemporaryDirectory() as tmp_dir:
         pdf_path = Path(tmp_dir) / drive_file["name"]
         _download_pdf(service, file_id, pdf_path)
+        # Inbound decks are attachments from anyone: scan before any parser
+        # opens them. In enforce mode a bad file raises DeckQuarantined, which
+        # every caller already treats as a per-file failure, and nothing is
+        # cached for it.
+        av_scan.check_deck(pdf_path, drive_file["name"], file_id)
         text = extract_text_from_pdf(pdf_path)
 
     deck_cache.put(file_id, text, modified_time)

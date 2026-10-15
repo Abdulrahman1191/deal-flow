@@ -93,7 +93,7 @@ async def apply_reextract(db: AsyncSession, service, leads: list[Lead]) -> dict:
     """Re-download + re-extract each candidate. Per-lead failures (bad file,
     Drive hiccup, corrupt PDF) are caught and counted rather than aborting the
     rest of the run -- one bad deck must not block the other ~26."""
-    from app.services import deck_cache
+    from app.services import av_scan, deck_cache
     from app.tasks.sync_pitch_decks import _download_pdf
 
     unstuck, still_empty, failed = 0, 0, 0
@@ -108,6 +108,7 @@ async def apply_reextract(db: AsyncSession, service, leads: list[Lead]) -> dict:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 pdf_path = Path(tmp_dir) / filename
                 _download_pdf(service, lead.pitch_deck_drive_id, pdf_path)
+                av_scan.check_deck(pdf_path, filename, lead.pitch_deck_drive_id)
                 text = extract_text_from_pdf(pdf_path)
         except Exception as exc:
             failed += 1

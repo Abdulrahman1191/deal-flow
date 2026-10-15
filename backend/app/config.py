@@ -232,6 +232,15 @@ class Settings(BaseSettings):
     # burning prod's cores.
     pitch_deck_llm_extraction_enabled: bool = True
 
+    # --- Antivirus scan of inbound decks (app/services/av_scan.py) ---
+    # Every Drive deck streams through the shared clamd (raed-ai-clamd on the
+    # raed_platform network) before any parser sees it. off | log | enforce;
+    # log first, enforce once a day of verdicts looks right.
+    deck_av_scan_mode: str = "log"
+    clamd_host: str = "raed-ai-clamd"
+    clamd_port: int = 3310
+    clamd_timeout_seconds: float = 90.0
+
     # --- Daily briefing schedule ---
     briefing_cron_hour: int = 4
     briefing_cron_minute: int = 0

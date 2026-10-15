@@ -59,6 +59,9 @@ services:
     mem_limit: 3g
     networks:
       - internal
+      # The shared clamd (raed-ai-clamd) lives on raed_platform; decks are
+      # scanned there before extraction (app/services/av_scan.py).
+      - raed_platform
     depends_on:
       - redis
 
@@ -92,6 +95,9 @@ services:
     mem_limit: 3g
     networks:
       - internal
+      # The shared clamd (raed-ai-clamd) lives on raed_platform; decks are
+      # scanned there before extraction (app/services/av_scan.py).
+      - raed_platform
     depends_on:
       - redis
 
