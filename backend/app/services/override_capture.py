@@ -29,10 +29,15 @@ Trigger = Literal[
     # apply to bulk dispositions (same as bulk-archive): selecting and
     # confirming the batch *is* the human judgement.
     "bulk_send_rejection",
-    # Thumbs-down on a YES lead (issue #225) -- unlike a plain "rate_down",
-    # this one unambiguously names a destination (REJECT) and moves the
-    # bucket, so it's recorded as a strong correction rather than a caution.
+    # Thumbs-down on a YES lead (issue #225), generalised to a thumbs-down on
+    # MAYBE (issue #252) -- unlike a plain "rate_down", this one unambiguously
+    # names a destination (REJECT) and moves the bucket, so it's recorded as
+    # a strong correction rather than a caution.
     "rate_down_auto_reject",
+    # Thumbs-up on a MAYBE (issue #252) -- the mirror image of
+    # rate_down_auto_reject: names YES as the destination and moves the
+    # bucket there, so it's recorded as a strong correction too.
+    "rate_up_auto_promote",
 ]
 
 # Cap pitch deck text at the same length the LLM sees — keeps row size bounded

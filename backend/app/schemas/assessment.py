@@ -4,7 +4,7 @@ from typing import Optional, List
 
 from pydantic import BaseModel, field_validator
 
-from app.services.claude_agent import normalize_signal, normalize_traction_list
+from app.services.claude_agent import UNQUAL_REASON_OPTIONS, normalize_signal, normalize_traction_list
 
 
 def _sanitize_signal_list(items: Optional[List]) -> Optional[List]:
@@ -138,7 +138,22 @@ class AssessmentRating(BaseModel):
     "down" = human disagrees with the AI's bucket.
     Both register a training row; `reason`/`reason_tags` are optional context
     (the UI only prompts for them on a thumbs-down).
+
+    On a MAYBE (and a thumbs-down on a YES), a rating is itself a decision --
+    see app.routers.assessments._rating_transition -- and may resolve straight
+    into REJECT. `rejection_reason` (issue #252) is the canonical label that
+    transition should use for `card.rejection_reasons`/the rejection email,
+    distinct from `reason_tags` above which is the partner's own free-text
+    history (GET /overrides/my-reasons) and must never be written there.
     """
     rating: str  # "up" | "down"
     reason_tags: Optional[List[str]] = None
     reason: Optional[str] = None
+    rejection_reason: Optional[str] = None
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def _validate_rejection_reason(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in UNQUAL_REASON_OPTIONS:
+            raise ValueError(f"Unknown rejection reason: {v!r}")
+        return v

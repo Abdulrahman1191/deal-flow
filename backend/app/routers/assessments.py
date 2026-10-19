@@ -627,15 +627,33 @@ async def override_bucket(
     return _override_response(card, lead, draft_regen_failed)
 
 
-async def _auto_reject_on_rate_down(
-    db: AsyncSession, card: AssessmentCard, lead: Lead, body: AssessmentRating, user: User
+def _rating_transition(effective_bucket: str, rating: str) -> Optional[str]:
+    """What bucket (if any) a thumbs rating decides for `effective_bucket`.
+
+    On MAYBE a thumbs is itself the decision (issue #252): "up" means it's
+    worth a meeting, "down" means it isn't -- there's no third option, so
+    both directions name a destination. On YES only "down" is unambiguous
+    ("don't meet them" -- issue #225); "up" just confirms what's already
+    true. REJECT is terminal either way. Returns None for "no transition",
+    i.e. the rating is a plain agree/disagree signal with no bucket change.
+    """
+    if effective_bucket == "MAYBE":
+        return "YES" if rating == "up" else "REJECT"
+    if effective_bucket == "YES" and rating == "down":
+        return "REJECT"
+    return None
+
+
+async def _apply_rating_transition(
+    db: AsyncSession, card: AssessmentCard, lead: Lead, body: AssessmentRating, user: User,
+    *, from_bucket: str, to_bucket: str,
 ) -> None:
-    """Thumbs-down on a YES lead is unambiguous: "worth a meeting" was wrong,
-    and the only thing to disagree with that direction is "don't meet them" —
-    so unlike a thumbs-down on MAYBE/REJECT, this one names a destination and
-    moves the bucket (issue #225). Mirrors override_bucket's regen-with-retry,
-    null-on-failure, and Copper-tag-mirror behaviour for this one transition
-    rather than duplicating it ad hoc, and snapshots enough to undo."""
+    """Applies a rating-decided bucket transition (issue #252 generalises
+    issue #225's YES-only auto-reject to MAYBE's up->YES/down->REJECT as
+    well). Mirrors override_bucket's regen-with-retry, null-on-failure
+    (issue #150), and Copper-tag-mirror behaviour for this transition rather
+    than duplicating it ad hoc, and snapshots enough to undo via the same
+    bucket_override action record_bucket_override_action already supports."""
     prior_bucket = card.bucket
     prior_user_override = card.user_override
     prior_user_override_at = card.user_override_at
@@ -645,28 +663,35 @@ async def _auto_reject_on_rate_down(
     prior_draft_bucket = card.draft_bucket
     prior_rejection_reasons = card.rejection_reasons
 
-    card.user_override = "REJECT"
+    card.user_override = to_bucket
     card.user_override_at = datetime.now(timezone.utc)
-    card.bucket = "REJECT"
-    if body.reason_tags:
-        card.rejection_reasons = body.reason_tags
+    card.bucket = to_bucket
+    # Only the canonical `rejection_reason` (issue #252) may land in
+    # rejection_reasons -- the free-text reason_tags above is the partner's
+    # own history (GET /overrides/my-reasons) and is not a canonical
+    # UNQUAL_REASON_OPTIONS label, so it must never reach this field (which
+    # the rejection email templates and Copper's Unqualification Reasons
+    # field both require to be canonical).
+    reasons = [body.rejection_reason] if (to_bucket == "REJECT" and body.rejection_reason) else None
+    if reasons:
+        card.rejection_reasons = reasons
 
     await log_event(
         db, lead.id, EVENT_BUCKET_OVERRIDDEN,
-        {"from": "YES", "to": "REJECT", "source": "rate_down_auto"},
+        {"from": from_bucket, "to": to_bucket, "source": f"rate_{body.rating}_auto"},
     )
 
     try:
         owner_fields = await _load_owner_draft_fields(db, lead)
-        new_draft = _regenerate_draft_for_bucket(lead, "REJECT", card.summary or "", owner_fields)
+        new_draft = _regenerate_draft_for_bucket(lead, to_bucket, card.summary or "", owner_fields, reasons=reasons)
         card.draft_type = new_draft.get("draft_type")
         card.draft_subject = new_draft.get("draft_subject")
         card.draft_body = new_draft.get("draft_body")
-        card.draft_bucket = "REJECT"
+        card.draft_bucket = to_bucket
     except Exception as exc:
         # Same issue #150 safety net as override_bucket: never leave a stale
-        # meeting-request draft in place on a lead that just moved to REJECT.
-        print(f"[rate_assessment] auto-reject draft regen failed for lead {lead.id} after retries: {exc!r}")
+        # draft (meeting-request on a now-REJECT lead, or vice versa) in place.
+        print(f"[rate_assessment] auto-{to_bucket.lower()} draft regen failed for lead {lead.id} after retries: {exc!r}")
         card.draft_type = None
         card.draft_subject = None
         card.draft_body = None
@@ -685,7 +710,7 @@ async def _auto_reject_on_rate_down(
         prior_draft_body=prior_draft_body,
         prior_draft_bucket=prior_draft_bucket,
         prior_rejection_reasons=prior_rejection_reasons,
-        new_bucket="REJECT",
+        new_bucket=to_bucket,
         prior_tags=existing_tags,
         actor_email=user.email,
     )
@@ -695,7 +720,7 @@ async def _auto_reject_on_rate_down(
 
     if lead.copper_id:
         try:
-            copper_writer.set_bucket_tag(lead.copper_id, "REJECT", existing_tags)
+            copper_writer.set_bucket_tag(lead.copper_id, to_bucket, existing_tags)
         except Exception as exc:
             print(f"[rate_assessment] Copper write failed (local commit succeeded): {exc!r}")
 
@@ -710,15 +735,15 @@ async def rate_assessment(
 ):
     """Thumbs up/down on the AI recommendation — enforced-learning signal.
 
-    Unlike /override this does NOT change the bucket or regenerate the draft
-    — EXCEPT for a thumbs-down on an effective YES, which unambiguously means
-    "don't meet them" and auto-rejects (issue #225; see
-    _auto_reject_on_rate_down). "up" registers agreement with the current
-    effective bucket; "down" on MAYBE/REJECT registers disagreement with no
-    bucket change, same as always. Both snapshot a training row into
-    assessment_overrides so the model can later be tuned against the human's
-    judgement — including the cases where the AI was *right*, which an
-    override-only flow never captures.
+    On an effective MAYBE, a rating decides it (issue #252): "up" promotes
+    to YES (meeting-request draft), "down" rejects (rejection draft). On an
+    effective YES, "down" unambiguously means "don't meet them" and
+    auto-rejects (issue #225) -- "up" just confirms, no bucket change. A
+    rating on REJECT never changes the bucket. See _rating_transition /
+    _apply_rating_transition. Every rating -- transition or not -- snapshots
+    a training row into assessment_overrides so the model can later be tuned
+    against the human's judgement, including the cases where the AI was
+    *right*, which an override-only flow never captures.
     """
     block_if_impersonating(request, user)
     if body.rating not in ("up", "down"):
@@ -726,26 +751,36 @@ async def rate_assessment(
 
     card, lead = await _get_card_and_lead(lead_id, request, db, user)
     effective_bucket = card.user_override or card.bucket
-    auto_reject = body.rating == "down" and effective_bucket == "YES"
+    transition_target = _rating_transition(effective_bucket, body.rating)
 
     card.user_rating = body.rating
     card.user_rating_at = datetime.now(timezone.utc)
 
-    if auto_reject:
-        await _auto_reject_on_rate_down(db, card, lead, body, user)
+    if transition_target:
+        await _apply_rating_transition(
+            db, card, lead, body, user,
+            from_bucket=effective_bucket, to_bucket=transition_target,
+        )
     else:
         await db.commit()
         await db.refresh(card)
+
+    if transition_target == "YES":
+        trigger = "rate_up_auto_promote"
+    elif transition_target == "REJECT":
+        trigger = "rate_down_auto_reject"
+    else:
+        trigger = "confirm" if body.rating == "up" else "rate_down"
 
     await capture_override(
         db,
         lead=lead,
         card=card,
         human_bucket=card.user_override or card.bucket,
-        trigger="rate_down_auto_reject" if auto_reject else ("confirm" if body.rating == "up" else "rate_down"),
+        trigger=trigger,
         reason_tags=body.reason_tags,
         reason=body.reason,
-        ai_bucket="YES" if auto_reject else None,
+        ai_bucket=effective_bucket if transition_target else None,
         acted_by_email=user.email,
     )
 
