@@ -52,6 +52,13 @@ FORBIDDEN_PHRASES = [
     "hear from you again",
 ]
 
+# issue #249: the "today" line was asked for in #234 and is now unwanted, and
+# the signature is the team, never a named individual.
+REMOVED_TODAY_LINE_PHRASES = [
+    "rather than a judgement",
+    "يعكس وضع رائد فنتشرز",
+]
+
 
 # ---------------------------------------------------------------------------
 # 1. select_template
@@ -105,11 +112,10 @@ def test_every_unqual_reason_option_is_mapped_or_internal_only():
 # 2. render_rejection_email
 # ---------------------------------------------------------------------------
 
-def _render(template_reason: str, language: str, first_name="Sara", partner_name="Reem"):
+def _render(template_reason: str, language: str, first_name="Sara"):
     return rejection_templates.render_rejection_email(
         first_name=first_name,
         company="Acme Deep Tech",
-        partner_name=partner_name,
         reasons=[template_reason],
         language=language,
     )
@@ -127,7 +133,7 @@ def test_render_makes_no_llm_or_network_call(monkeypatch):
 def test_all_four_english_bodies_identical_outside_reason_sentence():
     bodies = {
         key: rejection_templates.render_rejection_email(
-            first_name="Sara", company="Acme", partner_name="Reem", reasons=[reason], language="en",
+            first_name="Sara", company="Acme", reasons=[reason], language="en",
         )["body"]
         for key, reason in [
             ("CONFLICT", "Conflict of interest"),
@@ -146,7 +152,7 @@ def test_all_four_english_bodies_identical_outside_reason_sentence():
 def test_all_four_arabic_bodies_identical_outside_reason_sentence():
     bodies = {
         key: rejection_templates.render_rejection_email(
-            first_name="سارة", company="أكمي", partner_name="ريم", reasons=[reason], language="ar",
+            first_name="سارة", company="أكمي", reasons=[reason], language="ar",
         )["body"]
         for key, reason in [
             ("CONFLICT", "Conflict of interest"),
@@ -164,7 +170,7 @@ def test_all_four_arabic_bodies_identical_outside_reason_sentence():
 
 def test_conflict_and_market_size_together_renders_conflict_only_once():
     result = rejection_templates.render_rejection_email(
-        first_name="Sara", company="Acme", partner_name="Reem",
+        first_name="Sara", company="Acme",
         reasons=["Conflict of interest", "Market size"], language="en",
     )
     assert result["template"] == "CONFLICT"
@@ -174,7 +180,7 @@ def test_conflict_and_market_size_together_renders_conflict_only_once():
 
 def test_founder_only_reason_renders_mandate_with_no_internal_wording():
     result = rejection_templates.render_rejection_email(
-        first_name="Sara", company="Acme", partner_name="Reem", reasons=["Founder(s)"], language="en",
+        first_name="Sara", company="Acme", reasons=["Founder(s)"], language="en",
     )
     assert result["template"] == "MANDATE"
     assert "founder" not in result["body"].lower()
@@ -185,7 +191,7 @@ def test_no_rendered_body_invites_reapplication():
         for template_key in rejection_templates.TEMPLATE_KEYS:
             reasons_by_key = {v: k for k, v in rejection_templates.REASON_TO_TEMPLATE.items()}
             result = rejection_templates.render_rejection_email(
-                first_name="Sara", company="Acme", partner_name="Reem",
+                first_name="Sara", company="Acme",
                 reasons=[reasons_by_key[template_key]], language=language,
             )
             lowered = result["body"].lower()
@@ -198,7 +204,7 @@ def test_no_rendered_body_contains_forbidden_reengagement_wording():
         for template_key in rejection_templates.TEMPLATE_KEYS:
             reasons_by_key = {v: k for k, v in rejection_templates.REASON_TO_TEMPLATE.items()}
             result = rejection_templates.render_rejection_email(
-                first_name="Sara", company="Acme", partner_name="Reem",
+                first_name="Sara", company="Acme",
                 reasons=[reasons_by_key[template_key]], language=language,
             )
             lowered = result["body"].lower()
@@ -208,7 +214,7 @@ def test_no_rendered_body_contains_forbidden_reengagement_wording():
 
 def test_missing_first_name_degrades_to_usable_greeting_english():
     result = rejection_templates.render_rejection_email(
-        first_name=None, company="Acme", partner_name="Reem", reasons=["Market size"], language="en",
+        first_name=None, company="Acme", reasons=["Market size"], language="en",
     )
     assert "Hi ," not in result["body"]
     assert result["body"].startswith("Hi there,")
@@ -216,7 +222,7 @@ def test_missing_first_name_degrades_to_usable_greeting_english():
 
 def test_blank_first_name_degrades_to_usable_greeting_arabic():
     result = rejection_templates.render_rejection_email(
-        first_name="   ", company="Acme", partner_name="Reem", reasons=["Market size"], language="ar",
+        first_name="   ", company="Acme", reasons=["Market size"], language="ar",
     )
     assert "مرحباً ،" not in result["body"]
     assert result["body"].startswith("مرحباً،")
@@ -224,21 +230,20 @@ def test_blank_first_name_degrades_to_usable_greeting_arabic():
 
 def test_arabic_placeholders_substitute_correctly():
     result = rejection_templates.render_rejection_email(
-        first_name="سارة", company="أكمي", partner_name="ريم", reasons=["Conflict of interest"], language="ar",
+        first_name="سارة", company="أكمي", reasons=["Conflict of interest"], language="ar",
     )
     assert "سارة" in result["body"]
     assert "أكمي" in result["body"]
-    assert "ريم" in result["body"]
     assert result["subject"] == "رائد فنتشرز — تحديث بخصوص طلبكم"
-    assert "رائد فنتشرز" in result["body"]
+    assert result["body"].endswith("فريق رائد فنتشرز")
     assert "رايد" not in result["body"]
 
 
 def test_english_placeholders_substitute_correctly():
-    result = _render("Market size", "en", first_name="Sara", partner_name="Reem")
+    result = _render("Market size", "en", first_name="Sara")
     assert "Hi Sara," in result["body"]
     assert "Acme Deep Tech" in result["body"]
-    assert "Reem" in result["body"]
+    assert result["body"].endswith("Raed Ventures team")
     assert result["subject"] == "Raed Ventures — update on your application"
 
 
@@ -247,8 +252,57 @@ def test_invalid_language_raises():
 
     with pytest.raises(ValueError):
         rejection_templates.render_rejection_email(
-            first_name="Sara", company="Acme", partner_name="Reem", reasons=[], language="fr",
+            first_name="Sara", company="Acme", reasons=[], language="fr",
         )
+
+
+# ---------------------------------------------------------------------------
+# issue #249: drop the "today" line, sign as the team, fix mailbox greetings
+# ---------------------------------------------------------------------------
+
+def test_no_rendered_body_contains_the_dropped_today_line():
+    for language in ("en", "ar"):
+        for template_key in rejection_templates.TEMPLATE_KEYS:
+            reasons_by_key = {v: k for k, v in rejection_templates.REASON_TO_TEMPLATE.items()}
+            result = rejection_templates.render_rejection_email(
+                first_name="Sara", company="Acme",
+                reasons=[reasons_by_key[template_key]], language=language,
+            )
+            for phrase in REMOVED_TODAY_LINE_PHRASES:
+                assert phrase not in result["body"]
+
+
+def test_no_rendered_body_has_partner_name_placeholder_or_personal_name():
+    for language in ("en", "ar"):
+        for template_key in rejection_templates.TEMPLATE_KEYS:
+            reasons_by_key = {v: k for k, v in rejection_templates.REASON_TO_TEMPLATE.items()}
+            result = rejection_templates.render_rejection_email(
+                first_name="Sara", company="Acme",
+                reasons=[reasons_by_key[template_key]], language=language,
+            )
+            assert "{partner_name}" not in result["body"]
+            if language == "en":
+                assert result["body"].endswith("Raed Ventures team")
+            else:
+                assert result["body"].endswith("فريق رائد فنتشرز")
+
+
+def test_greeting_line_treats_mailbox_words_as_no_name():
+    assert rejection_templates._greeting_line("hello", "en") == "Hi there,"
+    assert rejection_templates._greeting_line("HELLO", "ar") == "مرحباً،"
+
+
+def test_greeting_line_covers_every_listed_mailbox_word():
+    for word in (
+        "hello", "hi", "info", "contact", "admin", "team", "support",
+        "sales", "founders", "careers", "office", "enquiries",
+    ):
+        assert rejection_templates._greeting_line(word, "en") == "Hi there,"
+        assert rejection_templates._greeting_line(word.upper(), "en") == "Hi there,"
+
+
+def test_greeting_line_keeps_a_real_first_name():
+    assert rejection_templates._greeting_line("Peter", "en") == "Hi Peter,"
 
 
 # ---------------------------------------------------------------------------

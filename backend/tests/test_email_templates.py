@@ -153,7 +153,6 @@ def test_seed_rows_arabic_matches_constants_including_diacritics():
         assert rows[key]["body"] == rejection_templates._AR_BODY_TEMPLATE
         assert rows[key]["reason_text"] == rejection_templates._AR_REASONS[key]
     # Spot-check the diacritics called out in issue #234 survive untouched.
-    assert "حكمًا" in rejection_templates._AR_BODY_TEMPLATE
     assert any("تمكّن" in v for v in rejection_templates._AR_REASONS.values())
     market_size_reason = rows["MARKET_SIZE"]["reason_text"]
     assert "تمكّن" in market_size_reason
@@ -166,7 +165,7 @@ def test_seed_rows_arabic_matches_constants_including_diacritics():
 # ---------------------------------------------------------------------------
 
 def test_render_uses_db_row_when_present_not_the_constants():
-    row = _fake_row(template_key="MARKET_SIZE", body="{greeting_line}\nDB BODY {company} {reason} {partner_name}")
+    row = _fake_row(template_key="MARKET_SIZE", body="{greeting_line}\nDB BODY {company} {reason}")
     session = _FakeSession([row])
 
     result = asyncio.run(
@@ -174,14 +173,13 @@ def test_render_uses_db_row_when_present_not_the_constants():
             session,
             first_name="Sara",
             company="Acme",
-            partner_name="Reem",
             reasons=["Market size"],
             language="en",
         )
     )
     assert "DB BODY" in result["body"]
     assert result["body"] != rejection_templates.render_rejection_email(
-        first_name="Sara", company="Acme", partner_name="Reem", reasons=["Market size"], language="en",
+        first_name="Sara", company="Acme", reasons=["Market size"], language="en",
     )["body"]
 
 
@@ -193,13 +191,12 @@ def test_render_falls_back_to_constants_when_row_missing():
             session,
             first_name="Sara",
             company="Acme",
-            partner_name="Reem",
             reasons=["Market size"],
             language="en",
         )
     )
     expected = rejection_templates.render_rejection_email(
-        first_name="Sara", company="Acme", partner_name="Reem", reasons=["Market size"], language="en",
+        first_name="Sara", company="Acme", reasons=["Market size"], language="en",
     )
     assert result == expected
 
@@ -213,13 +210,13 @@ def test_old_lead_and_new_lead_both_render_from_current_template_row():
 
     old_lead_result = asyncio.run(
         email_templates.render_rejection_email(
-            session, first_name="Old", company="OldCo", partner_name="Reem",
+            session, first_name="Old", company="OldCo",
             reasons=["Lack of traction"], language="en",
         )
     )
     new_lead_result = asyncio.run(
         email_templates.render_rejection_email(
-            session, first_name="New", company="NewCo", partner_name="Reem",
+            session, first_name="New", company="NewCo",
             reasons=["Lack of traction"], language="en",
         )
     )
@@ -237,7 +234,7 @@ def test_updating_a_row_changes_the_next_render_for_old_and_new_leads():
             language="en",
             template_key="TRACTION",
             subject="New subject",
-            body="{greeting_line}\nUpdated body for {company}. {reason} -- {partner_name}",
+            body="{greeting_line}\nUpdated body for {company}. {reason} --",
             reason_text="a brand-new reason clause.",
             updated_by=OWNER_EMAIL,
         )
@@ -248,13 +245,13 @@ def test_updating_a_row_changes_the_next_render_for_old_and_new_leads():
     session_new = _FakeSession([row])
     old_lead_result = asyncio.run(
         email_templates.render_rejection_email(
-            session_old, first_name="Old", company="OldCo", partner_name="Reem",
+            session_old, first_name="Old", company="OldCo",
             reasons=["Lack of traction"], language="en",
         )
     )
     new_lead_result = asyncio.run(
         email_templates.render_rejection_email(
-            session_new, first_name="New", company="NewCo", partner_name="Reem",
+            session_new, first_name="New", company="NewCo",
             reasons=["Lack of traction"], language="en",
         )
     )
@@ -272,7 +269,7 @@ def test_render_makes_no_llm_call_when_served_from_db(monkeypatch):
 
     result = asyncio.run(
         email_templates.render_rejection_email(
-            session, first_name="Sara", company="Acme", partner_name="Reem",
+            session, first_name="Sara", company="Acme",
             reasons=["Conflict of interest"], language="en",
         )
     )
@@ -284,7 +281,7 @@ def test_render_invalid_language_raises():
     with pytest.raises(ValueError):
         asyncio.run(
             email_templates.render_rejection_email(
-                session, first_name="Sara", company="Acme", partner_name="Reem", reasons=[], language="fr",
+                session, first_name="Sara", company="Acme", reasons=[], language="fr",
             )
         )
 
@@ -299,13 +296,13 @@ def test_validate_body_rejects_empty_body():
 
 
 def test_validate_body_rejects_missing_required_placeholder_and_names_it():
-    body = "{greeting_line} thanks for sharing. {reason} -- {partner_name}"  # {company} removed
+    body = "{greeting_line} thanks for sharing. {reason} --"  # {company} removed
     with pytest.raises(email_templates.TemplateValidationError, match=r"\{company\}"):
         email_templates.validate_body(body)
 
 
 def test_validate_body_rejects_unknown_placeholder_and_names_it():
-    body = "{greeting_line} {company} {reason} {partner_name} {unknown}"
+    body = "{greeting_line} {company} {reason} {unknown}"
     with pytest.raises(email_templates.TemplateValidationError, match=r"\{unknown\}"):
         email_templates.validate_body(body)
 
@@ -314,14 +311,14 @@ def test_validate_body_rejects_malformed_brace_even_with_all_placeholders_presen
     # All four required placeholders are present, but the stray "{growth"
     # has no closing brace -- str.format() would raise at render time even
     # though the placeholder-set checks above pass it.
-    body = "{greeting_line} {company} grew 100% {growth -- {reason} -- {partner_name}"
+    body = "{greeting_line} {company} grew 100% {growth -- {reason} --"
     with pytest.raises(email_templates.TemplateValidationError, match="malformed"):
         email_templates.validate_body(body)
 
 
 def test_update_template_rejects_malformed_brace_without_touching_db():
     session = _FakeSession([])  # update_template must validate before any execute()
-    body = "{greeting_line} {company} {reason} {partner_name} 100% {growth"
+    body = "{greeting_line} {company} {reason} 100% {growth"
     with pytest.raises(email_templates.TemplateValidationError, match="malformed"):
         asyncio.run(
             email_templates.update_template(
@@ -338,11 +335,64 @@ def test_update_template_rejects_bad_body_without_touching_db():
         asyncio.run(
             email_templates.update_template(
                 session, language="en", template_key="MANDATE", subject="Subject",
-                body="{greeting_line} {company} {reason}",  # missing {partner_name}
+                body="{greeting_line} {company}",  # missing {reason}
                 reason_text="reason", updated_by=OWNER_EMAIL,
             )
         )
     assert session.commits == 0
+
+
+# issue #249: {partner_name} is no longer a placeholder -- these emails sign
+# off as "Raed Ventures team" literal text, not a named individual.
+
+def test_required_placeholders_no_longer_includes_partner_name():
+    assert "partner_name" not in email_templates.REQUIRED_PLACEHOLDERS
+
+
+def test_validate_body_succeeds_without_partner_name():
+    email_templates.validate_body("{greeting_line} {company} {reason} Raed Ventures team")
+
+
+def test_validate_body_rejects_partner_name_as_unknown_placeholder():
+    body = "{greeting_line} {company} {reason} {partner_name}"
+    with pytest.raises(email_templates.TemplateValidationError, match=r"\{partner_name\}"):
+        email_templates.validate_body(body)
+
+
+def test_update_template_succeeds_without_partner_name():
+    row = _fake_row(template_key="MANDATE")
+    session = _FakeSession([row])
+    updated = asyncio.run(
+        email_templates.update_template(
+            session, language="en", template_key="MANDATE", subject="Subject",
+            body="{greeting_line} {company} {reason} Raed Ventures team",
+            reason_text="reason", updated_by=OWNER_EMAIL,
+        )
+    )
+    assert updated.subject == "Subject"
+    assert session.commits == 1
+
+
+def test_render_tolerates_stale_partner_name_in_a_hand_edited_row():
+    """A row hand-edited via the Email templates screen before #249 landed
+    can still carry {partner_name} -- the migration deliberately skips any
+    row that doesn't match the seed text byte for byte, so this is not a
+    hypothetical. Rendering it must not 500; the stale placeholder resolves
+    to an empty string instead of raising KeyError."""
+    row = _fake_row(
+        template_key="MANDATE",
+        body="{greeting_line}\nCustom intro for {company}. {reason}\n\n{partner_name}\nRaed Ventures",
+    )
+    session = _FakeSession([row])
+
+    result = asyncio.run(
+        email_templates.render_rejection_email(
+            session, first_name="Sara", company="Acme",
+            reasons=["Market size"], language="en",
+        )
+    )
+    assert "{partner_name}" not in result["body"]
+    assert "Custom intro for Acme." in result["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -350,13 +400,13 @@ def test_update_template_rejects_bad_body_without_touching_db():
 # ---------------------------------------------------------------------------
 
 def test_revert_restores_subject_body_and_reason_text_as_one_unit():
-    row = _fake_row(template_key="MANDATE", subject="Current subject", body="current {greeting_line} {company} {reason} {partner_name}", reason_text="current reason")
+    row = _fake_row(template_key="MANDATE", subject="Current subject", body="current {greeting_line} {company} {reason}", reason_text="current reason")
     version_id = uuid.uuid4()
     version = SimpleNamespace(
         id=version_id,
         template_id=row.id,
         subject="Old subject",
-        body="old {greeting_line} {company} {reason} {partner_name}",
+        body="old {greeting_line} {company} {reason}",
         reason_text="old reason",
         saved_by=None,
         saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -369,7 +419,7 @@ def test_revert_restores_subject_body_and_reason_text_as_one_unit():
         )
     )
     assert reverted.subject == "Old subject"
-    assert reverted.body == "old {greeting_line} {company} {reason} {partner_name}"
+    assert reverted.body == "old {greeting_line} {company} {reason}"
     assert reverted.reason_text == "old reason"
     # The pre-revert state was snapshotted before being overwritten.
     assert len(session.added) == 1
@@ -410,7 +460,7 @@ def test_non_admin_gets_403_updating_a_template():
     try:
         response = client.put(
             "/api/v1/email-templates/en/MANDATE",
-            json={"subject": "s", "body": "{greeting_line} {company} {reason} {partner_name}", "reason_text": "r"},
+            json={"subject": "s", "body": "{greeting_line} {company} {reason}", "reason_text": "r"},
         )
     finally:
         _clear_auth()
@@ -465,7 +515,7 @@ def test_admin_update_with_removed_placeholder_is_400_naming_it():
             "/api/v1/email-templates/en/MANDATE",
             json={
                 "subject": "Subject",
-                "body": "{greeting_line} thanks. {reason} -- {partner_name}",  # {company} removed
+                "body": "{greeting_line} thanks. {reason} --",  # {company} removed
                 "reason_text": "reason",
             },
         )
@@ -484,7 +534,7 @@ def test_admin_update_with_unknown_placeholder_is_400_naming_it():
             "/api/v1/email-templates/en/MANDATE",
             json={
                 "subject": "Subject",
-                "body": "{greeting_line} {company} {reason} {partner_name} {unknown}",
+                "body": "{greeting_line} {company} {reason} {unknown}",
                 "reason_text": "reason",
             },
         )
@@ -519,7 +569,7 @@ def test_admin_update_success_returns_updated_row():
             "/api/v1/email-templates/en/MANDATE",
             json={
                 "subject": "New subject",
-                "body": "{greeting_line} {company} {reason} {partner_name}",
+                "body": "{greeting_line} {company} {reason}",
                 "reason_text": "new reason",
             },
         )
@@ -534,10 +584,10 @@ def test_admin_update_success_returns_updated_row():
 
 
 def test_admin_revert_success_restores_all_three_fields():
-    row = _fake_row(template_key="MANDATE", subject="Current", body="current {greeting_line} {company} {reason} {partner_name}", reason_text="current reason")
+    row = _fake_row(template_key="MANDATE", subject="Current", body="current {greeting_line} {company} {reason}", reason_text="current reason")
     version_id = uuid.uuid4()
     version = SimpleNamespace(
-        id=version_id, template_id=row.id, subject="Old", body="old {greeting_line} {company} {reason} {partner_name}",
+        id=version_id, template_id=row.id, subject="Old", body="old {greeting_line} {company} {reason}",
         reason_text="old reason", saved_by=None, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     _auth_as(OWNER_EMAIL)
@@ -550,7 +600,7 @@ def test_admin_revert_success_restores_all_three_fields():
     assert response.status_code == 200
     body = response.json()
     assert body["subject"] == "Old"
-    assert body["body"] == "old {greeting_line} {company} {reason} {partner_name}"
+    assert body["body"] == "old {greeting_line} {company} {reason}"
     assert body["reason_text"] == "old reason"
 
 

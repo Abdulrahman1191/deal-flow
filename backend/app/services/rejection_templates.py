@@ -53,12 +53,9 @@ Thank you for sharing {company} with us, and for the time you put into the appli
 
 After reviewing your application, {reason}
 
-This reflects where Raed Ventures is today rather than a judgement on what you are building.
-
 We wish you the best of luck with it.
 
-{partner_name}
-Raed Ventures"""
+Raed Ventures team"""
 
 _EN_REASONS: dict[str, str] = {
     "CONFLICT": (
@@ -76,7 +73,7 @@ _EN_REASONS: dict[str, str] = {
 # Arabic keeps its own two-sentence shape (لقد اطلعنا على الفرصة. then the
 # reason as a full sentence) -- do not restructure it to match the English
 # clause form. Copy every Arabic string byte for byte, including diacritics
-# (e.g. حكمًا, تمكّن) -- do not normalise or "tidy" the Arabic.
+# (e.g. تمكّن) -- do not normalise or "tidy" the Arabic.
 _AR_SUBJECT = "رائد فنتشرز — تحديث بخصوص طلبكم"
 
 _AR_BODY_TEMPLATE = """{greeting_line}
@@ -85,12 +82,9 @@ _AR_BODY_TEMPLATE = """{greeting_line}
 
 لقد اطلعنا على الفرصة. {reason}
 
-هذا القرار يعكس وضع رائد فنتشرز في الوقت الحالي أكثر مما يعكس حكمًا على ما يتم بناؤه.
-
 نتمنى لكم التوفيق.
 
-{partner_name}
-رائد فنتشرز"""
+فريق رائد فنتشرز"""
 
 _AR_REASONS: dict[str, str] = {
     "CONFLICT": (
@@ -126,10 +120,35 @@ def select_template(reasons: list[str] | None) -> str:
     return "MANDATE"
 
 
+# First-name tokens taken straight from a mailbox-style address (e.g.
+# "hello" from hello@company.com) rather than an actual person's name --
+# greeted literally, prod opened a rejection with "Hi hello,". Matched
+# case-insensitively and treated the same as a missing name.
+_MAILBOX_WORDS: frozenset[str] = frozenset(
+    {
+        "hello",
+        "hi",
+        "info",
+        "contact",
+        "admin",
+        "team",
+        "support",
+        "sales",
+        "founders",
+        "careers",
+        "office",
+        "enquiries",
+    }
+)
+
+
 def _greeting_line(first_name: str | None, language: str) -> str:
-    """A missing first_name degrades to a usable generic greeting rather
-    than rendering "Hi ," / "مرحباً ،"."""
+    """A missing first_name -- or one that's actually a mailbox word lifted
+    from an address like hello@company.com -- degrades to a usable generic
+    greeting rather than rendering "Hi ," / "مرحباً ،" or "Hi hello,"."""
     name = (first_name or "").strip()
+    if name.lower() in _MAILBOX_WORDS:
+        name = ""
     if language == "ar":
         return f"مرحباً {name}،" if name else "مرحباً،"
     return f"Hi {name}," if name else "Hi there,"
@@ -139,7 +158,6 @@ def render_rejection_email(
     *,
     first_name: str | None,
     company: str | None,
-    partner_name: str | None,
     reasons: list[str] | None,
     language: str,
 ) -> dict[str, str]:
@@ -156,14 +174,12 @@ def render_rejection_email(
     template = select_template(reasons)
     greeting_line = _greeting_line(first_name, language)
     company_name = (company or "").strip()
-    partner = (partner_name or "").strip()
 
     if language == "ar":
         body = _AR_BODY_TEMPLATE.format(
             greeting_line=greeting_line,
             company=company_name,
             reason=_AR_REASONS[template],
-            partner_name=partner,
         )
         subject = _AR_SUBJECT
     else:
@@ -171,7 +187,6 @@ def render_rejection_email(
             greeting_line=greeting_line,
             company=company_name,
             reason=_EN_REASONS[template],
-            partner_name=partner,
         )
         subject = _EN_SUBJECT
 
