@@ -112,23 +112,58 @@ describe("EmailModal layout (issue #243)", () => {
   });
 });
 
-describe("EmailModal rejection reason chips", () => {
-  it("drops free-text reasons seeded on the card so they don't consume the 3-chip cap", () => {
-    renderModal({
-      // "Weak founder-market fit" mirrors a FeedbackModal tag stored via the
-      // rate-down auto-reject path (issue #225) -- it renders no chip here.
-      rejection_reasons: ["Weak founder-market fit", "Founder(s)", "Market size"],
-    });
+describe("EmailModal reason picker (issue #247)", () => {
+  it("renders exactly four reason buttons, none disabled, none active by default", () => {
+    renderModal();
 
-    expect(screen.queryByText("Weak founder-market fit")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("reason-limit-notice")).not.toBeInTheDocument();
+    const buttons = [
+      screen.getByText("Market size"),
+      screen.getByText("Conflict of interest"),
+      screen.getByText("No clear traction"),
+      screen.getByText("Not a fit right now"),
+    ].map((el) => el.closest("button")!);
 
-    fireEvent.click(screen.getByText("Lack of traction"));
-
-    expect(screen.getByTestId("reason-limit-notice")).toBeInTheDocument();
+    expect(buttons).toHaveLength(4);
+    for (const btn of buttons) {
+      expect(btn).not.toBeDisabled();
+      expect(btn).toHaveAttribute("aria-pressed", "false");
+    }
   });
 
-  it("'Regenerate with AI' sends the selected canonical reasons", async () => {
+  it("renders no retired UNQUAL_REASON_LABELS chips, lock markers, or Copper note", () => {
+    renderModal({
+      rejection_reasons: ["Weak founder-market fit", "Founder(s)", "Out of our region"],
+    });
+
+    expect(screen.queryByText("Founder(s)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Out of our region")).not.toBeInTheDocument();
+    expect(screen.queryByText("Weak founder-market fit")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pass reasons/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/🔒/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reason-limit-notice")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("internal-only-note")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Copper's Unqualification Reasons/)).not.toBeInTheDocument();
+  });
+
+  it("is single-select: picking another button switches, picking the active one clears it", () => {
+    renderModal();
+
+    const marketSize = screen.getByText("Market size").closest("button")!;
+    const traction = screen.getByText("No clear traction").closest("button")!;
+
+    fireEvent.click(marketSize);
+    expect(marketSize).toHaveAttribute("aria-pressed", "true");
+    expect(traction).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(traction);
+    expect(marketSize).toHaveAttribute("aria-pressed", "false");
+    expect(traction).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(traction);
+    expect(traction).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("'Regenerate with AI' sends the single selected canonical reason", async () => {
     renderModal();
 
     fireEvent.click(screen.getByText("Market size"));
@@ -136,6 +171,33 @@ describe("EmailModal rejection reason chips", () => {
 
     await waitFor(() => expect(regenerateDraft).toHaveBeenCalled());
     expect(regenerateDraft).toHaveBeenCalledWith("lead-1", ["Market size"]);
+  });
+});
+
+describe("EmailModal portal (issue #247)", () => {
+  it("renders outside a transformed ancestor, directly under document.body", () => {
+    const assessment = { ...baseAssessment };
+    const lead: Lead = { ...baseLead, assessment };
+    const queryClient = new QueryClient();
+
+    render(
+      <div data-testid="transformed-ancestor" style={{ transform: "translateY(8px)" }}>
+        <QueryClientProvider client={queryClient}>
+          <EmailModal lead={lead} onClose={() => {}} />
+        </QueryClientProvider>
+      </div>,
+    );
+
+    const ancestor = screen.getByTestId("transformed-ancestor");
+    const overlay = screen.getByTestId("email-modal-overlay");
+
+    // A transformed ancestor becomes the containing block for a
+    // `position: fixed` descendant. jsdom doesn't run layout, so this
+    // asserts the structural invariant that rules the bug out entirely:
+    // the overlay has no transformed ancestor to begin with, because it's
+    // portaled straight onto document.body.
+    expect(ancestor.contains(overlay)).toBe(false);
+    expect(overlay.parentElement).toBe(document.body);
   });
 });
 
