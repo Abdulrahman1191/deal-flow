@@ -1,15 +1,33 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
 import { regenerateDraft, renderRejectionTemplate, sendEmail, updateDraft } from "../../api/assessments";
 import { useToast } from "../shared/Toast";
 import type { Lead } from "../../types/lead";
-import { INTERNAL_ONLY_REASONS, MAX_REJECTION_REASONS, UNQUAL_REASON_LABELS } from "./rejectionReasons";
 
 interface Props {
   lead: Lead;
   onClose: () => void;
 }
+
+// Four plain-language, single-select reasons (issue #247) replacing the 13
+// UNQUAL_REASON_LABELS chips -- each maps to exactly one of the backend's
+// four prebuilt templates (app/services/rejection_templates.py). The
+// `reason` sent here is one canonical UNQUAL_REASON_OPTIONS label so
+// select_template() still resolves correctly; the rating/override step
+// (AssessmentRating.reason_tags / BucketOverride.reason_tags) remains the
+// path that drives Copper's Unqualification Reasons field.
+const REASON_BUTTONS: { reason: string; label: string; hint: string }[] = [
+  { reason: "Market size", label: "Market size", hint: "we don't believe the market is large enough" },
+  {
+    reason: "Conflict of interest",
+    label: "Conflict of interest",
+    hint: "we hold a conflicting position, never named",
+  },
+  { reason: "Lack of traction", label: "No clear traction", hint: "not enough evidence yet" },
+  { reason: "Other", label: "Not a fit right now", hint: "outside our current investment strategy" },
+];
 
 // The draft_type a draft must have to be sendable for a given effective
 // bucket — mirrors the backend's _EXPECTED_DRAFT_TYPE (issue #150).
@@ -44,23 +62,16 @@ export default function EmailModal({ lead, onClose }: Props) {
   const [body, setBody] = useState(isStale ? "" : assessment?.draft_body ?? "");
   const [error, setError] = useState<string | null>(null);
 
-  // Reason chips (issue #223/#224) -- REJECT only. Preselected from
-  // whatever was stored on the card, so reopening the modal restores the
-  // prior choice rather than starting blank. Filtered to the canonical
-  // UNQUAL_REASON_LABELS -- the rate-down auto-reject path (issue #225) can
-  // seed `rejection_reasons` with free-text FeedbackModal tags that match no
-  // rendered chip here, which would otherwise consume the 3-chip cap without
-  // being visible or deselectable (issue #233).
-  const [selectedReasons, setSelectedReasons] = useState<Set<string>>(
-    new Set((assessment?.rejection_reasons ?? []).filter((r) => UNQUAL_REASON_LABELS.includes(r))),
+  // Single-select reason (issue #247) -- REJECT only. Preselected only on an
+  // exact match against one of the four REASON_BUTTONS values, so reopening
+  // the modal restores a prior pick made through this same picker without
+  // reviving any of the retired 13-chip labels.
+  const [selectedReason, setSelectedReason] = useState<string | null>(
+    () => (assessment?.rejection_reasons ?? []).find((r) => REASON_BUTTONS.some((b) => b.reason === r)) ?? null,
   );
   const isReject = effectiveBucket === "REJECT";
-  const atReasonLimit = selectedReasons.size >= MAX_REJECTION_REASONS;
-  const hasInternalOnlySelected = Array.from(selectedReasons).some((r) => INTERNAL_ONLY_REASONS.has(r));
-  // Selection is seeded and toggled from UNQUAL_REASON_LABELS chips only, so
-  // this is already canonical -- kept as its own array for the
-  // /regenerate-draft and template calls below.
-  const canonicalSelectedReasons = Array.from(selectedReasons);
+  // Kept as its own array for the /regenerate-draft and template calls below.
+  const canonicalSelectedReasons = selectedReason ? [selectedReason] : [];
 
   // EN/AR toggle (issue #232) -- defaults to whatever the backend's
   // zero-LLM template endpoint auto-detected from the applicant's own text
@@ -68,13 +79,9 @@ export default function EmailModal({ lead, onClose }: Props) {
   // once the partner picks a value it stays pinned to that override.
   const [language, setLanguage] = useState<"en" | "ar" | null>(assessment?.draft_language ?? null);
 
-  const toggleReason = (label: string) =>
-    setSelectedReasons((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
-      else if (next.size < MAX_REJECTION_REASONS) next.add(label);
-      return next;
-    });
+  // Clicking the active button clears it; clicking another switches to it.
+  const toggleReason = (reason: string) =>
+    setSelectedReason((prev) => (prev === reason ? null : reason));
 
   // Signature of the draft currently reflected in the fields above, so we can
   // tell "the draft changed under us" (a bucket override or background
@@ -192,8 +199,17 @@ export default function EmailModal({ lead, onClose }: Props) {
   const fieldsDisabled = generating || isStale;
   const canSend = !isStale && !generating && !sendMutation.isPending && !!body.trim() && !!subject.trim();
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in">
+  // Portaled to document.body (issue #247) -- rendered inline this div's
+  // `fixed inset-0` resolved against the lead card's box instead of the
+  // viewport, because the card's `hover:-translate-y-*` makes it a
+  // transformed ancestor, and any transformed ancestor becomes the
+  // containing block for a `position: fixed` descendant. A portal has no
+  // card ancestor at all, so no hover state can ever reintroduce the bug.
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 backdrop-blur-sm p-4 animate-fade-in"
+      data-testid="email-modal-overlay"
+    >
       <div className="bg-card border border-border rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col h-[90vh] max-h-[760px] animate-scale-in">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
@@ -236,91 +252,64 @@ export default function EmailModal({ lead, onClose }: Props) {
           </div>
         </div>
 
-        {/* Rejection reason chips (issue #223/#224) — REJECT only; a YES
-            lead's modal has no reasons section at all. */}
+        {/* Reason picker (issue #247) — REJECT only; a YES lead's modal has
+            no reasons section at all. Four single-select, plain-language
+            buttons replacing the 13-chip UNQUAL_REASON_LABELS picker, which
+            duplicated the rating/override step and left most chips disabled.
+            That step (AssessmentRating.reason_tags / BucketOverride.reason_tags)
+            is still what drives Copper's Unqualification Reasons field. */}
         {isReject && (
           <div className="px-5 py-4 border-b border-border space-y-3 bg-muted/20 shrink-0">
             <div className="flex items-center justify-between">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Pass reasons (up to {MAX_REJECTION_REASONS})
+                Reason
               </label>
-              <div className="flex items-center gap-2">
-                {atReasonLimit && (
-                  <span className="text-[10px] text-warning" data-testid="reason-limit-notice">
-                    Limit reached — deselect one to pick another
-                  </span>
-                )}
-                {/* EN/AR toggle (issue #232) -- defaults to the backend's
-                    detected applicant language; re-renders the template
-                    immediately on change. */}
-                <div className="flex rounded-md border border-border overflow-hidden" data-testid="language-toggle">
-                  {(["en", "ar"] as const).map((lang) => (
-                    <button
-                      key={lang}
-                      type="button"
-                      disabled={rendering}
-                      onClick={() => {
-                        setLanguage(lang);
-                        templateMutation.mutate({ reasons: canonicalSelectedReasons, language: lang });
-                      }}
-                      data-testid={`language-toggle-${lang}`}
-                      className={`text-[10px] uppercase px-2 py-1 transition-colors disabled:opacity-50 ${
-                        (language ?? "en") === lang
-                          ? "bg-primary text-white"
-                          : "bg-transparent text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {lang}
-                    </button>
-                  ))}
-                </div>
+              {/* EN/AR toggle (issue #232) -- defaults to the backend's
+                  detected applicant language; re-renders the template
+                  immediately on change. */}
+              <div className="flex rounded-md border border-border overflow-hidden" data-testid="language-toggle">
+                {(["en", "ar"] as const).map((lang) => (
+                  <button
+                    key={lang}
+                    type="button"
+                    disabled={rendering}
+                    onClick={() => {
+                      setLanguage(lang);
+                      templateMutation.mutate({ reasons: canonicalSelectedReasons, language: lang });
+                    }}
+                    data-testid={`language-toggle-${lang}`}
+                    className={`text-[10px] uppercase px-2 py-1 transition-colors disabled:opacity-50 ${
+                      (language ?? "en") === lang
+                        ? "bg-primary text-white"
+                        : "bg-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {lang}
+                  </button>
+                ))}
               </div>
             </div>
-            {/* Capped and internally scrollable so thirteen canonical chips
-                (five wrapped rows) can never push Subject/Body off screen
-                (issue #243). */}
-            <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto pr-1">
-              {UNQUAL_REASON_LABELS.map((label) => {
-                const isOn = selectedReasons.has(label);
-                const internal = INTERNAL_ONLY_REASONS.has(label);
-                const disabled = !isOn && atReasonLimit;
+            <div className="flex flex-wrap gap-2">
+              {REASON_BUTTONS.map(({ reason, label, hint }) => {
+                const isOn = selectedReason === reason;
                 return (
                   <button
-                    key={label}
+                    key={reason}
                     type="button"
-                    onClick={() => toggleReason(label)}
-                    disabled={disabled}
-                    title={internal ? "Recorded internally, not mentioned in the email" : undefined}
-                    className={`text-xs px-3 py-1.5 rounded-full transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
+                    aria-pressed={isOn}
+                    onClick={() => toggleReason(reason)}
+                    className={`text-left text-xs px-3 py-2 rounded-lg transition-colors border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${
                       isOn
-                        ? internal
-                          ? "bg-muted text-muted-foreground border-dashed border-muted-foreground/60"
-                          : "bg-error/20 text-error border-error"
+                        ? "bg-error/20 text-error border-error"
                         : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
                     }`}
                   >
-                    {label}
-                    {internal && <span className="ml-1 opacity-70">🔒</span>}
+                    <span className="block font-medium">{label}</span>
+                    <span className="block opacity-70">{hint}</span>
                   </button>
                 );
               })}
             </div>
-            <p className="text-[10px] text-muted-foreground">
-              🔒 recorded internally only — never mentioned in the email.
-            </p>
-
-            {hasInternalOnlySelected && (
-              <p className="text-[11px] text-muted-foreground" data-testid="internal-only-note">
-                The founder won't see the internal-only reason(s) you picked — they're recorded
-                internally and never mentioned in the email.
-              </p>
-            )}
-            {canonicalSelectedReasons.length > 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                These reasons will be written to Copper's Unqualification Reasons field when this
-                lead is archived or the rejection is sent.
-              </p>
-            )}
 
             <div className="flex items-center gap-2">
               <button
@@ -419,6 +408,7 @@ export default function EmailModal({ lead, onClose }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
