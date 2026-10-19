@@ -186,8 +186,9 @@ export default function ReassignLeadsPage() {
     : "";
 
   const canPreview = !!fromOwner && toOwners.length > 0 && !previewMutation.isPending;
+  const confirmReady = !!preview && preview.count > 0;
   const confirmDisabledReason = !preview
-    ? "Run a preview first"
+    ? "Run a preview to see what will move"
     : preview.count === 0
       ? "No leads match these filters"
       : "";
@@ -324,15 +325,22 @@ export default function ReassignLeadsPage() {
               previewMutation.mutate({ from_owner: fromOwner, to_owners: toOwners, buckets, include_converted: includeConverted })
             }
             disabled={!canPreview}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-muted hover:bg-border text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              confirmReady
+                ? "bg-muted hover:bg-border text-foreground"
+                : "bg-primary text-primary-foreground hover:opacity-90"
+            }`}
           >
             {previewMutation.isPending ? "Previewing…" : "Preview"}
           </button>
           <button
             onClick={() => setShowConfirm(true)}
             disabled={!preview || preview.count === 0}
-            title={confirmDisabledReason}
-            className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              confirmReady
+                ? "bg-primary text-primary-foreground hover:opacity-90"
+                : "bg-muted text-muted-foreground"
+            }`}
           >
             Confirm reassignment
           </button>
