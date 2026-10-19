@@ -17,8 +17,10 @@ interface Props {
 // `reason` sent here is one canonical UNQUAL_REASON_OPTIONS label so
 // select_template() still resolves correctly; the rating/override step
 // (AssessmentRating.reason_tags / BucketOverride.reason_tags) remains the
-// path that drives Copper's Unqualification Reasons field.
-const REASON_BUTTONS: { reason: string; label: string; hint: string }[] = [
+// path that drives Copper's Unqualification Reasons field. Exported (issue
+// #253) so ReasonModal's MAYBE-thumbs-down picker reuses this exact list --
+// the two can never drift apart.
+export const REASON_BUTTONS: { reason: string; label: string; hint: string }[] = [
   { reason: "Market size", label: "Market size", hint: "we don't believe the market is large enough" },
   {
     reason: "Conflict of interest",
