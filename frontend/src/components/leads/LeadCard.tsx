@@ -11,7 +11,7 @@ import ScoringStrip from "./ScoringStrip";
 import ActionButtons from "./ActionButtons";
 import EmailModal from "./EmailModal";
 import { useToast } from "../shared/Toast";
-import { overrideBucket, rateAssessment, reassess, type OverrideReason } from "../../api/assessments";
+import { overrideBucket, rateAssessment, reassess, type OverrideReason, type RateReasonData } from "../../api/assessments";
 import {
   archiveNoReply,
   describeUndoResult,
@@ -48,6 +48,10 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
   const [pendingBucket, setPendingBucket] = useState<"YES" | "MAYBE" | "REJECT" | null>(null);
   // Which rating's FeedbackModal is open ("up" | "down"), or null when closed.
   const [showFeedback, setShowFeedback] = useState<"up" | "down" | null>(null);
+  // Issue #253: a MAYBE thumbs-down resolves straight to REJECT, so it needs
+  // the canonical rejection reason up front instead of FeedbackModal's
+  // generic tags/note -- this tracks that dedicated picker separately.
+  const [showMaybeRejectReason, setShowMaybeRejectReason] = useState(false);
   const qc = useQueryClient();
   const toast = useToast();
   // Admin "view as" QA mode (issue #52): the backend already 403s mutations
@@ -144,7 +148,7 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
   });
 
   const rateMutation = useMutation({
-    mutationFn: ({ rating, reasonData }: { rating: "up" | "down"; reasonData?: OverrideReason }) =>
+    mutationFn: ({ rating, reasonData }: { rating: "up" | "down"; reasonData?: RateReasonData }) =>
       rateAssessment(lead.id, rating, reasonData),
     // Optimistic: light up the chosen thumb immediately.
     onMutate: async ({ rating }) => {
@@ -175,8 +179,13 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
       ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
     },
     onSuccess: () => toast("Thanks — your feedback was recorded"),
+    // A MAYBE rating decides the lead (issue #253: up->YES, down->REJECT),
+    // moving it out of this column -- invalidate the same queries an
+    // override does so the archive/send-queue never show it stale.
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["leads"] });
+      qc.invalidateQueries({ queryKey: ["send-queue"] });
+      qc.invalidateQueries({ queryKey: ["archive"] });
     },
   });
 
@@ -445,9 +454,15 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
             </span>
             <div className="flex items-center gap-1 shrink-0">
               <button
-                onClick={() => setShowFeedback("up")}
+                onClick={() => (bucket === "MAYBE" ? rateMutation.mutate({ rating: "up" }) : setShowFeedback("up"))}
                 disabled={rateMutation.isPending || readOnly}
-                title={readOnly ? "Read-only while viewing another user's board" : "Agree — the AI got this right"}
+                title={
+                  readOnly
+                    ? "Read-only while viewing another user's board"
+                    : bucket === "MAYBE"
+                      ? "This will move the lead to YES — schedule a meeting"
+                      : "Agree — the AI got this right"
+                }
                 data-testid="rate-up"
                 className={`flex items-center gap-1 h-6 px-2 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-[10px] font-medium ${
                   rating === "up" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
@@ -456,9 +471,15 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
                 <ThumbIcon up /> Agree
               </button>
               <button
-                onClick={() => setShowFeedback("down")}
+                onClick={() => (bucket === "MAYBE" ? setShowMaybeRejectReason(true) : setShowFeedback("down"))}
                 disabled={rateMutation.isPending || readOnly}
-                title={readOnly ? "Read-only while viewing another user's board" : "Disagree — the AI got this wrong"}
+                title={
+                  readOnly
+                    ? "Read-only while viewing another user's board"
+                    : bucket === "MAYBE"
+                      ? "This will move the lead to REJECT — you'll pick a reason"
+                      : "Disagree — the AI got this wrong"
+                }
                 data-testid="rate-down"
                 className={`flex items-center gap-1 h-6 px-2 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-[10px] font-medium ${
                   rating === "down" ? "bg-foreground text-white" : "text-muted-foreground hover:bg-muted"
@@ -522,6 +543,19 @@ export default function LeadCard({ lead, index = 0, selected, onToggleSelect }: 
             setShowFeedback(null);
           }}
           onCancel={() => setShowFeedback(null)}
+        />
+      )}
+
+      {showMaybeRejectReason && assessment && (
+        <ReasonModal
+          bucket="REJECT"
+          companyName={lead.company_name}
+          requireCanonicalReason
+          onSubmit={(reasonData) => {
+            rateMutation.mutate({ rating: "down", reasonData });
+            setShowMaybeRejectReason(false);
+          }}
+          onCancel={() => setShowMaybeRejectReason(false)}
         />
       )}
 

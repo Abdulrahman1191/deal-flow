@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LeadCard from "./LeadCard";
 import type { Assessment, Lead } from "../../types/lead";
+
+const rateAssessment = vi.fn().mockResolvedValue({});
+
+vi.mock("../../api/assessments", async () => {
+  const actual = await vi.importActual<typeof import("../../api/assessments")>("../../api/assessments");
+  return { ...actual, rateAssessment: (...args: unknown[]) => rateAssessment(...args) };
+});
 
 const baseAssessment: Assessment = {
   id: "assessment-1",
@@ -72,7 +79,21 @@ function renderCard(traction: string[] | undefined) {
   );
 }
 
-afterEach(cleanup);
+function renderMaybeCard() {
+  const assessment: Assessment = { ...baseAssessment, bucket: "MAYBE" };
+  const lead: Lead = { ...baseLead, assessment };
+  const queryClient = new QueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <LeadCard lead={lead} />
+    </QueryClientProvider>,
+  );
+}
+
+afterEach(() => {
+  cleanup();
+  rateAssessment.mockClear();
+});
 
 describe("LeadCard traction row", () => {
   it("renders the chip row under the confidence bar, chips in order, when traction is evidenced", () => {
@@ -99,5 +120,51 @@ describe("LeadCard traction row", () => {
     expect(screen.queryByTestId("traction-row")).not.toBeInTheDocument();
     expect(screen.queryByTestId("traction-chip")).not.toBeInTheDocument();
     expect(screen.queryByText(/no traction/i)).not.toBeInTheDocument();
+  });
+});
+
+// Issue #253: on a MAYBE card the thumbs decide the lead instead of just
+// rating the AI -- up promotes to YES with no prompt, down opens the
+// canonical four-reason picker and resolves to REJECT.
+describe("MAYBE card thumbs decide the lead", () => {
+  it("thumbs-up moves straight to YES with no reason prompt", async () => {
+    renderMaybeCard();
+
+    fireEvent.click(screen.getByTestId("rate-up"));
+
+    await waitFor(() => expect(rateAssessment).toHaveBeenCalledWith("lead-1", "up", undefined));
+    expect(screen.queryByText("Save")).not.toBeInTheDocument();
+  });
+
+  it("thumbs-down opens the four-reason picker and submits the pick as rejection_reason", async () => {
+    renderMaybeCard();
+
+    fireEvent.click(screen.getByTestId("rate-down"));
+    expect(rateAssessment).not.toHaveBeenCalled();
+
+    expect(screen.getByText("Save")).toBeDisabled();
+    fireEvent.click(await screen.findByText("Conflict of interest"));
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() =>
+      expect(rateAssessment).toHaveBeenCalledWith("lead-1", "down", {
+        reason_tags: [],
+        reason: "",
+        rejection_reason: "Conflict of interest",
+      }),
+    );
+  });
+
+  it("states the consequence on hover before either thumb is clicked", () => {
+    renderMaybeCard();
+
+    expect(screen.getByTestId("rate-up")).toHaveAttribute(
+      "title",
+      "This will move the lead to YES — schedule a meeting",
+    );
+    expect(screen.getByTestId("rate-down")).toHaveAttribute(
+      "title",
+      "This will move the lead to REJECT — you'll pick a reason",
+    );
   });
 });

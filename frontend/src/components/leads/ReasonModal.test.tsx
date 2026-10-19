@@ -61,3 +61,56 @@ describe("ReasonModal free-text reason capture", () => {
     expect(screen.getByText("Save")).toBeDisabled();
   });
 });
+
+// Issue #253: a MAYBE thumbs-down resolves straight to REJECT, so the modal
+// is reused with `requireCanonicalReason` to force picking one of
+// EmailModal's four canonical labels before Save unlocks -- the quick
+// tags/note stay optional feedback on top, not a substitute.
+describe("ReasonModal requireCanonicalReason", () => {
+  function renderCanonicalModal(onSubmit = vi.fn()) {
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ReasonModal
+          bucket="REJECT"
+          companyName="Acme Robotics"
+          requireCanonicalReason
+          onSubmit={onSubmit}
+          onCancel={() => {}}
+        />
+      </QueryClientProvider>,
+    );
+    return onSubmit;
+  }
+
+  it("disables Save until one of the four canonical reasons is picked", () => {
+    renderCanonicalModal();
+
+    expect(screen.getByText("Save")).toBeDisabled();
+    expect(screen.getByText("Pick a reason to continue")).toBeInTheDocument();
+  });
+
+  it("submits the picked canonical reason alongside optional tags/note", async () => {
+    const onSubmit = renderCanonicalModal();
+
+    fireEvent.click(await screen.findByText("Market size"));
+    fireEvent.click(screen.getByText("Save"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      reason_tags: [],
+      reason: "",
+      rejection_reason: "Market size",
+    });
+  });
+
+  it("clicking the active reason again clears the selection", async () => {
+    renderCanonicalModal();
+
+    const button = await screen.findByText("Market size");
+    fireEvent.click(button);
+    expect(screen.getByText("Save")).not.toBeDisabled();
+
+    fireEvent.click(button);
+    expect(screen.getByText("Save")).toBeDisabled();
+  });
+});

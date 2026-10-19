@@ -2,14 +2,22 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchMyReasons, type MyReasons } from "../../api/overrides";
 import LearnedReasonChips from "./LearnedReasonChips";
+import { REASON_BUTTONS } from "./EmailModal";
 
 type Bucket = "YES" | "MAYBE" | "REJECT";
 
 interface Props {
   bucket: Bucket;
   companyName: string;
-  onSubmit: (data: { reason_tags: string[]; reason: string }) => void;
+  onSubmit: (data: { reason_tags: string[]; reason: string; rejection_reason?: string }) => void;
   onCancel: () => void;
+  /** Issue #253: a MAYBE thumbs-down resolves straight to REJECT, and that
+   * transition must carry one of EmailModal's four canonical reasons so the
+   * email modal never has to ask again. When set, renders that picker above
+   * the regular quick-reason tags and gates Save on a selection instead of
+   * on `hasReason` below -- the free-text note/tags stay optional feedback,
+   * same as any other bucket move. */
+  requireCanonicalReason?: boolean;
 }
 
 // Tag vocabulary is intentionally bucket-specific. Showing "Strong tech moat"
@@ -73,13 +81,20 @@ export default function ReasonModal({
   companyName,
   onSubmit,
   onCancel,
+  requireCanonicalReason,
 }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedLearned, setSelectedLearned] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
+  const [canonicalReason, setCanonicalReason] = useState<string | null>(null);
 
   const tags = TAGS_BY_BUCKET[bucket];
   const hasReason = selected.size > 0 || note.trim().length > 0 || selectedLearned.size > 0;
+  // Clicking the active button clears it; clicking another switches to it --
+  // same toggle behavior as EmailModal's picker (issue #253).
+  const toggleCanonicalReason = (reason: string) =>
+    setCanonicalReason((prev) => (prev === reason ? null : reason));
+  const canSubmit = requireCanonicalReason ? !!canonicalReason : hasReason;
 
   const { data: myReasons } = useQuery({ queryKey: ["my-reasons"], queryFn: fetchMyReasons, staleTime: 5 * 60 * 1000 });
   const learnedReasons = myReasons?.[LEARNED_REASONS_KEY[bucket]] ?? [];
@@ -110,12 +125,42 @@ export default function ReasonModal({
             {BUCKET_LABEL[bucket]}
           </p>
           <p className="text-[11px] text-muted-foreground mt-2">
-            Why this bucket? Helps train the AI to match your judgement.
+            {requireCanonicalReason
+              ? "Pick why — it's used in the rejection email and the AI's training."
+              : "Why this bucket? Helps train the AI to match your judgement."}
           </p>
         </div>
 
         {/* Tags */}
         <div className="px-5 py-4 space-y-3 overflow-y-auto">
+          {requireCanonicalReason && (
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">
+                Reason (required)
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {REASON_BUTTONS.map(({ reason, label, hint }) => {
+                  const isOn = canonicalReason === reason;
+                  return (
+                    <button
+                      key={reason}
+                      type="button"
+                      aria-pressed={isOn}
+                      onClick={() => toggleCanonicalReason(reason)}
+                      className={`text-left text-xs px-3 py-2 rounded-lg transition-colors border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${
+                        isOn
+                          ? "bg-error/20 text-error border-error"
+                          : "bg-muted/50 text-muted-foreground border-border hover:text-foreground"
+                      }`}
+                    >
+                      <span className="block font-medium">{label}</span>
+                      <span className="block opacity-70">{hint}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div>
             <label className="text-[10px] uppercase tracking-wider text-muted-foreground block mb-2">
               Quick reasons (tap any that apply)
@@ -180,19 +225,22 @@ export default function ReasonModal({
             Cancel
           </button>
           <div className="flex items-center gap-2">
-            {!hasReason && (
-              <span className="text-[11px] text-muted-foreground">Pick a tag or add a note</span>
+            {!canSubmit && (
+              <span className="text-[11px] text-muted-foreground">
+                {requireCanonicalReason ? "Pick a reason to continue" : "Pick a tag or add a note"}
+              </span>
             )}
             <button
               onClick={() =>
                 onSubmit({
                   reason_tags: Array.from(selected),
                   reason: [note.trim(), ...Array.from(selectedLearned)].filter(Boolean).join("; "),
+                  ...(requireCanonicalReason ? { rejection_reason: canonicalReason ?? undefined } : {}),
                 })
               }
-              disabled={!hasReason}
+              disabled={!canSubmit}
               className={`px-5 py-2 text-sm font-medium rounded-lg text-white transition-colors ${
-                hasReason
+                canSubmit
                   ? "bg-primary hover:bg-primary/90"
                   : "bg-primary/40 cursor-not-allowed"
               }`}

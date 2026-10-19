@@ -46,10 +46,19 @@ export const overrideBucket = (
     .post<Assessment>(`/assessments/${leadId}/override`, { bucket, ...reasonData })
     .then((r) => r.data);
 
+// `rejection_reason` (issue #252/#253) -- the canonical UNQUAL_REASON_OPTIONS
+// label a MAYBE thumbs-down resolves to REJECT with. Distinct from
+// `reason`/`reason_tags`, which stay free-text training feedback and must
+// never land in card.rejection_reasons (that field drives the rejection
+// email and Copper's Unqualification Reasons).
+export interface RateReasonData extends OverrideReason {
+  rejection_reason?: string;
+}
+
 export const rateAssessment = (
   leadId: string,
   rating: "up" | "down",
-  reasonData?: OverrideReason,
+  reasonData?: RateReasonData,
 ) =>
   client
     .post<Assessment>(`/assessments/${leadId}/rate`, { rating, ...reasonData })
