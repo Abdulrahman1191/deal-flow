@@ -1,6 +1,9 @@
 """
 Tests for issue #225: a thumbs-down on a YES lead auto-rejects it in one
-action, instead of requiring a separate bucket override.
+action, instead of requiring a separate bucket override. REJECT itself stays
+a true no-op either direction -- issue #252 generalises the YES-only
+auto-reject to MAYBE as well (see test_rate_maybe_resolves.py), so the
+MAYBE-is-a-no-op cases that used to live here have moved/been superseded.
 
 Same fake-session / TestClient pattern as test_unqualified_correction.py:
 no live Postgres. `_get_card_and_lead` issues one `db.execute` (the joined
@@ -213,8 +216,10 @@ def test_rate_down_on_yes_mirrors_bucket_tag_to_copper(override_auth, monkeypatc
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bucket", ["MAYBE", "REJECT"])
-def test_rate_down_on_maybe_or_reject_changes_no_bucket(override_auth, monkeypatch, bucket):
+@pytest.mark.parametrize("rating", ["up", "down"])
+def test_rate_on_reject_changes_no_bucket(override_auth, monkeypatch, rating):
+    """REJECT is terminal: neither thumbs direction names a destination
+    (unlike MAYBE/YES, see test_rate_maybe_resolves.py)."""
     def _fail_if_called(*_a, **_k):
         raise AssertionError("must not regenerate a draft for a non-auto-reject rating")
 
@@ -224,19 +229,18 @@ def test_rate_down_on_maybe_or_reject_changes_no_bucket(override_auth, monkeypat
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not mirror to Copper")),
     )
 
-    draft_type = "rejection" if bucket == "REJECT" else None
-    card = _fake_card(bucket=bucket, draft_type=draft_type)
+    card = _fake_card(bucket="REJECT", draft_type="rejection")
     lead = _fake_lead(lead_id=card.lead_id, copper_id="copper-123")
     _override_db([(card, lead)])
     try:
-        response = client.post(f"/api/v1/assessments/{card.lead_id}/rate", json={"rating": "down"})
+        response = client.post(f"/api/v1/assessments/{card.lead_id}/rate", json={"rating": rating})
     finally:
         _clear_db_override()
 
     assert response.status_code == 200
-    assert card.bucket == bucket
+    assert card.bucket == "REJECT"
     assert card.user_override is None
-    assert card.draft_type == draft_type
+    assert card.draft_type == "rejection"
 
 
 def test_rate_up_on_yes_changes_no_bucket(override_auth, monkeypatch):
@@ -292,9 +296,10 @@ def test_auto_reject_training_row_records_ai_yes_human_reject(override_auth, mon
 
 
 def test_plain_rate_down_training_row_trigger_unchanged(override_auth, monkeypatch):
-    """Regression: MAYBE/REJECT thumbs-down must still record the plain
-    'rate_down' trigger, not the new auto-reject one."""
-    card = _fake_card(bucket="MAYBE", draft_type=None)
+    """Regression: a REJECT thumbs-down (the one bucket where no rating
+    names a destination) must still record the plain 'rate_down' trigger,
+    not an auto-reject one."""
+    card = _fake_card(bucket="REJECT", draft_type="rejection")
     lead = _fake_lead(lead_id=card.lead_id)
     session = _override_db([(card, lead)])
     try:
@@ -306,8 +311,8 @@ def test_plain_rate_down_training_row_trigger_unchanged(override_auth, monkeypat
     from app.models.override import AssessmentOverride
     rows = [o for o in session.added if isinstance(o, AssessmentOverride)]
     assert rows[0].trigger == "rate_down"
-    assert rows[0].ai_bucket == "MAYBE"
-    assert rows[0].human_bucket == "MAYBE"
+    assert rows[0].ai_bucket == "REJECT"
+    assert rows[0].human_bucket == "REJECT"
 
 
 def test_rate_down_auto_reject_trigger_is_usable_and_formats_as_correction():
@@ -327,11 +332,12 @@ def test_rate_down_auto_reject_trigger_is_usable_and_formats_as_correction():
 
 
 # ---------------------------------------------------------------------------
-# 4. reason tags land in rejection_reasons
+# 4. only the canonical rejection_reason lands in rejection_reasons -- the
+# free-text reason_tags (issue #252) never do.
 # ---------------------------------------------------------------------------
 
 
-def test_reason_tags_land_in_rejection_reasons(override_auth, monkeypatch):
+def test_canonical_rejection_reason_lands_in_rejection_reasons(override_auth, monkeypatch):
     monkeypatch.setattr(assessments_router.claude_agent, "regenerate_draft", _fake_regenerate_rejection)
 
     card = _fake_card(bucket="YES")
@@ -340,13 +346,57 @@ def test_reason_tags_land_in_rejection_reasons(override_auth, monkeypatch):
     try:
         response = client.post(
             f"/api/v1/assessments/{card.lead_id}/rate",
-            json={"rating": "down", "reason_tags": ["Not MENA", "Too early stage"]},
+            json={"rating": "down", "rejection_reason": "Market size"},
         )
     finally:
         _clear_db_override()
 
     assert response.status_code == 200
-    assert card.rejection_reasons == ["Not MENA", "Too early stage"]
+    assert card.rejection_reasons == ["Market size"]
+
+
+def test_unknown_rejection_reason_rejected_with_422(override_auth):
+    card = _fake_card(bucket="YES")
+    lead = _fake_lead(lead_id=card.lead_id)
+    _override_db([(card, lead)])
+    try:
+        response = client.post(
+            f"/api/v1/assessments/{card.lead_id}/rate",
+            json={"rating": "down", "rejection_reason": "Small market"},
+        )
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 422
+
+
+def test_free_text_reason_tags_never_reach_rejection_reasons(override_auth, monkeypatch):
+    """The partner's free-text reason history (GET /overrides/my-reasons) is
+    good training-row context, but it is not a canonical
+    UNQUAL_REASON_OPTIONS label -- it must never be written to
+    card.rejection_reasons, which the rejection email templates and Copper's
+    Unqualification Reasons field both require to be canonical."""
+    monkeypatch.setattr(assessments_router.claude_agent, "regenerate_draft", _fake_regenerate_rejection)
+
+    card = _fake_card(bucket="YES")
+    lead = _fake_lead(lead_id=card.lead_id)
+    session = _override_db([(card, lead)])
+    try:
+        response = client.post(
+            f"/api/v1/assessments/{card.lead_id}/rate",
+            json={"rating": "down", "reason_tags": ["Not MENA", "Too early stage"], "reason": "wrong geography"},
+        )
+    finally:
+        _clear_db_override()
+
+    assert response.status_code == 200
+    assert card.rejection_reasons is None
+
+    from app.models.override import AssessmentOverride
+    rows = [o for o in session.added if isinstance(o, AssessmentOverride)]
+    # The free text is still good training-row context -- just not canonical.
+    assert rows[0].human_reason_tags == ["Not MENA", "Too early stage"]
+    assert rows[0].human_reason == "wrong geography"
 
 
 def test_no_reason_tags_leaves_rejection_reasons_untouched(override_auth, monkeypatch):
