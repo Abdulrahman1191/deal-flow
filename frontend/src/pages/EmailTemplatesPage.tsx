@@ -13,7 +13,6 @@ import {
 } from "../api/emailTemplates";
 import { fetchLeads } from "../api/leads";
 import type { Lead } from "../types/lead";
-import { useMe } from "../lib/auth";
 import useAppStore from "../store/useAppStore";
 import Modal from "../components/shared/Modal";
 import { useToast } from "../components/shared/Toast";
@@ -147,12 +146,10 @@ function HistoryModal({
 function TemplateBlock({
   template,
   previewLead,
-  partnerName,
   readOnly,
 }: {
   template: EmailTemplate;
   previewLead: Lead | null;
-  partnerName: string;
   readOnly: boolean;
 }) {
   const qc = useQueryClient();
@@ -192,13 +189,12 @@ function TemplateBlock({
       greeting_line: greetingLine(leadFirstName(previewLead), template.language),
       company: previewLead.company_name,
       reason: reasonText,
-      partner_name: partnerName,
     };
     return {
       subject: fillPlaceholders(subject, values),
       body: fillPlaceholders(body, values),
     };
-  }, [previewLead, subject, body, reasonText, partnerName, template.language]);
+  }, [previewLead, subject, body, reasonText, template.language]);
 
   const dir = isAr ? "rtl" : "ltr";
 
@@ -218,9 +214,8 @@ function TemplateBlock({
 
       <p className="text-xs text-muted-foreground">
         Placeholders for the body: <code>{"{greeting_line}"}</code> <code>{"{company}"}</code>{" "}
-        <code>{"{reason}"}</code> <code>{"{partner_name}"}</code>. <code>{"{greeting_line}"}</code> expands to a
-        greeting like "Hi Sara," or "Hi there," (Arabic equivalent for AR blocks) depending on whether the lead has
-        a first name on file.
+        <code>{"{reason}"}</code>. <code>{"{greeting_line}"}</code> expands to a greeting like "Hi Sara," or "Hi
+        there," (Arabic equivalent for AR blocks) depending on whether the lead has a first name on file.
       </p>
 
       <label className="block">
@@ -305,7 +300,6 @@ function TemplateBlock({
 
 export default function EmailTemplatesPage() {
   const readOnly = !!useAppStore((s) => s.viewAs);
-  const me = useMe();
 
   const { data: templates = [], isLoading, isError, error } = useQuery<EmailTemplate[]>({
     queryKey: templatesQueryKey(),
@@ -321,8 +315,6 @@ export default function EmailTemplatesPage() {
 
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const previewLead = previewLeads.find((l) => l.id === selectedLeadId) ?? null;
-
-  const partnerName = me.data?.name || me.data?.email || "Partner";
 
   if (isLoading) return <p className="p-4 sm:p-6 text-sm text-muted-foreground">Loading templates…</p>;
   if (isError) {
@@ -379,7 +371,6 @@ export default function EmailTemplatesPage() {
                     key={`${row.id}-${row.updated_at}`}
                     template={row}
                     previewLead={previewLead}
-                    partnerName={partnerName}
                     readOnly={readOnly}
                   />
                 ) : (

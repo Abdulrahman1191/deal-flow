@@ -37,7 +37,10 @@ LANGUAGES: tuple[str, ...] = ("en", "ar")
 # {first_name} is deliberately absent -- the #232 constants already resolved
 # the "no name" fallback into {greeting_line} (rejection_templates.py:129)
 # because Arabic can't do that fallback via simple substitution.
-REQUIRED_PLACEHOLDERS: frozenset[str] = frozenset({"greeting_line", "company", "reason", "partner_name"})
+# {partner_name} is also absent (issue #249): these emails send from
+# submission@raed.vc and sign off as "Raed Ventures team" / "فريق رائد
+# فنتشرز" as literal text, never a named individual.
+REQUIRED_PLACEHOLDERS: frozenset[str] = frozenset({"greeting_line", "company", "reason"})
 _PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
 
@@ -212,7 +215,6 @@ async def render_rejection_email(
     *,
     first_name: Optional[str],
     company: Optional[str],
-    partner_name: Optional[str],
     reasons: Optional[list[str]],
     language: str,
 ) -> dict[str, str]:
@@ -230,7 +232,6 @@ async def render_rejection_email(
         return rejection_templates.render_rejection_email(
             first_name=first_name,
             company=company,
-            partner_name=partner_name,
             reasons=reasons,
             language=language,
         )
@@ -240,6 +241,5 @@ async def render_rejection_email(
         greeting_line=greeting_line,
         company=(company or "").strip(),
         reason=row.reason_text,
-        partner_name=(partner_name or "").strip(),
     )
     return {"subject": row.subject, "body": body, "template": template_key, "language": language}

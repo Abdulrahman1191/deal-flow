@@ -16,9 +16,11 @@ class EmailTemplate(Base):
     moved out of Python constants so copy can change without a deploy and
     the change reaches every unsent lead with no backfill (issue #234).
 
-    `body` keeps the same {greeting_line}/{company}/{reason}/{partner_name}
-    placeholders the #232 constants used; `reason_text` is the clause/
-    sentence substituted into {reason}.
+    `body` keeps the same {greeting_line}/{company}/{reason} placeholders
+    the #232 constants used; `reason_text` is the clause/sentence
+    substituted into {reason}. No {partner_name} placeholder (issue #249):
+    these sign off as "Raed Ventures team" literal text, not a named
+    individual.
     """
 
     __tablename__ = "email_templates"

@@ -887,12 +887,10 @@ async def render_rejection_template(
             }
         )
 
-    owner_fields = await _load_owner_draft_fields(db, lead)
     rendered = await email_templates.render_rejection_email(
         db,
         first_name=_lead_first_name(lead),
         company=lead.company_name,
-        partner_name=owner_fields.get("owner_name") or getattr(user, "full_name", None),
         reasons=reasons,
         language=language,
     )
