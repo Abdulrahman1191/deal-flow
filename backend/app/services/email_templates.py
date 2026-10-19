@@ -48,6 +48,17 @@ class TemplateValidationError(ValueError):
     """Raised with a message naming the offending field/placeholder."""
 
 
+class _RenderDefaults(dict):
+    """Lets render_rejection_email() format a row whose body still carries a
+    placeholder outside REQUIRED_PLACEHOLDERS -- e.g. a pre-#249 hand-edited
+    row that still has {partner_name} -- as an empty string instead of
+    raising KeyError. validate_body() still rejects any such placeholder on
+    new saves; this only keeps already-saved rows renderable."""
+
+    def __missing__(self, key: str) -> str:
+        return ""
+
+
 def seed_rows() -> list[dict]:
     """One dict per (language, template_key), read byte for byte from the
     #232 constants. The seed migration and this module's tests both read
@@ -237,9 +248,11 @@ async def render_rejection_email(
         )
 
     greeting_line = rejection_templates._greeting_line(first_name, language)
-    body = row.body.format(
-        greeting_line=greeting_line,
-        company=(company or "").strip(),
-        reason=row.reason_text,
+    body = row.body.format_map(
+        _RenderDefaults(
+            greeting_line=greeting_line,
+            company=(company or "").strip(),
+            reason=row.reason_text,
+        )
     )
     return {"subject": row.subject, "body": body, "template": template_key, "language": language}

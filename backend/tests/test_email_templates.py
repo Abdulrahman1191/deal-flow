@@ -373,6 +373,28 @@ def test_update_template_succeeds_without_partner_name():
     assert session.commits == 1
 
 
+def test_render_tolerates_stale_partner_name_in_a_hand_edited_row():
+    """A row hand-edited via the Email templates screen before #249 landed
+    can still carry {partner_name} -- the migration deliberately skips any
+    row that doesn't match the seed text byte for byte, so this is not a
+    hypothetical. Rendering it must not 500; the stale placeholder resolves
+    to an empty string instead of raising KeyError."""
+    row = _fake_row(
+        template_key="MANDATE",
+        body="{greeting_line}\nCustom intro for {company}. {reason}\n\n{partner_name}\nRaed Ventures",
+    )
+    session = _FakeSession([row])
+
+    result = asyncio.run(
+        email_templates.render_rejection_email(
+            session, first_name="Sara", company="Acme",
+            reasons=["Market size"], language="en",
+        )
+    )
+    assert "{partner_name}" not in result["body"]
+    assert "Custom intro for Acme." in result["body"]
+
+
 # ---------------------------------------------------------------------------
 # 4. Revert restores subject, body, and reason_text together as one version
 # ---------------------------------------------------------------------------
